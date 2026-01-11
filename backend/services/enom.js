@@ -1230,6 +1230,68 @@ class EnomAPI {
       throw error;
     }
   }
+
+  /**
+   * Smart domain transfer with automatic balance management
+   */
+  async smartTransfer(params, options = {}) {
+    const { autoRefill = true, dryRun = false } = options;
+    const result = { steps: [], success: false };
+
+    try {
+      // Step 1: Get current balance
+      const balanceInfo = await this.getDetailedBalance();
+      result.currentBalance = balanceInfo.availableBalance;
+
+      // Step 2: Get transfer cost
+      const transferCost = params.cost || params.price || 0;
+      if (!transferCost) {
+        throw new Error('Transfer cost must be provided in params.cost or params.price');
+      }
+      result.transferCost = transferCost;
+
+      // Step 3: Calculate refill needed
+      const refillCalc = this.calculateRefillNeeded(transferCost, balanceInfo.availableBalance);
+      result.refillCalculation = refillCalc;
+
+      // Step 4: Refill if needed
+      if (refillCalc.needsRefill) {
+        if (!autoRefill) {
+          throw new Error('Insufficient balance. Need $' + transferCost + ', have $' + balanceInfo.availableBalance);
+        }
+
+        if (!dryRun) {
+          result.steps.push({ step: 'refill', status: 'started' });
+          const refillResult = await this.refillAccount(refillCalc.refillAmount);
+          result.refillResult = refillResult;
+          result.steps[result.steps.length - 1].status = 'completed';
+        }
+      }
+
+      // Step 5: Initiate the transfer
+      if (!dryRun) {
+        result.steps.push({ step: 'transfer', status: 'started' });
+        const transferResult = await this.initiateTransfer(params);
+        result.transferResult = transferResult;
+        result.steps[result.steps.length - 1].status = 'completed';
+        result.success = transferResult.success;
+        result.transferOrderId = transferResult.transferOrderId;
+
+        // Get final balance
+        const finalBalance = await this.getDetailedBalance();
+        result.finalBalance = finalBalance.availableBalance;
+      } else {
+        result.success = true;
+        result.message = 'Dry run completed successfully';
+      }
+
+      return result;
+    } catch (error) {
+      result.success = false;
+      result.error = error.message;
+      throw error;
+    }
+  }
 }
 
 module.exports = new EnomAPI();

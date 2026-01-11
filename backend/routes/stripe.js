@@ -230,15 +230,30 @@ async function handlePaymentSuccess(pool, paymentIntent) {
       let result;
 
       if (item.item_type === 'register') {
-        // Register new domain
-        console.log(`Registering domain: ${item.domain_name}.${item.tld}`);
-        result = await enom.registerDomain({
+        // Register new domain with smart refill
+        console.log(`Registering domain: ${item.domain_name}.${item.tld} (cost: $${item.total_price})`);
+        const smartResult = await enom.smartPurchase({
           sld: item.domain_name,
           tld: item.tld,
           years: item.years || 1,
           registrant: registrantContact,
-          privacy: false
+          privacy: false,
+          cost: parseFloat(item.total_price)
         });
+        result = smartResult.purchaseResult || smartResult;
+
+        // Log refill if it happened
+        if (smartResult.refillResult) {
+          console.log(`Auto-refilled $${smartResult.refillResult.requestedAmount} for domain purchase`);
+          await pool.query(
+            `INSERT INTO balance_transactions
+             (transaction_type, amount, fee_amount, net_amount, domain_name, order_id, auto_refill, notes)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+            ['refill', smartResult.refillResult.requestedAmount, smartResult.refillResult.feeAmount,
+             smartResult.refillResult.netAmount, item.domain_name + '.' + item.tld, order.id, true,
+             'Auto-refill for domain registration']
+          );
+        }
 
         if (result.success) {
           // Create domain record in our database
@@ -266,15 +281,30 @@ async function handlePaymentSuccess(pool, paymentIntent) {
         }
 
       } else if (item.item_type === 'transfer') {
-        // Initiate domain transfer
-        console.log(`Initiating transfer: ${item.domain_name}.${item.tld}`);
-        result = await enom.initiateTransfer({
+        // Initiate domain transfer with smart refill
+        console.log(`Initiating transfer: ${item.domain_name}.${item.tld} (cost: $${item.total_price})`);
+        const smartResult = await enom.smartTransfer({
           sld: item.domain_name,
           tld: item.tld,
           authCode: item.auth_code || '',
           registrant: registrantContact,
-          years: 1
+          years: 1,
+          cost: parseFloat(item.total_price)
         });
+        result = smartResult.transferResult || smartResult;
+
+        // Log refill if it happened
+        if (smartResult.refillResult) {
+          console.log(`Auto-refilled $${smartResult.refillResult.requestedAmount} for domain transfer`);
+          await pool.query(
+            `INSERT INTO balance_transactions
+             (transaction_type, amount, fee_amount, net_amount, domain_name, order_id, auto_refill, notes)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+            ['refill', smartResult.refillResult.requestedAmount, smartResult.refillResult.feeAmount,
+             smartResult.refillResult.netAmount, item.domain_name + '.' + item.tld, order.id, true,
+             'Auto-refill for domain transfer']
+          );
+        }
 
         if (result.success) {
           // Create domain record with pending status
@@ -298,9 +328,28 @@ async function handlePaymentSuccess(pool, paymentIntent) {
         }
 
       } else if (item.item_type === 'renew') {
-        // Renew existing domain
-        console.log(`Renewing domain: ${item.domain_name}.${item.tld}`);
-        result = await enom.renewDomain(item.domain_name, item.tld, item.years || 1);
+        // Renew existing domain with smart refill
+        console.log(`Renewing domain: ${item.domain_name}.${item.tld} (cost: $${item.total_price})`);
+        const smartResult = await enom.smartRenewal(
+          item.domain_name,
+          item.tld,
+          item.years || 1,
+          parseFloat(item.total_price)
+        );
+        result = smartResult.renewResult || smartResult;
+
+        // Log refill if it happened
+        if (smartResult.refillResult) {
+          console.log(`Auto-refilled $${smartResult.refillResult.requestedAmount} for domain renewal`);
+          await pool.query(
+            `INSERT INTO balance_transactions
+             (transaction_type, amount, fee_amount, net_amount, domain_name, order_id, auto_refill, notes)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+            ['refill', smartResult.refillResult.requestedAmount, smartResult.refillResult.feeAmount,
+             smartResult.refillResult.netAmount, item.domain_name + '.' + item.tld, order.id, true,
+             'Auto-refill for domain renewal']
+          );
+        }
 
         if (result.success) {
           // Update domain expiration
