@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const { authMiddleware, adminMiddleware } = require('../middleware/auth');
+const { authMiddleware, adminMiddleware, requireRole, logAudit, ROLE_LEVELS } = require('../middleware/auth');
+const enom = require('../services/enom');
 
 // All admin routes require auth and admin status
 router.use(authMiddleware);
@@ -79,7 +80,7 @@ router.get('/users', async (req, res) => {
   try {
     let query = `
       SELECT u.id, u.username, u.email, u.full_name, u.is_admin,
-             u.created_at, u.last_login_at,
+             u.role_level, u.role_name, u.created_at, u.last_login_at,
              COUNT(DISTINCT d.id) as domain_count,
              COUNT(DISTINCT o.id) as order_count
       FROM users u
@@ -158,28 +159,489 @@ router.get('/users/:id', async (req, res) => {
   }
 });
 
-// Update user (admin toggle)
+// Update user (admin toggle and role management)
 router.put('/users/:id', async (req, res) => {
   const pool = req.app.locals.pool;
   const userId = parseInt(req.params.id);
-  const { is_admin } = req.body;
+  const { is_admin, role_level, role_name } = req.body;
 
   try {
-    const result = await pool.query(
-      `UPDATE users SET is_admin = $1, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $2
-       RETURNING id, username, email, is_admin`,
-      [!!is_admin, userId]
-    );
-
-    if (result.rows.length === 0) {
+    // Get current user data for audit
+    const currentUser = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
+    if (currentUser.rows.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
+
+    const oldValues = {
+      is_admin: currentUser.rows[0].is_admin,
+      role_level: currentUser.rows[0].role_level,
+      role_name: currentUser.rows[0].role_name
+    };
+
+    // Check if trying to set a role higher than or equal to own role
+    if (role_level !== undefined && role_level >= req.user.role_level && !req.user.is_admin) {
+      return res.status(403).json({ error: 'Cannot assign role equal to or higher than your own' });
+    }
+
+    const result = await pool.query(
+      `UPDATE users SET
+        is_admin = COALESCE($1, is_admin),
+        role_level = COALESCE($2, role_level),
+        role_name = COALESCE($3, role_name),
+        updated_at = CURRENT_TIMESTAMP
+       WHERE id = $4
+       RETURNING id, username, email, is_admin, role_level, role_name`,
+      [is_admin, role_level, role_name, userId]
+    );
+
+    // Log the audit
+    await logAudit(pool, req.user.id, 'update_user_role', 'user', userId, oldValues, result.rows[0], req);
 
     res.json(result.rows[0]);
   } catch (error) {
     console.error('Error updating user:', error);
     res.status(500).json({ error: 'Failed to update user' });
+  }
+});
+
+// Get available roles (for dropdown in admin panel)
+router.get('/roles', async (req, res) => {
+  const pool = req.app.locals.pool;
+
+  try {
+    // Only show roles up to and including the current user's level
+    const result = await pool.query(
+      `SELECT * FROM roles WHERE level <= $1 ORDER BY level`,
+      [req.user.role_level]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching roles:', error);
+    res.status(500).json({ error: 'Failed to fetch roles' });
+  }
+});
+
+// Get order details
+router.get('/orders/:id', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const orderId = parseInt(req.params.id);
+
+  try {
+    // Get order with user info
+    const orderResult = await pool.query(
+      `SELECT o.*, u.username, u.email, u.full_name
+       FROM orders o
+       LEFT JOIN users u ON o.user_id = u.id
+       WHERE o.id = $1`,
+      [orderId]
+    );
+
+    if (orderResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    // Get order items
+    const itemsResult = await pool.query(
+      `SELECT oi.*, d.status as domain_status
+       FROM order_items oi
+       LEFT JOIN domains d ON oi.domain_id = d.id
+       WHERE oi.order_id = $1`,
+      [orderId]
+    );
+
+    // Get staff notes
+    const notesResult = await pool.query(
+      `SELECT sn.*, u.username as staff_username
+       FROM staff_notes sn
+       LEFT JOIN users u ON sn.staff_user_id = u.id
+       WHERE sn.entity_type = 'order' AND sn.entity_id = $1
+       ORDER BY sn.is_pinned DESC, sn.created_at DESC`,
+      [orderId]
+    );
+
+    res.json({
+      ...orderResult.rows[0],
+      items: itemsResult.rows,
+      notes: notesResult.rows
+    });
+  } catch (error) {
+    console.error('Error fetching order details:', error);
+    res.status(500).json({ error: 'Failed to fetch order details' });
+  }
+});
+
+// Update order status
+router.put('/orders/:id', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const orderId = parseInt(req.params.id);
+  const { status, payment_status, notes } = req.body;
+
+  try {
+    const currentOrder = await pool.query('SELECT * FROM orders WHERE id = $1', [orderId]);
+    if (currentOrder.rows.length === 0) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    const oldValues = { status: currentOrder.rows[0].status, payment_status: currentOrder.rows[0].payment_status };
+
+    const result = await pool.query(
+      `UPDATE orders SET
+        status = COALESCE($1, status),
+        payment_status = COALESCE($2, payment_status),
+        notes = COALESCE($3, notes),
+        updated_at = CURRENT_TIMESTAMP
+       WHERE id = $4
+       RETURNING *`,
+      [status, payment_status, notes, orderId]
+    );
+
+    await logAudit(pool, req.user.id, 'update_order', 'order', orderId, oldValues, { status, payment_status }, req);
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error updating order:', error);
+    res.status(500).json({ error: 'Failed to update order' });
+  }
+});
+
+// Retry failed registration for an order item
+router.post('/orders/:orderId/items/:itemId/retry', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const { orderId, itemId } = req.params;
+
+  try {
+    // Get the order item
+    const itemResult = await pool.query(
+      `SELECT oi.*, o.user_id FROM order_items oi
+       JOIN orders o ON oi.order_id = o.id
+       WHERE oi.id = $1 AND oi.order_id = $2`,
+      [itemId, orderId]
+    );
+
+    if (itemResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Order item not found' });
+    }
+
+    const item = itemResult.rows[0];
+
+    if (item.status !== 'failed') {
+      return res.status(400).json({ error: 'Can only retry failed items' });
+    }
+
+    // Get user's default contact
+    const contactResult = await pool.query(
+      `SELECT * FROM domain_contacts WHERE user_id = $1 AND is_default = true LIMIT 1`,
+      [item.user_id]
+    );
+
+    const contact = contactResult.rows[0];
+    if (!contact) {
+      return res.status(400).json({ error: 'User has no default contact set' });
+    }
+
+    // Parse domain
+    const parts = item.domain_name.split('.');
+    const tld = parts.pop();
+    const sld = parts.join('.');
+
+    let result;
+    if (item.item_type === 'register') {
+      result = await enom.registerDomain({
+        sld,
+        tld,
+        years: item.years,
+        registrant: contact
+      });
+    } else if (item.item_type === 'renew') {
+      result = await enom.renewDomain(sld, tld, item.years);
+    }
+
+    // Update the order item
+    await pool.query(
+      `UPDATE order_items SET
+        status = 'completed',
+        enom_order_id = $1,
+        enom_status = 'success',
+        processed_at = CURRENT_TIMESTAMP
+       WHERE id = $2`,
+      [result.orderId, itemId]
+    );
+
+    await logAudit(pool, req.user.id, 'retry_registration', 'order_item', itemId, { status: 'failed' }, { status: 'completed' }, req);
+
+    res.json({ success: true, result });
+  } catch (error) {
+    console.error('Error retrying registration:', error);
+    res.status(500).json({ error: 'Failed to retry registration' });
+  }
+});
+
+// Get audit logs (super admin only)
+router.get('/audit-logs', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const { page = 1, limit = 100, user_id, action, entity_type, start_date, end_date } = req.query;
+  const offset = (parseInt(page) - 1) * parseInt(limit);
+
+  try {
+    let query = `
+      SELECT al.*, u.username, u.email
+      FROM audit_logs al
+      LEFT JOIN users u ON al.user_id = u.id
+      WHERE 1=1
+    `;
+    const params = [];
+
+    if (user_id) {
+      params.push(parseInt(user_id));
+      query += ` AND al.user_id = $${params.length}`;
+    }
+
+    if (action) {
+      params.push(action);
+      query += ` AND al.action = $${params.length}`;
+    }
+
+    if (entity_type) {
+      params.push(entity_type);
+      query += ` AND al.entity_type = $${params.length}`;
+    }
+
+    if (start_date) {
+      params.push(start_date);
+      query += ` AND al.created_at >= $${params.length}`;
+    }
+
+    if (end_date) {
+      params.push(end_date);
+      query += ` AND al.created_at <= $${params.length}`;
+    }
+
+    query += ` ORDER BY al.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+    params.push(parseInt(limit), offset);
+
+    const result = await pool.query(query, params);
+
+    // Get total count
+    let countQuery = 'SELECT COUNT(*) FROM audit_logs WHERE 1=1';
+    const countParams = [];
+    if (user_id) {
+      countParams.push(parseInt(user_id));
+      countQuery += ` AND user_id = $${countParams.length}`;
+    }
+    if (action) {
+      countParams.push(action);
+      countQuery += ` AND action = $${countParams.length}`;
+    }
+
+    const countResult = await pool.query(countQuery, countParams);
+
+    res.json({
+      logs: result.rows,
+      total: parseInt(countResult.rows[0].count),
+      page: parseInt(page),
+      totalPages: Math.ceil(countResult.rows[0].count / parseInt(limit))
+    });
+  } catch (error) {
+    console.error('Error fetching audit logs:', error);
+    res.status(500).json({ error: 'Failed to fetch audit logs' });
+  }
+});
+
+// Get system settings
+router.get('/settings', async (req, res) => {
+  const pool = req.app.locals.pool;
+
+  try {
+    const result = await pool.query('SELECT * FROM app_settings ORDER BY key');
+    const settings = {};
+    for (const row of result.rows) {
+      settings[row.key] = row.value;
+    }
+    res.json(settings);
+  } catch (error) {
+    console.error('Error fetching settings:', error);
+    res.status(500).json({ error: 'Failed to fetch settings' });
+  }
+});
+
+// Update system settings (super admin only)
+router.put('/settings', async (req, res) => {
+  const pool = req.app.locals.pool;
+
+  // Require super admin for settings
+  if (req.user.role_level < ROLE_LEVELS.SUPERADMIN && !req.user.is_admin) {
+    return res.status(403).json({ error: 'Super admin access required' });
+  }
+
+  try {
+    const settings = req.body;
+    const updated = [];
+
+    for (const [key, value] of Object.entries(settings)) {
+      await pool.query(
+        `INSERT INTO app_settings (key, value, updated_at)
+         VALUES ($1, $2, CURRENT_TIMESTAMP)
+         ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = CURRENT_TIMESTAMP`,
+        [key, String(value)]
+      );
+      updated.push(key);
+    }
+
+    await logAudit(pool, req.user.id, 'update_settings', 'app_settings', null, null, settings, req);
+
+    res.json({ success: true, updated });
+  } catch (error) {
+    console.error('Error updating settings:', error);
+    res.status(500).json({ error: 'Failed to update settings' });
+  }
+});
+
+// Get domain details
+router.get('/domains/:id', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+
+  try {
+    const domainResult = await pool.query(
+      `SELECT d.*, u.username, u.email, u.full_name
+       FROM domains d
+       LEFT JOIN users u ON d.user_id = u.id
+       WHERE d.id = $1`,
+      [domainId]
+    );
+
+    if (domainResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Domain not found' });
+    }
+
+    // Get staff notes
+    const notesResult = await pool.query(
+      `SELECT sn.*, u.username as staff_username
+       FROM staff_notes sn
+       LEFT JOIN users u ON sn.staff_user_id = u.id
+       WHERE sn.entity_type = 'domain' AND sn.entity_id = $1
+       ORDER BY sn.is_pinned DESC, sn.created_at DESC`,
+      [domainId]
+    );
+
+    // Get order history for this domain
+    const ordersResult = await pool.query(
+      `SELECT oi.*, o.order_number, o.status as order_status, o.created_at as order_date
+       FROM order_items oi
+       JOIN orders o ON oi.order_id = o.id
+       WHERE oi.domain_name = $1
+       ORDER BY o.created_at DESC`,
+      [domainResult.rows[0].domain_name]
+    );
+
+    res.json({
+      ...domainResult.rows[0],
+      notes: notesResult.rows,
+      orderHistory: ordersResult.rows
+    });
+  } catch (error) {
+    console.error('Error fetching domain details:', error);
+    res.status(500).json({ error: 'Failed to fetch domain details' });
+  }
+});
+
+// Update domain (transfer between users, update settings)
+router.put('/domains/:id', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+  const { user_id, status, auto_renew, privacy_enabled } = req.body;
+
+  try {
+    const currentDomain = await pool.query('SELECT * FROM domains WHERE id = $1', [domainId]);
+    if (currentDomain.rows.length === 0) {
+      return res.status(404).json({ error: 'Domain not found' });
+    }
+
+    const oldValues = { user_id: currentDomain.rows[0].user_id, status: currentDomain.rows[0].status };
+
+    const result = await pool.query(
+      `UPDATE domains SET
+        user_id = COALESCE($1, user_id),
+        status = COALESCE($2, status),
+        auto_renew = COALESCE($3, auto_renew),
+        privacy_enabled = COALESCE($4, privacy_enabled),
+        updated_at = CURRENT_TIMESTAMP
+       WHERE id = $5
+       RETURNING *`,
+      [user_id, status, auto_renew, privacy_enabled, domainId]
+    );
+
+    await logAudit(pool, req.user.id, 'update_domain', 'domain', domainId, oldValues, { user_id, status }, req);
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error updating domain:', error);
+    res.status(500).json({ error: 'Failed to update domain' });
+  }
+});
+
+// Force sync domain with eNom
+router.post('/domains/:id/sync', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+
+  try {
+    const domainResult = await pool.query('SELECT * FROM domains WHERE id = $1', [domainId]);
+    if (domainResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Domain not found' });
+    }
+
+    const domain = domainResult.rows[0];
+    const parts = domain.domain_name.split('.');
+    const tld = parts.pop();
+    const sld = parts.join('.');
+
+    // Get info from eNom
+    const info = await enom.getDomainInfo(sld, tld);
+    const nameservers = await enom.getNameservers(sld, tld);
+
+    // Parse expiration date
+    let expDate = null;
+    if (info.expirationDate) {
+      const expMatch = info.expirationDate.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+      if (expMatch) {
+        expDate = `${expMatch[3]}-${expMatch[1].padStart(2, '0')}-${expMatch[2].padStart(2, '0')}`;
+      }
+    }
+
+    // Update domain
+    const result = await pool.query(
+      `UPDATE domains SET
+        expiration_date = $1,
+        auto_renew = $2,
+        privacy_enabled = $3,
+        lock_status = $4,
+        nameservers = $5,
+        last_synced_at = CURRENT_TIMESTAMP,
+        enom_status_raw = $6,
+        updated_at = CURRENT_TIMESTAMP
+       WHERE id = $7
+       RETURNING *`,
+      [
+        expDate,
+        info.autoRenew,
+        info.whoisPrivacy,
+        info.lockStatus === 'locked',
+        JSON.stringify(nameservers),
+        JSON.stringify(info),
+        domainId
+      ]
+    );
+
+    res.json({
+      success: true,
+      domain: result.rows[0],
+      enomInfo: info,
+      nameservers
+    });
+  } catch (error) {
+    console.error('Error syncing domain:', error);
+    res.status(500).json({ error: 'Failed to sync domain' });
   }
 });
 
@@ -398,6 +860,398 @@ router.get('/activity', async (req, res) => {
   } catch (error) {
     console.error('Error fetching activity logs:', error);
     res.status(500).json({ error: 'Failed to fetch activity logs' });
+  }
+});
+
+// Sync domains from eNom
+router.post('/sync-enom', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const { user_id = 1 } = req.body; // Default to admin user
+
+  try {
+    // Get all domains from main account
+    const enomDomains = await enom.getAllDomains();
+
+    // Get sub-accounts and their domains
+    const subAccounts = await enom.getSubAccounts();
+
+    const imported = [];
+    const errors = [];
+
+    // Import main account domains
+    for (const domain of enomDomains) {
+      try {
+        // Get detailed info for each domain
+        const info = await enom.getDomainInfo(domain.sld, domain.tld);
+
+        // Parse expiration date
+        let expDate = null;
+        if (domain.expirationDate) {
+          const parts = domain.expirationDate.split('/');
+          if (parts.length === 3) {
+            expDate = `${parts[2]}-${parts[0].padStart(2, '0')}-${parts[1].padStart(2, '0')}`;
+          }
+        }
+
+        // Upsert domain
+        await pool.query(`
+          INSERT INTO domains (user_id, domain_name, tld, status, expiration_date, auto_renew, privacy_enabled, enom_order_id, enom_account)
+          VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, 'main')
+          ON CONFLICT (domain_name) DO UPDATE SET
+            expiration_date = EXCLUDED.expiration_date,
+            auto_renew = EXCLUDED.auto_renew,
+            privacy_enabled = EXCLUDED.privacy_enabled,
+            enom_order_id = EXCLUDED.enom_order_id,
+            updated_at = CURRENT_TIMESTAMP
+        `, [user_id, domain.domain, domain.tld, expDate, domain.autoRenew, domain.privacyEnabled, domain.domainNameId]);
+
+        imported.push({ domain: domain.domain, account: 'main' });
+      } catch (err) {
+        errors.push({ domain: domain.domain, error: err.message });
+      }
+    }
+
+    // Try to get domains from sub-accounts by querying each domain directly
+    for (const subAccount of subAccounts) {
+      if (subAccount.domainCount > 0) {
+        // Try common domain names based on sub-account info
+        const possibleDomains = [];
+
+        // Try domain based on email (e.g., admin@gobig.construction -> gobig.construction)
+        if (subAccount.email) {
+          const emailDomain = subAccount.email.split('@')[1];
+          if (emailDomain) {
+            const parts = emailDomain.split('.');
+            if (parts.length >= 2) {
+              possibleDomains.push({
+                sld: parts.slice(0, -1).join('.'),
+                tld: parts[parts.length - 1]
+              });
+            }
+          }
+        }
+
+        for (const pd of possibleDomains) {
+          try {
+            const info = await enom.getDomainInfo(pd.sld, pd.tld);
+
+            // Check if this domain belongs to the sub-account
+            if (info.status) {
+              let expDate = null;
+              if (info.expirationDate) {
+                const expParts = info.expirationDate.split(' ')[0].split('/');
+                if (expParts.length === 3) {
+                  expDate = `${expParts[2]}-${expParts[0].padStart(2, '0')}-${expParts[1].padStart(2, '0')}`;
+                }
+              }
+
+              await pool.query(`
+                INSERT INTO domains (user_id, domain_name, tld, status, expiration_date, auto_renew, privacy_enabled, enom_account)
+                VALUES ($1, $2, $3, 'active', $4, $5, $6, $7)
+                ON CONFLICT (domain_name) DO UPDATE SET
+                  expiration_date = EXCLUDED.expiration_date,
+                  auto_renew = EXCLUDED.auto_renew,
+                  privacy_enabled = EXCLUDED.privacy_enabled,
+                  enom_account = EXCLUDED.enom_account,
+                  updated_at = CURRENT_TIMESTAMP
+              `, [user_id, `${pd.sld}.${pd.tld}`, pd.tld, expDate, info.autoRenew || false, info.whoisPrivacy || false, subAccount.loginId]);
+
+              imported.push({ domain: `${pd.sld}.${pd.tld}`, account: subAccount.loginId });
+            }
+          } catch (err) {
+            // Domain might not exist or not be accessible
+          }
+        }
+      }
+    }
+
+    res.json({
+      message: 'eNom sync completed',
+      imported: imported.length,
+      domains: imported,
+      errors: errors.length > 0 ? errors : undefined,
+      subAccounts: subAccounts
+    });
+  } catch (error) {
+    console.error('eNom sync error:', error);
+    res.status(500).json({ error: 'Failed to sync from eNom' });
+  }
+});
+
+// Get eNom sub-accounts
+router.get('/enom/subaccounts', async (req, res) => {
+  try {
+    const subAccounts = await enom.getSubAccounts();
+    res.json(subAccounts);
+  } catch (error) {
+    console.error('Error fetching sub-accounts:', error);
+    res.status(500).json({ error: 'Failed to fetch sub-accounts' });
+  }
+});
+
+// Get eNom balance
+router.get('/enom/balance', async (req, res) => {
+  try {
+    const balance = await enom.getBalance();
+    res.json(balance);
+  } catch (error) {
+    console.error('Error fetching balance:', error);
+    res.status(500).json({ error: 'Failed to fetch balance' });
+  }
+});
+
+// Sync TLD pricing from eNom costs
+router.post('/enom/sync-pricing', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const { tlds, markup = 1.3, roundTo = 0.99 } = req.body;
+
+  try {
+    // If specific TLDs provided, use those; otherwise get from existing pricing table
+    let tldsToSync = tlds;
+    if (!tldsToSync || tldsToSync.length === 0) {
+      const existingResult = await pool.query('SELECT tld FROM tld_pricing');
+      tldsToSync = existingResult.rows.map(r => r.tld);
+    }
+
+    const results = [];
+    const errors = [];
+
+    for (const tld of tldsToSync) {
+      try {
+        // Get eNom reseller costs for this TLD
+        const pricing = await enom.getTLDPricing(tld);
+
+        if (pricing.cost_register > 0) {
+          // Calculate retail prices with markup
+          const calculatePrice = (cost) => {
+            if (!cost || cost === 0) return 0;
+            const withMarkup = cost * markup;
+            // Round to .99 (e.g., 12.34 -> 12.99, 15.67 -> 15.99)
+            return Math.floor(withMarkup) + roundTo;
+          };
+
+          const price_register = calculatePrice(pricing.cost_register);
+          const price_renew = calculatePrice(pricing.cost_renew || pricing.cost_register);
+          const price_transfer = calculatePrice(pricing.cost_transfer || pricing.cost_register);
+
+          // Upsert pricing
+          await pool.query(`
+            INSERT INTO tld_pricing (tld, cost_register, cost_renew, cost_transfer, price_register, price_renew, price_transfer)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (tld) DO UPDATE SET
+              cost_register = EXCLUDED.cost_register,
+              cost_renew = EXCLUDED.cost_renew,
+              cost_transfer = EXCLUDED.cost_transfer,
+              price_register = CASE WHEN tld_pricing.price_register = 0 OR tld_pricing.price_register IS NULL
+                                    THEN EXCLUDED.price_register ELSE tld_pricing.price_register END,
+              price_renew = CASE WHEN tld_pricing.price_renew = 0 OR tld_pricing.price_renew IS NULL
+                                 THEN EXCLUDED.price_renew ELSE tld_pricing.price_renew END,
+              price_transfer = CASE WHEN tld_pricing.price_transfer = 0 OR tld_pricing.price_transfer IS NULL
+                                    THEN EXCLUDED.price_transfer ELSE tld_pricing.price_transfer END,
+              updated_at = CURRENT_TIMESTAMP
+          `, [tld, pricing.cost_register, pricing.cost_renew, pricing.cost_transfer, price_register, price_renew, price_transfer]);
+
+          results.push({
+            tld,
+            cost_register: pricing.cost_register,
+            cost_renew: pricing.cost_renew,
+            cost_transfer: pricing.cost_transfer,
+            price_register,
+            price_renew,
+            price_transfer
+          });
+        }
+      } catch (err) {
+        errors.push({ tld, error: err.message });
+      }
+    }
+
+    res.json({
+      message: 'Pricing sync completed',
+      synced: results.length,
+      results,
+      errors: errors.length > 0 ? errors : undefined
+    });
+  } catch (error) {
+    console.error('Error syncing pricing:', error);
+    res.status(500).json({ error: 'Failed to sync pricing' });
+  }
+});
+
+// Get eNom cost for a specific TLD
+router.get('/enom/pricing/:tld', async (req, res) => {
+  const { tld } = req.params;
+
+  try {
+    const pricing = await enom.getTLDPricing(tld);
+    res.json(pricing);
+  } catch (error) {
+    console.error('Error fetching eNom pricing:', error);
+    res.status(500).json({ error: 'Failed to fetch pricing' });
+  }
+});
+
+// Get list of all available TLDs from eNom
+router.get('/enom/tlds', async (req, res) => {
+  try {
+    const tlds = await enom.getTLDList();
+    res.json(tlds);
+  } catch (error) {
+    console.error('Error fetching TLD list:', error);
+    res.status(500).json({ error: 'Failed to fetch TLD list' });
+  }
+});
+
+// Import specific domain by name
+router.post('/enom/import-domain', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const { domain, user_id = 1, enom_account = 'main' } = req.body;
+
+  if (!domain) {
+    return res.status(400).json({ error: 'Domain name required' });
+  }
+
+  try {
+    const parts = domain.toLowerCase().split('.');
+    if (parts.length < 2) {
+      return res.status(400).json({ error: 'Invalid domain format' });
+    }
+
+    const tld = parts.pop();
+    const sld = parts.join('.');
+
+    // Get domain info from eNom
+    const info = await enom.getDomainInfo(sld, tld);
+
+    // Parse dates
+    let expDate = null;
+    if (info.expirationDate) {
+      const expMatch = info.expirationDate.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+      if (expMatch) {
+        expDate = `${expMatch[3]}-${expMatch[1].padStart(2, '0')}-${expMatch[2].padStart(2, '0')}`;
+      }
+    }
+
+    let regDate = null;
+    if (info.registrationDate) {
+      const regMatch = info.registrationDate.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+      if (regMatch) {
+        regDate = `${regMatch[3]}-${regMatch[1].padStart(2, '0')}-${regMatch[2].padStart(2, '0')}`;
+      }
+    }
+
+    // Upsert domain
+    const result = await pool.query(`
+      INSERT INTO domains (user_id, domain_name, tld, status, registration_date, expiration_date, auto_renew, privacy_enabled, enom_account)
+      VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, $8)
+      ON CONFLICT (domain_name) DO UPDATE SET
+        expiration_date = EXCLUDED.expiration_date,
+        auto_renew = EXCLUDED.auto_renew,
+        privacy_enabled = EXCLUDED.privacy_enabled,
+        enom_account = EXCLUDED.enom_account,
+        updated_at = CURRENT_TIMESTAMP
+      RETURNING *
+    `, [user_id, `${sld}.${tld}`, tld, regDate, expDate, info.autoRenew || false, info.whoisPrivacy || false, enom_account]);
+
+    res.json({
+      message: 'Domain imported successfully',
+      domain: result.rows[0],
+      enomInfo: info
+    });
+  } catch (error) {
+    console.error('Error importing domain:', error);
+    res.status(500).json({ error: 'Failed to import domain' });
+  }
+});
+
+// Trigger full domain data sync (fetches all data from eNom)
+router.post('/sync-domains', async (req, res) => {
+  const pool = req.app.locals.pool;
+
+  try {
+    // Get all domains that need syncing
+    const result = await pool.query(`
+      SELECT id, domain_name FROM domains
+      WHERE status IN ('active', 'pending')
+      ORDER BY last_synced_at ASC NULLS FIRST
+    `);
+
+    console.log(`[Admin Sync] Starting sync for ${result.rows.length} domains`);
+
+    let synced = 0;
+    let failed = 0;
+    const details = [];
+
+    for (const domain of result.rows) {
+      try {
+        const parts = domain.domain_name.split('.');
+        const tld = parts.pop();
+        const sld = parts.join('.');
+
+        // Fetch comprehensive data from eNom (5 API calls in parallel)
+        const data = await enom.getFullDomainData(sld, tld);
+
+        // Parse expiration date
+        let expDate = null;
+        if (data.expirationDate) {
+          const match = data.expirationDate.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+          if (match) {
+            expDate = `${match[3]}-${match[1].padStart(2, '0')}-${match[2].padStart(2, '0')}`;
+          }
+        }
+
+        // Determine status
+        let status = 'active';
+        if (data.status === 'Expired') {
+          status = 'expired';
+        } else if (expDate && new Date(expDate) < new Date()) {
+          status = 'expired';
+        }
+
+        await pool.query(`
+          UPDATE domains SET
+            expiration_date = COALESCE($1, expiration_date),
+            auto_renew = $2,
+            privacy_enabled = $3,
+            lock_status = $4,
+            nameservers = $5,
+            enom_domain_id = $6,
+            status = $7,
+            last_synced_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE id = $8
+        `, [
+          expDate,
+          data.autoRenew,
+          data.privacyEnabled,
+          data.lockStatus,
+          JSON.stringify(data.nameservers),
+          data.domainNameId,
+          status,
+          domain.id
+        ]);
+
+        synced++;
+        details.push({ domain: domain.domain_name, status: 'synced', data });
+      } catch (error) {
+        failed++;
+        details.push({ domain: domain.domain_name, status: 'failed', error: error.message });
+      }
+
+      // Small delay to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+
+    res.json({
+      message: 'Domain sync completed',
+      synced,
+      failed,
+      total: result.rows.length,
+      details
+    });
+  } catch (error) {
+    console.error('Error syncing domains:', error);
+    res.status(500).json({ error: 'Failed to sync domains' });
   }
 });
 

@@ -1,6 +1,16 @@
 const express = require('express');
 const router = express.Router();
 const { authMiddleware } = require('../middleware/auth');
+const enom = require('../services/enom');
+// Nameserver validation - security fix
+function isValidNameserver(ns) {
+  if (!ns || typeof ns !== 'string') return false;
+  // Must be valid hostname format (RFC 1123)
+  const nsRegex = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
+  return nsRegex.test(ns) && ns.length <= 253 && ns.includes('.');
+}
+
+
 
 // Get TLD pricing list
 router.get('/pricing', async (req, res) => {
@@ -52,19 +62,22 @@ router.get('/check/:domain', async (req, res) => {
       return res.status(400).json({ error: 'TLD not supported', tld });
     }
 
-    // TODO: Call eNom API to check availability
-    // For now, return mock data
     const pricing = tldResult.rows[0];
-    const available = Math.random() > 0.3; // Mock: 70% available
+
+    // Call eNom API to check availability
+    const availability = await enom.checkDomain(sld, tld);
 
     res.json({
       domain: `${sld}.${tld}`,
       sld,
       tld,
-      available,
-      premium: false,
+      available: availability.available,
+      premium: availability.premium,
+      premiumPrice: availability.premiumPrice,
       pricing: {
-        register: parseFloat(pricing.price_register),
+        register: availability.premium && availability.premiumPrice
+          ? availability.premiumPrice
+          : parseFloat(pricing.price_register),
         renew: parseFloat(pricing.price_renew),
         transfer: parseFloat(pricing.price_transfer),
         privacy: parseFloat(pricing.price_privacy)
@@ -91,7 +104,9 @@ router.post('/check-bulk', async (req, res) => {
 
   try {
     const results = [];
+    const domainChecks = [];
 
+    // Parse and validate domains first
     for (const domain of domains) {
       const parts = domain.toLowerCase().split('.');
       if (parts.length < 2) continue;
@@ -113,20 +128,38 @@ router.post('/check-bulk', async (req, res) => {
         continue;
       }
 
-      const pricing = tldResult.rows[0];
-
-      // TODO: Call eNom API
-      results.push({
-        domain: `${sld}.${tld}`,
+      domainChecks.push({
         sld,
         tld,
-        available: Math.random() > 0.3,
-        premium: false,
-        pricing: {
-          register: parseFloat(pricing.price_register),
-          renew: parseFloat(pricing.price_renew)
-        }
+        pricing: tldResult.rows[0]
       });
+    }
+
+    // Check availability with eNom
+    if (domainChecks.length > 0) {
+      const enomResults = await enom.checkDomainBulk(
+        domainChecks.map(d => ({ sld: d.sld, tld: d.tld }))
+      );
+
+      for (let i = 0; i < enomResults.length; i++) {
+        const enomResult = enomResults[i];
+        const domainCheck = domainChecks[i];
+
+        results.push({
+          domain: enomResult.domain,
+          sld: enomResult.sld,
+          tld: enomResult.tld,
+          available: enomResult.available,
+          premium: enomResult.premium,
+          error: enomResult.error,
+          pricing: {
+            register: enomResult.premium && enomResult.premiumPrice
+              ? enomResult.premiumPrice
+              : parseFloat(domainCheck.pricing.price_register),
+            renew: parseFloat(domainCheck.pricing.price_renew)
+          }
+        });
+      }
     }
 
     res.json(results);
@@ -154,11 +187,23 @@ router.get('/suggestions/:term', async (req, res) => {
       'SELECT tld, price_register FROM tld_pricing WHERE is_active = true ORDER BY price_register LIMIT 10'
     );
 
-    const suggestions = tldResult.rows.map(row => ({
-      domain: `${cleanTerm}.${row.tld}`,
-      tld: row.tld,
-      price: parseFloat(row.price_register),
-      available: Math.random() > 0.3 // TODO: Actual check
+    // Build domain list to check
+    const domainsToCheck = tldResult.rows.map(row => ({
+      sld: cleanTerm,
+      tld: row.tld
+    }));
+
+    // Check availability with eNom
+    const enomResults = await enom.checkDomainBulk(domainsToCheck);
+
+    const suggestions = enomResults.map((result, index) => ({
+      domain: result.domain,
+      tld: result.tld,
+      price: result.premium && result.premiumPrice
+        ? result.premiumPrice
+        : parseFloat(tldResult.rows[index].price_register),
+      available: result.available,
+      premium: result.premium
     }));
 
     res.json(suggestions);
@@ -209,10 +254,53 @@ router.get('/:id', authMiddleware, async (req, res) => {
       return res.status(404).json({ error: 'Domain not found' });
     }
 
-    res.json(result.rows[0]);
+    // Get live data from eNom
+    const domain = result.rows[0];
+    const parts = domain.domain_name.split('.');
+    const tld = parts.pop();
+    const sld = parts.join('.');
+
+    try {
+      const enomInfo = await enom.getDomainInfo(sld, tld);
+      domain.enom_status = enomInfo.status;
+      domain.enom_expiration = enomInfo.expirationDate;
+    } catch (e) {
+      // Continue with DB data if eNom fails
+      console.error('Failed to get eNom info:', e.message);
+    }
+
+    res.json(domain);
   } catch (error) {
     console.error('Error fetching domain:', error);
     res.status(500).json({ error: 'Failed to fetch domain' });
+  }
+});
+
+// Get nameservers for a domain (reads from local DB - synced by background job)
+router.get('/:id/nameservers', authMiddleware, async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+
+  try {
+    // Verify ownership and get domain
+    const domainResult = await pool.query(
+      'SELECT nameservers FROM domains WHERE id = $1 AND user_id = $2',
+      [domainId, req.user.id]
+    );
+
+    if (domainResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Domain not found' });
+    }
+
+    const domain = domainResult.rows[0];
+    const nameservers = domain.nameservers ?
+      (typeof domain.nameservers === 'string' ? JSON.parse(domain.nameservers) : domain.nameservers)
+      : [];
+
+    res.json({ nameservers });
+  } catch (error) {
+    console.error('Error fetching nameservers:', error);
+    res.status(500).json({ error: 'Failed to fetch nameservers' });
   }
 });
 
@@ -226,6 +314,13 @@ router.put('/:id/nameservers', authMiddleware, async (req, res) => {
     return res.status(400).json({ error: 'Must provide 2-13 nameservers' });
   }
 
+  // Validate each nameserver format
+  for (const ns of nameservers) {
+    if (!isValidNameserver(ns)) {
+      return res.status(400).json({ error: `Invalid nameserver format: ${ns}` });
+    }
+  }
+
   try {
     // Verify ownership
     const domainResult = await pool.query(
@@ -237,8 +332,15 @@ router.put('/:id/nameservers', authMiddleware, async (req, res) => {
       return res.status(404).json({ error: 'Domain not found' });
     }
 
-    // TODO: Call eNom API to update nameservers
+    const domain = domainResult.rows[0];
+    const parts = domain.domain_name.split('.');
+    const tld = parts.pop();
+    const sld = parts.join('.');
 
+    // Call eNom API to update nameservers
+    await enom.updateNameservers(sld, tld, nameservers);
+
+    // Update local database
     await pool.query(
       'UPDATE domains SET nameservers = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
       [JSON.stringify(nameservers), domainId]
@@ -258,16 +360,31 @@ router.put('/:id/autorenew', authMiddleware, async (req, res) => {
   const { auto_renew } = req.body;
 
   try {
-    const result = await pool.query(
-      `UPDATE domains SET auto_renew = $1, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $2 AND user_id = $3
-       RETURNING id, domain_name, auto_renew`,
-      [!!auto_renew, domainId, req.user.id]
+    // Verify ownership and get domain
+    const domainResult = await pool.query(
+      'SELECT * FROM domains WHERE id = $1 AND user_id = $2',
+      [domainId, req.user.id]
     );
 
-    if (result.rows.length === 0) {
+    if (domainResult.rows.length === 0) {
       return res.status(404).json({ error: 'Domain not found' });
     }
+
+    const domain = domainResult.rows[0];
+    const parts = domain.domain_name.split('.');
+    const tld = parts.pop();
+    const sld = parts.join('.');
+
+    // Call eNom API to update auto-renew
+    await enom.setAutoRenew(sld, tld, !!auto_renew);
+
+    // Update local database
+    const result = await pool.query(
+      `UPDATE domains SET auto_renew = $1, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2
+       RETURNING id, domain_name, auto_renew`,
+      [!!auto_renew, domainId]
+    );
 
     res.json(result.rows[0]);
   } catch (error) {
@@ -280,11 +397,28 @@ router.put('/:id/autorenew', authMiddleware, async (req, res) => {
 router.put('/:id/privacy', authMiddleware, async (req, res) => {
   const pool = req.app.locals.pool;
   const domainId = parseInt(req.params.id);
-  const { privacy_enabled } = req.body;
+  const privacy_enabled = req.body.privacy_enabled ?? req.body.privacy;
 
   try {
-    // TODO: Call eNom API
+    // Verify ownership
+    const domainResult = await pool.query(
+      'SELECT * FROM domains WHERE id = $1 AND user_id = $2',
+      [domainId, req.user.id]
+    );
 
+    if (domainResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Domain not found' });
+    }
+
+    const domain = domainResult.rows[0];
+    const parts = domain.domain_name.split('.');
+    const tld = parts.pop();
+    const sld = parts.join('.');
+
+    // Call eNom API to toggle privacy
+    await enom.setWhoisPrivacy(sld, tld, !!privacy_enabled);
+
+    // Update local database
     const result = await pool.query(
       `UPDATE domains SET privacy_enabled = $1, updated_at = CURRENT_TIMESTAMP
        WHERE id = $2 AND user_id = $3
@@ -292,14 +426,269 @@ router.put('/:id/privacy', authMiddleware, async (req, res) => {
       [!!privacy_enabled, domainId, req.user.id]
     );
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Domain not found' });
-    }
-
     res.json(result.rows[0]);
   } catch (error) {
     console.error('Error updating privacy:', error);
     res.status(500).json({ error: 'Failed to update privacy setting' });
+  }
+});
+
+// Toggle domain lock
+router.put('/:id/lock', authMiddleware, async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+  const { locked } = req.body;
+
+  try {
+    // Verify ownership
+    const domainResult = await pool.query(
+      'SELECT * FROM domains WHERE id = $1 AND user_id = $2',
+      [domainId, req.user.id]
+    );
+
+    if (domainResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Domain not found' });
+    }
+
+    const domain = domainResult.rows[0];
+    const parts = domain.domain_name.split('.');
+    const tld = parts.pop();
+    const sld = parts.join('.');
+
+    // Call eNom API to set lock status
+    await enom.setDomainLock(sld, tld, !!locked);
+
+    // Update local database
+    const result = await pool.query(
+      `UPDATE domains SET lock_status = $1, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2 AND user_id = $3
+       RETURNING id, domain_name, lock_status`,
+      [!!locked, domainId, req.user.id]
+    );
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error updating lock status:', error);
+    res.status(500).json({ error: 'Failed to update lock status' });
+  }
+});
+
+// Get auth code (EPP code) for transfer out
+router.get('/:id/authcode', authMiddleware, async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+
+  try {
+    // Verify ownership
+    const domainResult = await pool.query(
+      'SELECT * FROM domains WHERE id = $1 AND user_id = $2',
+      [domainId, req.user.id]
+    );
+
+    if (domainResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Domain not found' });
+    }
+
+    const domain = domainResult.rows[0];
+    const parts = domain.domain_name.split('.');
+    const tld = parts.pop();
+    const sld = parts.join('.');
+
+    // Get auth code from eNom (this also unlocks the domain)
+    const result = await enom.getAuthCode(sld, tld);
+
+    // Update lock status in database since getAuthCode unlocks the domain
+    await pool.query(
+      'UPDATE domains SET lock_status = false, updated_at = CURRENT_TIMESTAMP WHERE id = $1',
+      [domainId]
+    );
+
+    res.json({
+      domain: domain.domain_name,
+      authCode: result.authCode,
+      message: 'Domain has been unlocked to allow transfer'
+    });
+  } catch (error) {
+    console.error('Error getting auth code:', error);
+    res.status(500).json({ error: 'Failed to get auth code' });
+  }
+});
+
+// Get WHOIS contacts for domain
+router.get('/:id/contacts', authMiddleware, async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+
+  try {
+    // Verify ownership
+    const domainResult = await pool.query(
+      'SELECT * FROM domains WHERE id = $1 AND user_id = $2',
+      [domainId, req.user.id]
+    );
+
+    if (domainResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Domain not found' });
+    }
+
+    const domain = domainResult.rows[0];
+    const parts = domain.domain_name.split('.');
+    const tld = parts.pop();
+    const sld = parts.join('.');
+
+    // Get contacts from eNom
+    const contacts = await enom.getWhoisContacts(sld, tld);
+
+    res.json({
+      domain: domain.domain_name,
+      ...contacts
+    });
+  } catch (error) {
+    console.error('Error getting contacts:', error);
+    res.status(500).json({ error: 'Failed to get contacts' });
+  }
+});
+
+// Update domain contacts
+router.put('/:id/contacts', authMiddleware, async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+  const { registrant, admin, tech, billing } = req.body;
+
+  try {
+    // Verify ownership
+    const domainResult = await pool.query(
+      'SELECT * FROM domains WHERE id = $1 AND user_id = $2',
+      [domainId, req.user.id]
+    );
+
+    if (domainResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Domain not found' });
+    }
+
+    const domain = domainResult.rows[0];
+    const parts = domain.domain_name.split('.');
+    const tld = parts.pop();
+    const sld = parts.join('.');
+
+    // Update contacts via eNom
+    await enom.updateContacts(sld, tld, { registrant, admin, tech, billing });
+
+    res.json({
+      success: true,
+      domain: domain.domain_name,
+      message: 'Contacts updated successfully'
+    });
+  } catch (error) {
+    console.error('Error updating contacts:', error);
+    res.status(500).json({ error: 'Failed to update contacts' });
+  }
+});
+
+// Renew domain
+router.post('/:id/renew', authMiddleware, async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+  const { years = 1 } = req.body;
+
+  try {
+    // Verify ownership
+    const domainResult = await pool.query(
+      'SELECT * FROM domains WHERE id = $1 AND user_id = $2',
+      [domainId, req.user.id]
+    );
+
+    if (domainResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Domain not found' });
+    }
+
+    const domain = domainResult.rows[0];
+    const parts = domain.domain_name.split('.');
+    const tld = parts.pop();
+    const sld = parts.join('.');
+
+    // Get renewal pricing
+    const pricingResult = await pool.query(
+      'SELECT price_renew FROM tld_pricing WHERE tld = $1',
+      [tld]
+    );
+
+    if (pricingResult.rows.length === 0) {
+      return res.status(400).json({ error: 'TLD pricing not found' });
+    }
+
+    const renewalPrice = parseFloat(pricingResult.rows[0].price_renew) * years;
+
+    // Renew via eNom
+    const result = await enom.renewDomain(sld, tld, years);
+
+    // Parse new expiration date
+    let newExpDate = null;
+    if (result.newExpiration) {
+      const expMatch = result.newExpiration.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+      if (expMatch) {
+        newExpDate = `${expMatch[3]}-${expMatch[1].padStart(2, '0')}-${expMatch[2].padStart(2, '0')}`;
+      }
+    }
+
+    // Update domain in database
+    await pool.query(
+      `UPDATE domains SET
+        expiration_date = COALESCE($1, expiration_date + ($2 || ' years')::interval),
+        status = 'active',
+        updated_at = CURRENT_TIMESTAMP
+       WHERE id = $3`,
+      [newExpDate, years, domainId]
+    );
+
+    // Create order record for the renewal
+    const orderResult = await pool.query(
+      `INSERT INTO orders (user_id, order_number, status, payment_status, subtotal, total)
+       VALUES ($1, $2, 'completed', 'paid', $3, $3)
+       RETURNING id, order_number`,
+      [req.user.id, `ORD-${Date.now()}`, renewalPrice]
+    );
+
+    await pool.query(
+      `INSERT INTO order_items (order_id, domain_name, tld, item_type, years, price, status)
+       VALUES ($1, $2, $3, 'renew', $4, $5, 'completed')`,
+      [orderResult.rows[0].id, sld, tld, years, renewalPrice]
+    );
+
+    res.json({
+      success: true,
+      domain: domain.domain_name,
+      years,
+      newExpiration: newExpDate || result.newExpiration,
+      orderId: result.orderId,
+      orderNumber: orderResult.rows[0].order_number,
+      cost: renewalPrice
+    });
+  } catch (error) {
+    console.error('Error renewing domain:', error);
+    res.status(500).json({ error: 'Failed to renew domain' });
+  }
+});
+
+// Get eNom account balance (admin only)
+router.get('/admin/balance', authMiddleware, async (req, res) => {
+  const pool = req.app.locals.pool;
+
+  try {
+    // Check if user is admin
+    const userResult = await pool.query(
+      'SELECT is_admin FROM users WHERE id = $1',
+      [req.user.id]
+    );
+
+    if (!userResult.rows[0]?.is_admin) {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+
+    const balance = await enom.getBalance();
+    res.json(balance);
+  } catch (error) {
+    console.error('Error fetching balance:', error);
+    res.status(500).json({ error: 'Failed to fetch balance' });
   }
 });
 

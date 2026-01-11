@@ -1,4 +1,6 @@
-import React, { useState, useEffect, createContext, useContext } from 'react';
+import React, { useState, useEffect, createContext, useContext, useCallback } from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
+import { Toaster, toast } from 'react-hot-toast';
 import Navbar from './components/layout/Navbar';
 import Footer from './components/layout/Footer';
 import DomainSearch from './components/domains/DomainSearch';
@@ -7,7 +9,55 @@ import CartSidebar from './components/cart/CartSidebar';
 import Dashboard from './components/dashboard/Dashboard';
 import Checkout from './components/checkout/Checkout';
 import AdminDashboard from './components/admin/AdminDashboard';
+import SettingsPage from './pages/Settings';
+import OrdersPage from './pages/Orders';
+import ContactsPage from './pages/Contacts';
+import TermsPage from './pages/Terms';
+import PrivacyPage from './pages/Privacy';
+import RefundPage from './pages/Refund';
 import { API_URL } from './config/api';
+
+// Error Boundary for catching React rendering errors
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.error("React Error Boundary caught an error:", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-900">
+          <div className="max-w-md mx-auto text-center p-8">
+            <div className="w-16 h-16 bg-red-100 dark:bg-red-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
+              <svg className="w-8 h-8 text-red-600 dark:text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+            </div>
+            <h2 className="text-xl font-semibold text-slate-900 dark:text-slate-100 mb-2">Something went wrong</h2>
+            <p className="text-slate-600 dark:text-slate-400 mb-4">We encountered an unexpected error. Please refresh the page to try again.</p>
+            <button
+              onClick={() => window.location.reload()}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-6 rounded-lg transition-colors"
+            >
+              Refresh Page
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 
 // Theme Context
 const ThemeContext = createContext();
@@ -30,14 +80,32 @@ export function useCart() {
   return useContext(CartContext);
 }
 
-function App() {
-  // View state
-  const [currentView, setCurrentView] = useState('home');
+// Protected Route Component
+function ProtectedRoute({ children, requireAdmin = false }) {
+  const { user, token } = useAuth();
 
-  // Theme state
+  if (!token) {
+    return <Navigate to="/" replace />;
+  }
+
+  if (requireAdmin && !user?.is_admin && user?.role_level < 3) {
+    return <Navigate to="/dashboard" replace />;
+  }
+
+  return children;
+}
+
+// Main App Content with Router
+function AppContent() {
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  // Theme state - default to light mode
   const [theme, setTheme] = useState(() => {
     const saved = localStorage.getItem('theme');
-    return saved || 'system';
+    if (saved === 'light' || saved === 'dark') return saved;
+    // Default to light mode for professional appearance
+    return 'light';
   });
 
   // Auth state
@@ -45,6 +113,7 @@ function App() {
   const [token, setToken] = useState(() => localStorage.getItem('token'));
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authMode, setAuthMode] = useState('login');
+  const [authLoading, setAuthLoading] = useState(true);
 
   // Cart state
   const [cart, setCart] = useState({ items: [], subtotal: 0 });
@@ -52,47 +121,29 @@ function App() {
 
   // Apply theme
   useEffect(() => {
-    const applyTheme = () => {
-      const isDark = theme === 'dark' ||
-        (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-      document.documentElement.classList.toggle('dark', isDark);
-    };
-
-    applyTheme();
-
-    if (theme === 'system') {
-      const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-      mediaQuery.addEventListener('change', applyTheme);
-      return () => mediaQuery.removeEventListener('change', applyTheme);
-    }
+    document.documentElement.classList.toggle('dark', theme === 'dark');
   }, [theme]);
 
-  // Check auth on mount
-  useEffect(() => {
-    if (token) {
-      fetchUser();
+  // Fetch user - always fetch fresh data
+  const fetchUser = useCallback(async () => {
+    if (!token) {
+      setAuthLoading(false);
+      return;
     }
-  }, [token]);
 
-  // Fetch cart when user logs in
-  useEffect(() => {
-    if (token) {
-      fetchCart();
-    } else {
-      setCart({ items: [], subtotal: 0 });
-    }
-  }, [token]);
-
-  const fetchUser = async () => {
     try {
       const res = await fetch(`${API_URL}/auth/me`, {
-        headers: { 'Authorization': `Bearer ${token}` }
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Cache-Control': 'no-cache'
+        }
       });
 
       if (res.ok) {
         const userData = await res.json();
         setUser(userData);
-        if (userData.theme_preference && userData.theme_preference !== 'system') {
+        // Apply user's saved theme preference if it's light or dark
+        if (userData.theme_preference === 'light' || userData.theme_preference === 'dark') {
           setTheme(userData.theme_preference);
         }
       } else {
@@ -100,13 +151,24 @@ function App() {
       }
     } catch (error) {
       console.error('Error fetching user:', error);
+    } finally {
+      setAuthLoading(false);
     }
-  };
+  }, [token]);
 
-  const fetchCart = async () => {
+  // Fetch cart - always fetch fresh data
+  const fetchCart = useCallback(async () => {
+    if (!token) {
+      setCart({ items: [], subtotal: 0 });
+      return;
+    }
+
     try {
       const res = await fetch(`${API_URL}/cart`, {
-        headers: { 'Authorization': `Bearer ${token}` }
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Cache-Control': 'no-cache'
+        }
       });
 
       if (res.ok) {
@@ -116,13 +178,35 @@ function App() {
     } catch (error) {
       console.error('Error fetching cart:', error);
     }
-  };
+  }, [token]);
+
+  // Check auth on mount and when token changes
+  useEffect(() => {
+    fetchUser();
+  }, [fetchUser]);
+
+  // Fetch cart when user logs in
+  useEffect(() => {
+    if (token) {
+      fetchCart();
+    } else {
+      setCart({ items: [], subtotal: 0 });
+    }
+  }, [token, fetchCart]);
+
+  // Refresh data on route change - ensures fresh data on every page visit
+  useEffect(() => {
+    if (token) {
+      fetchCart();
+    }
+  }, [location.pathname, token, fetchCart]);
 
   const login = (userData, authToken) => {
     setUser(userData);
     setToken(authToken);
     localStorage.setItem('token', authToken);
     setShowAuthModal(false);
+    toast.success(`Welcome back, ${userData.username}!`);
     fetchCart();
   };
 
@@ -131,7 +215,8 @@ function App() {
     setToken(null);
     localStorage.removeItem('token');
     setCart({ items: [], subtotal: 0 });
-    setCurrentView('home');
+    navigate('/');
+    toast.success('Logged out successfully');
   };
 
   const openAuth = (mode = 'login') => {
@@ -158,12 +243,14 @@ function App() {
       if (res.ok) {
         await fetchCart();
         setShowCart(true);
+        toast.success(`Added ${item.domain_name}.${item.tld} to cart`);
       } else {
         const error = await res.json();
-        alert(error.error || 'Failed to add to cart');
+        toast.error(error.error || 'Failed to add to cart');
       }
     } catch (error) {
       console.error('Error adding to cart:', error);
+      toast.error('Failed to add to cart');
     }
   };
 
@@ -176,9 +263,11 @@ function App() {
 
       if (res.ok) {
         await fetchCart();
+        toast.success('Removed from cart');
       }
     } catch (error) {
       console.error('Error removing from cart:', error);
+      toast.error('Failed to remove from cart');
     }
   };
 
@@ -187,32 +276,78 @@ function App() {
     localStorage.setItem('theme', newTheme);
   };
 
-  // Render current view
-  const renderView = () => {
-    switch (currentView) {
-      case 'dashboard':
-        return user ? <Dashboard /> : <DomainSearch onAddToCart={addToCart} />;
-      case 'checkout':
-        return <Checkout onComplete={() => { fetchCart(); setCurrentView('dashboard'); }} />;
-      case 'admin':
-        return user?.is_admin ? <AdminDashboard /> : <DomainSearch onAddToCart={addToCart} />;
-      default:
-        return <DomainSearch onAddToCart={addToCart} />;
-    }
-  };
+  // Show loading while checking auth
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-900">
+        <div className="animate-spin rounded-full h-12 w-12 border-4 border-indigo-500 border-t-transparent"></div>
+      </div>
+    );
+  }
 
   return (
     <ThemeContext.Provider value={{ theme, setTheme: updateTheme }}>
-      <AuthContext.Provider value={{ user, token, login, logout, openAuth }}>
+      <AuthContext.Provider value={{ user, token, login, logout, openAuth, fetchUser }}>
         <CartContext.Provider value={{ cart, addToCart, removeFromCart, fetchCart, showCart, setShowCart }}>
-          <div className="min-h-screen flex flex-col">
-            <Navbar
-              currentView={currentView}
-              onNavigate={setCurrentView}
-            />
+          <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-900">
+            <Navbar />
 
             <main className="flex-1">
-              {renderView()}
+              <Routes>
+                <Route path="/" element={<DomainSearch onAddToCart={addToCart} />} />
+                <Route
+                  path="/dashboard"
+                  element={
+                    <ProtectedRoute>
+                      <Dashboard />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/orders"
+                  element={
+                    <ProtectedRoute>
+                      <OrdersPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/contacts"
+                  element={
+                    <ProtectedRoute>
+                      <ContactsPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/settings"
+                  element={
+                    <ProtectedRoute>
+                      <SettingsPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/checkout"
+                  element={
+                    <ProtectedRoute>
+                      <Checkout onComplete={() => { fetchCart(); navigate('/dashboard'); }} />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/admin"
+                  element={
+                    <ProtectedRoute requireAdmin={true}>
+                      <AdminDashboard />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route path="/terms" element={<TermsPage />} />
+                <Route path="/privacy" element={<PrivacyPage />} />
+                <Route path="/refund" element={<RefundPage />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
             </main>
 
             <Footer />
@@ -230,13 +365,47 @@ function App() {
             {showCart && (
               <CartSidebar
                 onClose={() => setShowCart(false)}
-                onCheckout={() => { setShowCart(false); setCurrentView('checkout'); }}
+                onCheckout={() => { setShowCart(false); navigate('/checkout'); }}
               />
             )}
           </div>
+
+          {/* Toast Notifications */}
+          <Toaster
+            position="top-right"
+            toastOptions={{
+              duration: 4000,
+              style: {
+                background: 'var(--toast-bg, #1e293b)',
+                color: 'var(--toast-color, #f1f5f9)',
+              },
+              success: {
+                iconTheme: {
+                  primary: '#10B981',
+                  secondary: '#ffffff',
+                },
+              },
+              error: {
+                iconTheme: {
+                  primary: '#EF4444',
+                  secondary: '#ffffff',
+                },
+              },
+            }}
+          />
         </CartContext.Provider>
       </AuthContext.Provider>
     </ThemeContext.Provider>
+  );
+}
+
+function App() {
+  return (
+    <ErrorBoundary>
+    <Router>
+      <AppContent />
+    </Router>
+    </ErrorBoundary>
   );
 }
 

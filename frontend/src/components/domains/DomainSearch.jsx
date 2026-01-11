@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Check, X, ShoppingCart, Loader2, Sparkles } from 'lucide-react';
+import { Search, Check, X, ShoppingCart, Loader2, Sparkles, Shield, Clock, Headphones, Globe, Lock, Zap } from 'lucide-react';
 import { API_URL } from '../../config/api';
 
 function DomainSearch({ onAddToCart }) {
@@ -10,7 +10,6 @@ function DomainSearch({ onAddToCart }) {
   const [pricing, setPricing] = useState([]);
   const [error, setError] = useState(null);
 
-  // Fetch TLD pricing on mount
   useEffect(() => {
     fetchPricing();
   }, []);
@@ -36,12 +35,10 @@ function DomainSearch({ onAddToCart }) {
     setResults(null);
     setSuggestions([]);
 
-    // Clean and parse domain
     let domain = searchTerm.toLowerCase().trim();
     domain = domain.replace(/^(https?:\/\/)?(www\.)?/, '');
 
     try {
-      // Check the primary domain
       const res = await fetch(`${API_URL}/domains/check/${domain}`);
       if (!res.ok) {
         const err = await res.json();
@@ -53,12 +50,10 @@ function DomainSearch({ onAddToCart }) {
       const data = await res.json();
       setResults(data);
 
-      // Get suggestions
       const sld = domain.split('.')[0];
       const suggestRes = await fetch(`${API_URL}/domains/suggestions/${sld}`);
       if (suggestRes.ok) {
         const suggestData = await suggestRes.json();
-        // Filter out the primary result
         setSuggestions(suggestData.filter(s => s.domain !== data.domain));
       }
     } catch (err) {
@@ -81,38 +76,55 @@ function DomainSearch({ onAddToCart }) {
   return (
     <div className="min-h-[calc(100vh-4rem)]">
       {/* Hero Section */}
-      <section className="bg-gradient-to-br from-primary-600 via-primary-700 to-primary-900 text-white py-20 lg:py-28">
-        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-          <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold mb-6">
-            Find Your Perfect Domain
+      <section className="relative overflow-hidden bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 text-white py-20 lg:py-28">
+        {/* Background pattern */}
+        <div className="absolute inset-0 opacity-10">
+          <div className="absolute inset-0" style={{
+            backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%239C92AC' fill-opacity='0.4'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`,
+          }} />
+        </div>
+
+        <div className="relative max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+          <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-sm font-medium mb-6">
+            <Zap className="w-4 h-4" />
+            Instant domain registration
+          </div>
+
+          <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold mb-6 tracking-tight">
+            Your Domain, Your{' '}
+            <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-emerald-400">
+              Identity
+            </span>
           </h1>
-          <p className="text-lg md:text-xl text-primary-100 mb-10 max-w-2xl mx-auto">
-            Start your online journey with a memorable domain name.
-            Search, register, and manage your domains with ease.
+
+          <p className="text-lg md:text-xl text-slate-300 mb-10 max-w-2xl mx-auto leading-relaxed">
+            Secure your online presence with a domain that represents you.
+            Fast registration, competitive pricing, full control.
           </p>
 
           {/* Search Form */}
-          <form onSubmit={handleSearch} className="max-w-2xl mx-auto">
-            <div className="relative flex items-center">
+          <form onSubmit={handleSearch} className="max-w-2xl mx-auto mb-8">
+            <div className="relative flex items-center bg-white rounded-2xl shadow-2xl shadow-indigo-500/20">
+              <Globe className="absolute left-5 w-5 h-5 text-slate-400" />
               <input
                 type="text"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Search for your domain name..."
-                className="w-full px-6 py-4 pr-32 text-lg rounded-xl text-slate-900 placeholder-slate-400
-                           focus:outline-none focus:ring-4 focus:ring-primary-300 shadow-elevated"
+                placeholder="Find your domain name..."
+                className="w-full px-14 py-5 text-lg rounded-2xl text-slate-900 placeholder-slate-400
+                           focus:outline-none focus:ring-4 focus:ring-indigo-500/30"
               />
               <button
                 type="submit"
                 disabled={searching || !searchTerm.trim()}
-                className="absolute right-2 btn-primary py-3 px-6 disabled:opacity-50"
+                className="absolute right-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-6 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
               >
                 {searching ? (
                   <Loader2 className="w-5 h-5 animate-spin" />
                 ) : (
                   <>
-                    <Search className="w-5 h-5 mr-2" />
-                    Search
+                    <Search className="w-5 h-5" />
+                    <span className="hidden sm:inline">Search</span>
                   </>
                 )}
               </button>
@@ -120,15 +132,36 @@ function DomainSearch({ onAddToCart }) {
           </form>
 
           {/* Popular TLDs */}
-          <div className="mt-8 flex flex-wrap justify-center gap-3">
+          <div className="flex flex-wrap justify-center gap-3">
             {pricing.slice(0, 6).map((p) => (
-              <span
+              <button
                 key={p.tld}
-                className="px-4 py-2 bg-white/10 backdrop-blur rounded-full text-sm font-medium"
+                onClick={() => setSearchTerm(prev => {
+                  const sld = prev.split('.')[0] || 'example';
+                  return `${sld}.${p.tld}`;
+                })}
+                className="px-4 py-2 bg-white/5 hover:bg-white/10 backdrop-blur border border-white/10 rounded-lg text-sm font-medium transition-colors"
               >
-                .{p.tld} - ${parseFloat(p.price_register).toFixed(2)}/yr
-              </span>
+                <span className="text-indigo-400">.{p.tld}</span>
+                <span className="text-slate-400 ml-2">${parseFloat(p.price_register).toFixed(0)}</span>
+              </button>
             ))}
+          </div>
+
+          {/* Trust indicators */}
+          <div className="mt-12 flex flex-wrap justify-center gap-8 text-sm text-slate-400">
+            <div className="flex items-center gap-2">
+              <Shield className="w-4 h-4 text-emerald-400" />
+              <span>SSL Secured</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Clock className="w-4 h-4 text-emerald-400" />
+              <span>Instant Activation</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Headphones className="w-4 h-4 text-emerald-400" />
+              <span>Expert Support</span>
+            </div>
           </div>
         </div>
       </section>
@@ -138,7 +171,8 @@ function DomainSearch({ onAddToCart }) {
         <section className="py-12 bg-slate-50 dark:bg-slate-900">
           <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
             {error && (
-              <div className="bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 px-6 py-4 rounded-xl mb-6">
+              <div className="bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 px-6 py-4 rounded-xl mb-6 flex items-center gap-3">
+                <X className="w-5 h-5 flex-shrink-0" />
                 {error}
               </div>
             )}
@@ -146,47 +180,49 @@ function DomainSearch({ onAddToCart }) {
             {results && (
               <div className="space-y-6">
                 {/* Primary Result */}
-                <div className={`card p-6 ${results.available ? 'ring-2 ring-accent-500' : ''}`}>
+                <div className={`bg-white dark:bg-slate-800 rounded-2xl p-6 shadow-lg border-2 ${
+                  results.available ? 'border-emerald-500' : 'border-slate-200 dark:border-slate-700'
+                }`}>
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                     <div className="flex items-center gap-4">
-                      <div className={`w-12 h-12 rounded-full flex items-center justify-center ${
+                      <div className={`w-14 h-14 rounded-xl flex items-center justify-center ${
                         results.available
-                          ? 'bg-accent-100 dark:bg-accent-900/30'
+                          ? 'bg-emerald-100 dark:bg-emerald-900/30'
                           : 'bg-red-100 dark:bg-red-900/30'
                       }`}>
                         {results.available ? (
-                          <Check className="w-6 h-6 text-accent-600 dark:text-accent-400" />
+                          <Check className="w-7 h-7 text-emerald-600 dark:text-emerald-400" />
                         ) : (
-                          <X className="w-6 h-6 text-red-600 dark:text-red-400" />
+                          <X className="w-7 h-7 text-red-600 dark:text-red-400" />
                         )}
                       </div>
                       <div>
-                        <h2 className="text-xl font-bold font-mono text-slate-900 dark:text-slate-100">
+                        <h2 className="text-2xl font-bold font-mono text-slate-900 dark:text-slate-100">
                           {results.domain}
                         </h2>
-                        <p className={`text-sm ${
+                        <p className={`text-sm font-medium ${
                           results.available
-                            ? 'text-accent-600 dark:text-accent-400'
+                            ? 'text-emerald-600 dark:text-emerald-400'
                             : 'text-red-600 dark:text-red-400'
                         }`}>
-                          {results.available ? 'Available!' : 'Not available'}
+                          {results.available ? 'Available for registration' : 'Already registered'}
                         </p>
                       </div>
                     </div>
 
                     {results.available && (
-                      <div className="flex items-center gap-4">
+                      <div className="flex items-center gap-6">
                         <div className="text-right">
-                          <p className="text-2xl font-bold text-slate-900 dark:text-slate-100">
+                          <p className="text-3xl font-bold text-slate-900 dark:text-slate-100">
                             ${results.pricing.register.toFixed(2)}
                           </p>
                           <p className="text-sm text-slate-500">per year</p>
                         </div>
                         <button
                           onClick={() => handleAddToCart(results.domain, results.tld, results.pricing.register)}
-                          className="btn-success py-3 px-6"
+                          className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-3 px-6 rounded-xl transition-colors flex items-center gap-2"
                         >
-                          <ShoppingCart className="w-5 h-5 mr-2" />
+                          <ShoppingCart className="w-5 h-5" />
                           Add to Cart
                         </button>
                       </div>
@@ -198,40 +234,40 @@ function DomainSearch({ onAddToCart }) {
                 {suggestions.length > 0 && (
                   <div>
                     <h3 className="flex items-center gap-2 text-lg font-semibold text-slate-900 dark:text-slate-100 mb-4">
-                      <Sparkles className="w-5 h-5 text-primary-500" />
-                      More Options
+                      <Sparkles className="w-5 h-5 text-indigo-500" />
+                      Alternative Options
                     </h3>
                     <div className="grid gap-3">
                       {suggestions.map((s) => (
                         <div
                           key={s.domain}
-                          className="card p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                          className="bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm border border-slate-200 dark:border-slate-700 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
                         >
                           <div className="flex items-center gap-3">
-                            <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
+                            <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
                               s.available
-                                ? 'bg-accent-100 dark:bg-accent-900/30'
+                                ? 'bg-emerald-100 dark:bg-emerald-900/30'
                                 : 'bg-slate-100 dark:bg-slate-800'
                             }`}>
                               {s.available ? (
-                                <Check className="w-4 h-4 text-accent-600 dark:text-accent-400" />
+                                <Check className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
                               ) : (
-                                <X className="w-4 h-4 text-slate-400" />
+                                <X className="w-5 h-5 text-slate-400" />
                               )}
                             </div>
-                            <span className="font-mono font-medium text-slate-900 dark:text-slate-100">
+                            <span className="font-mono font-semibold text-slate-900 dark:text-slate-100">
                               {s.domain}
                             </span>
                           </div>
 
                           {s.available && (
                             <div className="flex items-center gap-4 sm:ml-auto">
-                              <span className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+                              <span className="text-lg font-bold text-slate-900 dark:text-slate-100">
                                 ${s.price.toFixed(2)}/yr
                               </span>
                               <button
                                 onClick={() => handleAddToCart(s.domain, s.tld, s.price)}
-                                className="btn-primary py-2 px-4 text-sm"
+                                className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
                               >
                                 Add to Cart
                               </button>
@@ -250,27 +286,32 @@ function DomainSearch({ onAddToCart }) {
 
       {/* Pricing Table */}
       {!results && !error && pricing.length > 0 && (
-        <section className="py-16 bg-white dark:bg-slate-900">
+        <section className="py-20 bg-white dark:bg-slate-900">
           <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-            <h2 className="text-3xl font-bold text-center text-slate-900 dark:text-slate-100 mb-4">
-              Domain Pricing
-            </h2>
-            <p className="text-center text-slate-600 dark:text-slate-400 mb-10 max-w-2xl mx-auto">
-              Simple, transparent pricing. No hidden fees.
-            </p>
+            <div className="text-center mb-12">
+              <h2 className="text-3xl font-bold text-slate-900 dark:text-slate-100 mb-4">
+                Domain Pricing
+              </h2>
+              <p className="text-slate-600 dark:text-slate-400 max-w-xl mx-auto">
+                Straightforward pricing with no hidden fees. Renewal rates are locked in at registration.
+              </p>
+            </div>
 
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
               {pricing.map((p) => (
-                <div key={p.tld} className="card p-5 text-center hover:shadow-elevated transition-shadow">
-                  <p className="text-2xl font-bold text-primary-600 dark:text-primary-400 mb-1">
+                <div
+                  key={p.tld}
+                  className="bg-slate-50 dark:bg-slate-800 rounded-xl p-6 text-center border border-slate-200 dark:border-slate-700 hover:border-indigo-300 dark:hover:border-indigo-600 transition-colors group"
+                >
+                  <p className="text-2xl font-bold text-indigo-600 dark:text-indigo-400 mb-2 group-hover:scale-110 transition-transform">
                     .{p.tld}
                   </p>
                   <p className="text-2xl font-bold text-slate-900 dark:text-slate-100">
                     ${parseFloat(p.price_register).toFixed(2)}
                   </p>
-                  <p className="text-sm text-slate-500 dark:text-slate-400">per year</p>
-                  <p className="text-xs text-slate-400 dark:text-slate-500 mt-2">
-                    Renew: ${parseFloat(p.price_renew).toFixed(2)}/yr
+                  <p className="text-sm text-slate-500 dark:text-slate-400 mb-3">first year</p>
+                  <p className="text-xs text-slate-400 dark:text-slate-500">
+                    Renew ${parseFloat(p.price_renew).toFixed(2)}/yr
                   </p>
                 </div>
               ))}
@@ -279,38 +320,73 @@ function DomainSearch({ onAddToCart }) {
         </section>
       )}
 
-      {/* Features */}
-      <section className="py-16 bg-slate-50 dark:bg-slate-950">
+      {/* Features Section */}
+      <section className="py-20 bg-slate-50 dark:bg-slate-950">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-          <h2 className="text-3xl font-bold text-center text-slate-900 dark:text-slate-100 mb-12">
-            Why Choose WorxTech?
-          </h2>
+          <div className="text-center mb-12">
+            <h2 className="text-3xl font-bold text-slate-900 dark:text-slate-100 mb-4">
+              Everything You Need
+            </h2>
+            <p className="text-slate-600 dark:text-slate-400 max-w-xl mx-auto">
+              More than just domain registration. Get the tools and support to build your online presence.
+            </p>
+          </div>
 
           <div className="grid md:grid-cols-3 gap-8">
-            {[
-              {
-                title: 'Easy Management',
-                description: 'Intuitive dashboard to manage all your domains, DNS settings, and renewals in one place.'
-              },
-              {
-                title: 'WHOIS Privacy',
-                description: 'Protect your personal information with our WHOIS privacy protection service.'
-              },
-              {
-                title: 'Secure & Reliable',
-                description: 'Enterprise-grade security and 99.9% uptime guarantee for your peace of mind.'
-              }
-            ].map((feature, i) => (
-              <div key={i} className="card p-6 text-center">
-                <h3 className="text-xl font-semibold text-slate-900 dark:text-slate-100 mb-3">
-                  {feature.title}
-                </h3>
-                <p className="text-slate-600 dark:text-slate-400">
-                  {feature.description}
-                </p>
+            <div className="bg-white dark:bg-slate-900 rounded-2xl p-8 shadow-sm border border-slate-200 dark:border-slate-800">
+              <div className="w-12 h-12 bg-indigo-100 dark:bg-indigo-900/30 rounded-xl flex items-center justify-center mb-5">
+                <Zap className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />
               </div>
-            ))}
+              <h3 className="text-xl font-semibold text-slate-900 dark:text-slate-100 mb-3">
+                Full DNS Control
+              </h3>
+              <p className="text-slate-600 dark:text-slate-400">
+                Manage nameservers, A records, CNAME, MX, and more through our intuitive control panel.
+              </p>
+            </div>
+
+            <div className="bg-white dark:bg-slate-900 rounded-2xl p-8 shadow-sm border border-slate-200 dark:border-slate-800">
+              <div className="w-12 h-12 bg-emerald-100 dark:bg-emerald-900/30 rounded-xl flex items-center justify-center mb-5">
+                <Lock className="w-6 h-6 text-emerald-600 dark:text-emerald-400" />
+              </div>
+              <h3 className="text-xl font-semibold text-slate-900 dark:text-slate-100 mb-3">
+                WHOIS Privacy
+              </h3>
+              <p className="text-slate-600 dark:text-slate-400">
+                Keep your personal information private. Protect against spam and unwanted contact.
+              </p>
+            </div>
+
+            <div className="bg-white dark:bg-slate-900 rounded-2xl p-8 shadow-sm border border-slate-200 dark:border-slate-800">
+              <div className="w-12 h-12 bg-amber-100 dark:bg-amber-900/30 rounded-xl flex items-center justify-center mb-5">
+                <Shield className="w-6 h-6 text-amber-600 dark:text-amber-400" />
+              </div>
+              <h3 className="text-xl font-semibold text-slate-900 dark:text-slate-100 mb-3">
+                Domain Security
+              </h3>
+              <p className="text-slate-600 dark:text-slate-400">
+                Transfer lock, two-factor authentication, and expiration alerts keep your domains secure.
+              </p>
+            </div>
           </div>
+        </div>
+      </section>
+
+      {/* CTA Section */}
+      <section className="py-16 bg-gradient-to-r from-indigo-600 to-indigo-800">
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+          <h2 className="text-3xl font-bold text-white mb-4">
+            Ready to claim your domain?
+          </h2>
+          <p className="text-indigo-100 mb-8 text-lg">
+            Search above to get started. Registration takes less than 2 minutes.
+          </p>
+          <button
+            onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+            className="bg-white text-indigo-600 font-semibold py-3 px-8 rounded-xl hover:bg-indigo-50 transition-colors"
+          >
+            Search Domains
+          </button>
         </div>
       </section>
     </div>

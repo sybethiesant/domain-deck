@@ -1,8 +1,13 @@
 const express = require('express');
+const crypto = require('crypto');
 const cors = require('cors');
 const path = require('path');
 const { Pool } = require('pg');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
+
+// Services
+const jobScheduler = require('./services/jobs');
+const emailService = require('./services/email');
 
 const app = express();
 const PORT = process.env.PORT || 5001;
@@ -11,13 +16,27 @@ const PORT = process.env.PORT || 5001;
 
 app.use((req, res, next) => {
   res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-XSS-Protection', '1; mode=block');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Content-Security-Policy', "default-src 'self'");
   res.removeHeader('X-Powered-By');
+  // Prevent caching of API responses - always fetch fresh data
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.setHeader('Surrogate-Control', 'no-store');
   next();
 });
+
+// Request ID middleware for debugging
+app.use((req, res, next) => {
+  req.id = crypto.randomBytes(8).toString('hex');
+  res.setHeader('X-Request-ID', req.id);
+  next();
+});
+
 
 // ============ RATE LIMITING ============
 
@@ -71,7 +90,16 @@ function rateLimit(type = 'general') {
 
 // ============ CORE MIDDLEWARE ============
 
-app.use(cors());
+// CORS configuration - restrict to allowed origins
+const corsOptions = {
+  origin: process.env.NODE_ENV === 'production'
+    ? ['https://worxtech.biz', 'https://www.worxtech.biz']
+    : ['http://localhost:3000', 'http://localhost:3001'],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+};
+app.use(cors(corsOptions));
 
 // Stripe webhook needs raw body BEFORE json parsing
 app.use('/api/stripe/webhook', express.raw({ type: 'application/json' }));
@@ -114,7 +142,9 @@ const domainRoutes = require('./routes/domains');
 const cartRoutes = require('./routes/cart');
 const orderRoutes = require('./routes/orders');
 const stripeRoutes = require('./routes/stripe');
-const adminRoutes = require('./routes/admin');
+const adminRoutes = require('./routes/admin/index');
+const contactRoutes = require('./routes/contacts');
+const noteRoutes = require('./routes/notes');
 
 // Auth routes with stricter rate limiting
 app.use('/api/auth', rateLimit('auth'), authRoutes);
@@ -132,6 +162,12 @@ app.use('/api/stripe', stripeRoutes);
 // Admin routes
 app.use('/api/admin', adminRoutes);
 
+// Contact management routes
+app.use('/api/contacts', contactRoutes);
+
+// Staff notes routes
+app.use('/api/notes', noteRoutes);
+
 // ============ HEALTH CHECK ============
 
 app.get('/api/health', async (req, res) => {
@@ -141,7 +177,8 @@ app.get('/api/health', async (req, res) => {
     uptime: process.uptime(),
     memory: process.memoryUsage(),
     database: 'unknown',
-    enomEnv: process.env.ENOM_ENV || 'test'
+    enomEnv: process.env.ENOM_ENV || 'test',
+    jobScheduler: jobScheduler.running ? 'running' : 'stopped'
   };
 
   try {
@@ -156,6 +193,24 @@ app.get('/api/health', async (req, res) => {
   }
 
   res.status(health.status === 'ok' ? 200 : 503).json(health);
+});
+
+// Job scheduler status endpoint (admin only)
+app.get('/api/jobs/status', require('./middleware/auth').authMiddleware, require('./middleware/auth').adminMiddleware, (req, res) => {
+  res.json({
+    running: jobScheduler.running,
+    jobs: jobScheduler.getStatus()
+  });
+});
+
+// Manually trigger a job (admin only)
+app.post('/api/jobs/:name/trigger', require('./middleware/auth').authMiddleware, require('./middleware/auth').adminMiddleware, async (req, res) => {
+  try {
+    await jobScheduler.trigger(req.params.name);
+    res.json({ success: true, message: `Job ${req.params.name} triggered` });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
 });
 
 // ============ ERROR HANDLING ============
@@ -181,11 +236,32 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`WorxTech API running on port ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`eNom Environment: ${process.env.ENOM_ENV || 'test'}`);
+
+  // Initialize job scheduler with database pool
+  jobScheduler.init(pool);
+
+  // Start background jobs (disabled by default, enable with env var)
+  if (process.env.ENABLE_JOB_SCHEDULER === 'true') {
+    jobScheduler.start();
+  } else {
+    console.log('Job scheduler disabled (set ENABLE_JOB_SCHEDULER=true to enable)');
+  }
+
+  // Make email service available to routes
+  app.locals.email = emailService;
 });
 
 // Graceful shutdown
 process.on('SIGTERM', async () => {
   console.log('SIGTERM received, shutting down gracefully...');
+  jobScheduler.stop();
+  await pool.end();
+  process.exit(0);
+});
+
+process.on('SIGINT', async () => {
+  console.log('SIGINT received, shutting down gracefully...');
+  jobScheduler.stop();
   await pool.end();
   process.exit(0);
 });

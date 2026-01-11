@@ -1,8 +1,29 @@
 const express = require('express');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const router = express.Router();
 const { authMiddleware } = require('../middleware/auth');
+// Password strength validation - security fix
+function validatePassword(password) {
+  if (!password || password.length < 12) {
+    return 'Password must be at least 12 characters';
+  }
+  if (!/[A-Z]/.test(password)) {
+    return 'Password must contain at least one uppercase letter';
+  }
+  if (!/[a-z]/.test(password)) {
+    return 'Password must contain at least one lowercase letter';
+  }
+  if (!/[0-9]/.test(password)) {
+    return 'Password must contain at least one number';
+  }
+  if (!/[!@#$%^&*(),.?":{}|<>]/.test(password)) {
+    return 'Password must contain at least one special character';
+  }
+  return null;
+}
+
+
 
 // Register new user
 router.post('/register', async (req, res) => {
@@ -26,8 +47,9 @@ router.post('/register', async (req, res) => {
     return res.status(400).json({ error: 'Please provide a valid email address' });
   }
 
-  if (!password || password.length < 8) {
-    return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  const passwordError = validatePassword(password);
+  if (passwordError) {
+    return res.status(400).json({ error: passwordError });
   }
 
   const normalizedEmail = email.toLowerCase().trim();
@@ -57,7 +79,7 @@ router.post('/register', async (req, res) => {
         company_name, address_line1, address_line2,
         city, state, postal_code, country
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-      RETURNING id, username, email, full_name, is_admin, created_at, theme_preference`,
+      RETURNING id, username, email, full_name, is_admin, role_level, role_name, created_at, theme_preference`,
       [
         username, normalizedEmail, password_hash,
         full_name || null, phone || null,
@@ -107,15 +129,45 @@ router.post('/login', async (req, res) => {
 
     const user = result.rows[0];
 
+    // Check for account lockout
+    if (user.lockout_until && new Date(user.lockout_until) > new Date()) {
+      const remainingMinutes = Math.ceil((new Date(user.lockout_until) - new Date()) / 60000);
+      return res.status(429).json({ 
+        error: 'Account temporarily locked due to too many failed login attempts',
+        minutes_remaining: remainingMinutes
+      });
+    }
+
     const validPassword = await bcrypt.compare(password, user.password_hash);
 
     if (!validPassword) {
+      // Increment failed login attempts
+      const attempts = (user.failed_login_attempts || 0) + 1;
+      let lockoutUntil = null;
+      
+      // Lock account after 5 failed attempts for 15 minutes
+      if (attempts >= 5) {
+        lockoutUntil = new Date(Date.now() + 15 * 60 * 1000);
+      }
+      
+      await pool.query(
+        'UPDATE users SET failed_login_attempts = $1, lockout_until = $2 WHERE id = $3',
+        [attempts, lockoutUntil, user.id]
+      );
+      
+      if (lockoutUntil) {
+        return res.status(429).json({ 
+          error: 'Account temporarily locked due to too many failed login attempts',
+          minutes_remaining: 15
+        });
+      }
+      
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    // Update last login
+    // Reset failed login attempts on successful login
     await pool.query(
-      'UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE id = $1',
+      'UPDATE users SET last_login_at = CURRENT_TIMESTAMP, failed_login_attempts = 0, lockout_until = NULL WHERE id = $1',
       [user.id]
     );
 
@@ -139,6 +191,8 @@ router.post('/login', async (req, res) => {
         email: user.email,
         full_name: user.full_name,
         is_admin: user.is_admin,
+        role_level: user.role_level || 0,
+        role_name: user.role_name || 'customer',
         theme_preference: user.theme_preference || 'system'
       },
       token
@@ -157,7 +211,7 @@ router.get('/me', authMiddleware, async (req, res) => {
     const result = await pool.query(
       `SELECT id, username, email, full_name, phone, company_name,
               address_line1, address_line2, city, state, postal_code, country,
-              is_admin, theme_preference, created_at
+              is_admin, role_level, role_name, theme_preference, created_at
        FROM users WHERE id = $1`,
       [req.user.id]
     );
@@ -204,7 +258,7 @@ router.put('/profile', authMiddleware, async (req, res) => {
        WHERE id = $11
        RETURNING id, username, email, full_name, phone, company_name,
                  address_line1, address_line2, city, state, postal_code, country,
-                 is_admin, theme_preference`,
+                 is_admin, role_level, role_name, theme_preference`,
       [
         full_name, phone, company_name,
         address_line1, address_line2, city, state, postal_code, country,
@@ -236,8 +290,9 @@ router.put('/password', authMiddleware, async (req, res) => {
     return res.status(400).json({ error: 'Current and new password are required' });
   }
 
-  if (new_password.length < 8) {
-    return res.status(400).json({ error: 'New password must be at least 8 characters' });
+  const newPasswordError = validatePassword(new_password);
+  if (newPasswordError) {
+    return res.status(400).json({ error: newPasswordError });
   }
 
   try {
