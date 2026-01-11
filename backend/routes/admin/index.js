@@ -21,6 +21,7 @@ const enomRoutes = require('./enom');
 const settingsRoutes = require('./settings');
 const auditRoutes = require('./audit');
 const rolesRoutes = require('./roles');
+const balanceRoutes = require('./balance');
 
 // Mount routes - all at root level to maintain existing API paths
 router.use(statsRoutes);
@@ -32,5 +33,6 @@ router.use(enomRoutes);
 router.use(settingsRoutes);
 router.use(auditRoutes);
 router.use(rolesRoutes);
+router.use('/balance', balanceRoutes);
 
 module.exports = router;

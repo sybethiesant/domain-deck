@@ -1014,4 +1014,231 @@ class EnomAPI {
 }
 
 // Export singleton instance
+
+  // ============================================
+  // BALANCE MANAGEMENT FUNCTIONS
+  // ============================================
+
+  /**
+   * Credit card fee percentage (eNom charges 5% for CC refills)
+   */
+  static CC_FEE_PERCENT = 0.05;
+
+  /**
+   * Minimum refill amount allowed by eNom
+   */
+  static MIN_REFILL = 25.00;
+
+  /**
+   * Get detailed account balance with additional info
+   * @returns {Promise<object>} - Detailed balance info
+   */
+  async getDetailedBalance() {
+    try {
+      const response = await this.request('GetBalance');
+      
+      return {
+        availableBalance: parseFloat(response.Balance || 0),
+        currency: 'USD',
+        timestamp: new Date().toISOString(),
+        raw: response
+      };
+    } catch (error) {
+      console.error('eNom detailed balance error:', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Refill account balance using credit card on file
+   * @param {number} amount - Amount to refill in USD (minimum $25)
+   * @returns {Promise<object>} - Refill result
+   */
+  async refillAccount(amount) {
+    if (amount < EnomAPI.MIN_REFILL) {
+      throw new Error('Minimum refill amount is $' + EnomAPI.MIN_REFILL);
+    }
+
+    try {
+      const response = await this.request('RefillAccount', {
+        Amount: amount.toFixed(2)
+      });
+
+      const feeAmount = amount * EnomAPI.CC_FEE_PERCENT;
+      const netAmount = amount - feeAmount;
+
+      return {
+        success: true,
+        requestedAmount: amount,
+        feePercent: EnomAPI.CC_FEE_PERCENT * 100,
+        feeAmount: parseFloat(feeAmount.toFixed(2)),
+        netAmount: parseFloat(netAmount.toFixed(2)),
+        transactionId: response.TransactionID || response.OrderID,
+        message: 'Account refilled successfully',
+        raw: response
+      };
+    } catch (error) {
+      console.error('eNom refill error:', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Calculate the refill amount needed for a purchase
+   * Accounts for the 5% CC fee
+   * @param {number} domainCost - Cost of the domain
+   * @param {number} currentBalance - Current account balance
+   * @returns {object} - Refill calculation details
+   */
+  calculateRefillNeeded(domainCost, currentBalance) {
+    const shortfall = domainCost - currentBalance;
+    
+    if (shortfall <= 0) {
+      return {
+        needsRefill: false,
+        shortfall: 0,
+        refillAmount: 0,
+        netAfterFee: 0,
+        reason: 'Balance sufficient'
+      };
+    }
+
+    // Need to refill enough that after 5% fee, we have enough
+    // If we refill X, we get X * 0.95 = shortfall, so X = shortfall / 0.95
+    const grossRefillNeeded = shortfall / (1 - EnomAPI.CC_FEE_PERCENT);
+    
+    let refillAmount;
+    let reason;
+    
+    if (grossRefillNeeded > EnomAPI.MIN_REFILL) {
+      refillAmount = Math.ceil(grossRefillNeeded * 100) / 100;
+      reason = 'Refilling exact amount needed';
+    } else {
+      refillAmount = EnomAPI.MIN_REFILL;
+      reason = 'Refilling minimum amount ($25)';
+    }
+
+    const feeAmount = refillAmount * EnomAPI.CC_FEE_PERCENT;
+    const netAfterFee = refillAmount - feeAmount;
+
+    return {
+      needsRefill: true,
+      shortfall: parseFloat(shortfall.toFixed(2)),
+      refillAmount: parseFloat(refillAmount.toFixed(2)),
+      feeAmount: parseFloat(feeAmount.toFixed(2)),
+      netAfterFee: parseFloat(netAfterFee.toFixed(2)),
+      reason
+    };
+  }
+
+  /**
+   * Smart domain purchase with automatic balance management
+   * @param {object} params - Purchase parameters (same as registerDomain)
+   * @param {object} options - Additional options (autoRefill, dryRun)
+   * @returns {Promise<object>} - Purchase result with balance details
+   */
+  async smartPurchase(params, options = {}) {
+    const { autoRefill = true, dryRun = false } = options;
+    
+    const result = { steps: [], success: false };
+
+    try {
+      // Step 1: Get current balance
+      result.steps.push({ step: 'getBalance', status: 'started' });
+      const balanceInfo = await this.getDetailedBalance();
+      result.currentBalance = balanceInfo.availableBalance;
+      result.steps[result.steps.length - 1].status = 'completed';
+
+      // Step 2: Get domain cost
+      const domainCost = params.cost || params.price || 0;
+      if (!domainCost) {
+        throw new Error('Domain cost must be provided in params.cost or params.price');
+      }
+      result.domainCost = domainCost;
+
+      // Step 3: Calculate refill needed
+      const refillCalc = this.calculateRefillNeeded(domainCost, balanceInfo.availableBalance);
+      result.refillCalculation = refillCalc;
+
+      // Step 4: Refill if needed
+      if (refillCalc.needsRefill) {
+        if (!autoRefill) {
+          throw new Error('Insufficient balance. Need $' + domainCost + ', have $' + balanceInfo.availableBalance);
+        }
+
+        if (!dryRun) {
+          result.steps.push({ step: 'refill', status: 'started' });
+          const refillResult = await this.refillAccount(refillCalc.refillAmount);
+          result.refillResult = refillResult;
+          result.steps[result.steps.length - 1].status = 'completed';
+        }
+      }
+
+      // Step 5: Purchase the domain
+      if (!dryRun) {
+        result.steps.push({ step: 'purchase', status: 'started' });
+        const purchaseResult = await this.registerDomain(params);
+        result.purchaseResult = purchaseResult;
+        result.steps[result.steps.length - 1].status = 'completed';
+        result.success = true;
+        result.message = 'Domain ' + params.sld + '.' + params.tld + ' purchased successfully';
+
+        // Get final balance
+        const finalBalance = await this.getDetailedBalance();
+        result.finalBalance = finalBalance.availableBalance;
+      } else {
+        result.success = true;
+        result.message = 'Dry run completed successfully';
+      }
+
+      return result;
+    } catch (error) {
+      result.success = false;
+      result.error = error.message;
+      throw error;
+    }
+  }
+
+  /**
+   * Smart domain renewal with automatic balance management
+   */
+  async smartRenewal(sld, tld, years, cost, options = {}) {
+    const { autoRefill = true, dryRun = false } = options;
+    const result = { steps: [], success: false };
+
+    try {
+      const balanceInfo = await this.getDetailedBalance();
+      result.currentBalance = balanceInfo.availableBalance;
+
+      const refillCalc = this.calculateRefillNeeded(cost, balanceInfo.availableBalance);
+      result.refillCalculation = refillCalc;
+
+      if (refillCalc.needsRefill && !dryRun) {
+        if (!autoRefill) {
+          throw new Error('Insufficient balance for renewal');
+        }
+        const refillResult = await this.refillAccount(refillCalc.refillAmount);
+        result.refillResult = refillResult;
+      }
+
+      if (!dryRun) {
+        const renewResult = await this.renewDomain(sld, tld, years);
+        result.renewResult = renewResult;
+        result.success = true;
+        const finalBalance = await this.getDetailedBalance();
+        result.finalBalance = finalBalance.availableBalance;
+      } else {
+        result.success = true;
+        result.message = 'Dry run completed';
+      }
+
+      return result;
+    } catch (error) {
+      result.success = false;
+      result.error = error.message;
+      throw error;
+    }
+  }
+
+
 module.exports = new EnomAPI();
