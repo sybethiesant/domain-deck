@@ -1,5 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
+// Dummy hash for timing-safe comparison when user not found
+const DUMMY_HASH = '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy';
 const jwt = require('jsonwebtoken');
 const router = express.Router();
 const { authMiddleware } = require('../middleware/auth');
@@ -123,14 +125,14 @@ router.post('/login', async (req, res) => {
       [normalizedEmail]
     );
 
-    if (result.rows.length === 0) {
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
 
-    const user = result.rows[0];
+    const user = result.rows[0] || null;
+
+    // Always perform bcrypt comparison to prevent timing attacks
+    const hashToCompare = user ? user.password_hash : DUMMY_HASH;
 
     // Check for account lockout
-    if (user.lockout_until && new Date(user.lockout_until) > new Date()) {
+    if (user && user.lockout_until && new Date(user.lockout_until) > new Date()) {
       const remainingMinutes = Math.ceil((new Date(user.lockout_until) - new Date()) / 60000);
       return res.status(429).json({ 
         error: 'Account temporarily locked due to too many failed login attempts',
@@ -138,11 +140,12 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    const validPassword = await bcrypt.compare(password, user.password_hash);
+    const validPassword = await bcrypt.compare(password, hashToCompare);
 
-    if (!validPassword) {
-      // Increment failed login attempts
-      const attempts = (user.failed_login_attempts || 0) + 1;
+    if (!user || !validPassword) {
+      // Increment failed login attempts (only if user exists)
+      if (user) {
+        const attempts = (user.failed_login_attempts || 0) + 1;
       let lockoutUntil = null;
       
       // Lock account after 5 failed attempts for 15 minutes
@@ -160,6 +163,7 @@ router.post('/login', async (req, res) => {
           error: 'Account temporarily locked due to too many failed login attempts',
           minutes_remaining: 15
         });
+      }
       }
       
       return res.status(401).json({ error: 'Invalid credentials' });
@@ -216,9 +220,6 @@ router.get('/me', authMiddleware, async (req, res) => {
       [req.user.id]
     );
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'User not found' });
-    }
 
     res.json(result.rows[0]);
   } catch (error) {
@@ -267,9 +268,6 @@ router.put('/profile', authMiddleware, async (req, res) => {
       ]
     );
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'User not found' });
-    }
 
     res.json({
       message: 'Profile updated successfully',
@@ -301,9 +299,6 @@ router.put('/password', authMiddleware, async (req, res) => {
       [req.user.id]
     );
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'User not found' });
-    }
 
     const validPassword = await bcrypt.compare(current_password, result.rows[0].password_hash);
 

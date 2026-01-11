@@ -280,12 +280,12 @@ async function handlePaymentSuccess(pool, paymentIntent) {
           // Create domain record with pending status
           await pool.query(
             `INSERT INTO domains (
-              user_id, domain_name, tld, status, transfer_order_id, created_at
+              user_id, domain_name, tld, status, enom_order_id, created_at
             ) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
             ON CONFLICT (domain_name, tld) DO UPDATE SET
               user_id = $1,
               status = $4,
-              transfer_order_id = $5,
+              enom_order_id = $5,
               updated_at = CURRENT_TIMESTAMP`,
             [
               order.user_id,

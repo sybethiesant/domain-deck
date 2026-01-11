@@ -178,9 +178,14 @@ router.put('/users/:id', async (req, res) => {
       role_name: currentUser.rows[0].role_name
     };
 
-    // Check if trying to set a role higher than or equal to own role
-    if (role_level !== undefined && role_level >= req.user.role_level && !req.user.is_admin) {
-      return res.status(403).json({ error: 'Cannot assign role equal to or higher than your own' });
+    // Check if trying to set a role higher than own role
+    if (role_level !== undefined && role_level > req.user.role_level) {
+      return res.status(403).json({ error: 'Cannot assign role higher than your own' });
+    }
+
+    // Only superadmins (role_level 5) can grant is_admin status
+    if (is_admin === true && req.user.role_level < 5) {
+      return res.status(403).json({ error: 'Only superadmins can grant admin status' });
     }
 
     const result = await pool.query(
@@ -607,7 +612,6 @@ router.post('/domains/:id/sync', async (req, res) => {
       if (expMatch) {
         expDate = `${expMatch[3]}-${expMatch[1].padStart(2, '0')}-${expMatch[2].padStart(2, '0')}`;
       }
-    }
 
     // Update domain
     const result = await pool.query(
@@ -891,7 +895,6 @@ router.post('/sync-enom', async (req, res) => {
           if (parts.length === 3) {
             expDate = `${parts[2]}-${parts[0].padStart(2, '0')}-${parts[1].padStart(2, '0')}`;
           }
-        }
 
         // Upsert domain
         await pool.query(`
@@ -909,7 +912,6 @@ router.post('/sync-enom', async (req, res) => {
       } catch (err) {
         errors.push({ domain: domain.domain, error: err.message });
       }
-    }
 
     // Try to get domains from sub-accounts by querying each domain directly
     for (const subAccount of subAccounts) {
@@ -928,8 +930,6 @@ router.post('/sync-enom', async (req, res) => {
                 tld: parts[parts.length - 1]
               });
             }
-          }
-        }
 
         for (const pd of possibleDomains) {
           try {
@@ -943,7 +943,6 @@ router.post('/sync-enom', async (req, res) => {
                 if (expParts.length === 3) {
                   expDate = `${expParts[2]}-${expParts[0].padStart(2, '0')}-${expParts[1].padStart(2, '0')}`;
                 }
-              }
 
               await pool.query(`
                 INSERT INTO domains (user_id, domain_name, tld, status, expiration_date, auto_renew, privacy_enabled, enom_account)
@@ -961,9 +960,6 @@ router.post('/sync-enom', async (req, res) => {
           } catch (err) {
             // Domain might not exist or not be accessible
           }
-        }
-      }
-    }
 
     res.json({
       message: 'eNom sync completed',
@@ -1064,7 +1060,6 @@ router.post('/enom/sync-pricing', async (req, res) => {
       } catch (err) {
         errors.push({ tld, error: err.message });
       }
-    }
 
     res.json({
       message: 'Pricing sync completed',
@@ -1130,7 +1125,6 @@ router.post('/enom/import-domain', async (req, res) => {
       if (expMatch) {
         expDate = `${expMatch[3]}-${expMatch[1].padStart(2, '0')}-${expMatch[2].padStart(2, '0')}`;
       }
-    }
 
     let regDate = null;
     if (info.registrationDate) {
@@ -1138,7 +1132,6 @@ router.post('/enom/import-domain', async (req, res) => {
       if (regMatch) {
         regDate = `${regMatch[3]}-${regMatch[1].padStart(2, '0')}-${regMatch[2].padStart(2, '0')}`;
       }
-    }
 
     // Upsert domain
     const result = await pool.query(`
@@ -1198,7 +1191,6 @@ router.post('/sync-domains', async (req, res) => {
           if (match) {
             expDate = `${match[3]}-${match[1].padStart(2, '0')}-${match[2].padStart(2, '0')}`;
           }
-        }
 
         // Determine status
         let status = 'active';

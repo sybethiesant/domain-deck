@@ -135,7 +135,7 @@ router.post('/checkout', authMiddleware, async (req, res) => {
           item.domain_name,
           item.tld,
           item.years,
-          item.price / item.years,
+          item.years > 0 ? item.price / item.years : item.price,
           item.years,
           item.price,
           'pending'

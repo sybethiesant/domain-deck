@@ -854,7 +854,7 @@ class EnomAPI {
    */
   async setDomainLock(sld, tld, lock) {
     try {
-      const command = lock ? 'SetRegLock' : 'SetRegLock';
+      const command = lock ? 'SetRegLock' : 'UnsetRegLock';
       const response = await this.request(command, {
         sld,
         tld,
