@@ -275,7 +275,7 @@ router.post('/domains/:id/sync', async (req, res) => {
     });
   } catch (error) {
     console.error('Error syncing domain:', error);
-    res.status(500).json({ error: 'Failed to sync domain', details: error.message });
+    res.status(500).json({ error: 'Failed to sync domain' });
   }
 });
 
@@ -339,7 +339,7 @@ router.post('/domains/sync-all', async (req, res) => {
     });
   } catch (error) {
     console.error('Error in bulk sync:', error);
-    res.status(500).json({ error: 'Failed to sync domains', details: error.message });
+    res.status(500).json({ error: 'Failed to sync domains' });
   }
 });
 
@@ -366,7 +366,7 @@ router.post('/domains/:id/auth-code', async (req, res) => {
     res.json(result);
   } catch (error) {
     console.error('Error getting auth code:', error);
-    res.status(500).json({ error: 'Failed to get auth code', details: error.message });
+    res.status(500).json({ error: 'Failed to get auth code' });
   }
 });
 
@@ -399,7 +399,7 @@ router.post('/domains/:id/lock', async (req, res) => {
     res.json({ success: true, locked: lock });
   } catch (error) {
     console.error('Error setting domain lock:', error);
-    res.status(500).json({ error: 'Failed to set domain lock', details: error.message });
+    res.status(500).json({ error: 'Failed to set domain lock' });
   }
 });
 

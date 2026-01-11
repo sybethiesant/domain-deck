@@ -111,7 +111,7 @@ router.post('/sync-enom', async (req, res) => {
     });
   } catch (error) {
     console.error('eNom sync error:', error);
-    res.status(500).json({ error: 'Failed to sync from eNom', details: error.message });
+    res.status(500).json({ error: 'Failed to sync from eNom' });
   }
 });
 
@@ -122,7 +122,7 @@ router.get('/enom/subaccounts', async (req, res) => {
     res.json(subAccounts);
   } catch (error) {
     console.error('Error fetching sub-accounts:', error);
-    res.status(500).json({ error: 'Failed to fetch sub-accounts', details: error.message });
+    res.status(500).json({ error: 'Failed to fetch sub-accounts' });
   }
 });
 
@@ -133,7 +133,7 @@ router.get('/enom/balance', async (req, res) => {
     res.json(balance);
   } catch (error) {
     console.error('Error fetching balance:', error);
-    res.status(500).json({ error: 'Failed to fetch balance', details: error.message });
+    res.status(500).json({ error: 'Failed to fetch balance' });
   }
 });
 
@@ -202,7 +202,7 @@ router.post('/enom/import-domain', async (req, res) => {
     });
   } catch (error) {
     console.error('Error importing domain:', error);
-    res.status(500).json({ error: 'Failed to import domain', details: error.message });
+    res.status(500).json({ error: 'Failed to import domain' });
   }
 });
 
@@ -213,7 +213,7 @@ router.get('/enom/transfers', async (req, res) => {
     res.json(transfers);
   } catch (error) {
     console.error('Error fetching transfers:', error);
-    res.status(500).json({ error: 'Failed to fetch transfers', details: error.message });
+    res.status(500).json({ error: 'Failed to fetch transfers' });
   }
 });
 
@@ -226,7 +226,7 @@ router.get('/enom/transfers/:transferOrderId', async (req, res) => {
     res.json(status);
   } catch (error) {
     console.error('Error fetching transfer status:', error);
-    res.status(500).json({ error: 'Failed to fetch transfer status', details: error.message });
+    res.status(500).json({ error: 'Failed to fetch transfer status' });
   }
 });
 
@@ -243,7 +243,7 @@ router.post('/enom/transfers/:transferOrderId/resend', async (req, res) => {
     res.json(result);
   } catch (error) {
     console.error('Error resending transfer auth:', error);
-    res.status(500).json({ error: 'Failed to resend auth email', details: error.message });
+    res.status(500).json({ error: 'Failed to resend auth email' });
   }
 });
 
@@ -260,7 +260,7 @@ router.post('/enom/transfers/:transferOrderId/cancel', async (req, res) => {
     res.json(result);
   } catch (error) {
     console.error('Error cancelling transfer:', error);
-    res.status(500).json({ error: 'Failed to cancel transfer', details: error.message });
+    res.status(500).json({ error: 'Failed to cancel transfer' });
   }
 });
 
@@ -281,7 +281,7 @@ router.get('/enom/check/:domain', async (req, res) => {
     res.json(result);
   } catch (error) {
     console.error('Error checking domain:', error);
-    res.status(500).json({ error: 'Failed to check domain', details: error.message });
+    res.status(500).json({ error: 'Failed to check domain' });
   }
 });
 

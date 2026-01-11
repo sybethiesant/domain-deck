@@ -337,7 +337,7 @@ router.post('/orders/:orderId/items/:itemId/retry', async (req, res) => {
     res.json({ success: true, result });
   } catch (error) {
     console.error('Error retrying registration:', error);
-    res.status(500).json({ error: 'Failed to retry registration', details: error.message });
+    res.status(500).json({ error: 'Failed to retry registration' });
   }
 });
 
@@ -410,7 +410,7 @@ router.post('/orders/:id/refund', async (req, res) => {
     });
   } catch (error) {
     console.error('Error processing refund:', error);
-    res.status(500).json({ error: 'Failed to process refund', details: error.message });
+    res.status(500).json({ error: 'Failed to process refund' });
   }
 });
 

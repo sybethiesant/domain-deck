@@ -150,7 +150,7 @@ function AppContent() {
         logout();
       }
     } catch (error) {
-      console.error('Error fetching user:', error);
+      console.error('Error fetching user:', error.name || 'Error');
     } finally {
       setAuthLoading(false);
     }
@@ -176,7 +176,7 @@ function AppContent() {
         setCart(cartData);
       }
     } catch (error) {
-      console.error('Error fetching cart:', error);
+      console.error('Error fetching cart:', error.name || 'Error');
     }
   }, [token]);
 
@@ -247,7 +247,7 @@ function AppContent() {
         toast.error(error.error || 'Failed to add to cart');
       }
     } catch (error) {
-      console.error('Error adding to cart:', error);
+      console.error('Error adding to cart:', error.name || 'Error');
       toast.error('Failed to add to cart');
     }
   };
@@ -264,7 +264,7 @@ function AppContent() {
         toast.success('Removed from cart');
       }
     } catch (error) {
-      console.error('Error removing from cart:', error);
+      console.error('Error removing from cart:', error.name || 'Error');
       toast.error('Failed to remove from cart');
     }
   };

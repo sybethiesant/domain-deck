@@ -642,8 +642,8 @@ router.post('/:id/renew', authMiddleware, async (req, res) => {
 
     // Create order record for the renewal
     const orderResult = await pool.query(
-      `INSERT INTO orders (user_id, order_number, status, payment_status, subtotal, total)
-       VALUES ($1, $2, 'completed', 'paid', $3, $3)
+      `INSERT INTO orders (user_id, order_number, status, payment_status, subtotal, total, processed_at)
+       VALUES ($1, $2, 'completed', 'paid', $3, $3, CURRENT_TIMESTAMP)
        RETURNING id, order_number`,
       [req.user.id, `ORD-${Date.now()}`, renewalPrice]
     );
