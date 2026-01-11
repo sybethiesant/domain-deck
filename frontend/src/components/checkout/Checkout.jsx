@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { loadStripe } from '@stripe/stripe-js';
 import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js';
-import { ArrowLeft, CreditCard, Lock, Check, Loader2, AlertCircle } from 'lucide-react';
+import { ArrowLeft, CreditCard, Lock, Check, Loader2, AlertCircle, User, Plus, ChevronDown } from 'lucide-react';
 import { useCart, useAuth } from '../../App';
 import { API_URL } from '../../config/api';
 import toast from 'react-hot-toast';
@@ -107,17 +107,58 @@ function Checkout({ onComplete }) {
   const [paymentIntentId, setPaymentIntentId] = useState(null);
   const [stripeConfigured, setStripeConfigured] = useState(false);
 
+  // Contact selection state
+  const [savedContacts, setSavedContacts] = useState([]);
+  const [loadingContacts, setLoadingContacts] = useState(true);
+  const [contactMode, setContactMode] = useState('select'); // 'select' or 'new'
+  const [selectedContactId, setSelectedContactId] = useState(null);
+
+  // Contact form state (for new contact entry)
   const [contactInfo, setContactInfo] = useState({
     first_name: user?.full_name?.split(' ')[0] || '',
     last_name: user?.full_name?.split(' ').slice(1).join(' ') || '',
+    organization: '',
     email: user?.email || '',
     phone: user?.phone || '',
     address_line1: user?.address_line1 || '',
+    address_line2: '',
     city: user?.city || '',
     state: user?.state || '',
     postal_code: user?.postal_code || '',
     country: 'US'
   });
+
+  // Fetch saved contacts
+  useEffect(() => {
+    async function fetchContacts() {
+      if (!token) return;
+      try {
+        const res = await fetch(`${API_URL}/contacts`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setSavedContacts(data.contacts || []);
+          // Auto-select default contact if available
+          const defaultContact = data.contacts?.find(c => c.is_default);
+          if (defaultContact) {
+            setSelectedContactId(defaultContact.id);
+            setContactMode('select');
+          } else if (data.contacts?.length > 0) {
+            setSelectedContactId(data.contacts[0].id);
+            setContactMode('select');
+          } else {
+            setContactMode('new'); // No saved contacts, force new entry
+          }
+        }
+      } catch (err) {
+        console.error('Failed to fetch contacts:', err);
+        setContactMode('new');
+      }
+      setLoadingContacts(false);
+    }
+    fetchContacts();
+  }, [token]);
 
   // Initialize Stripe and get config
   useEffect(() => {
@@ -146,11 +187,22 @@ function Checkout({ onComplete }) {
     setContactInfo({ ...contactInfo, [e.target.name]: e.target.value });
   };
 
-  // Validate contact info
+  // Get the registrant contact (selected or entered)
+  const getRegistrantContact = () => {
+    if (contactMode === 'select' && selectedContactId) {
+      return savedContacts.find(c => c.id === selectedContactId);
+    }
+    return contactInfo;
+  };
+
+  // Validate contact info - phone is REQUIRED for ICANN compliance
   const validateContactInfo = () => {
-    const required = ['first_name', 'last_name', 'email', 'address_line1', 'city', 'state', 'postal_code'];
+    const contact = getRegistrantContact();
+    if (!contact) return false;
+
+    const required = ['first_name', 'last_name', 'email', 'phone', 'address_line1', 'city', 'state', 'postal_code'];
     for (const field of required) {
-      if (!contactInfo[field]?.trim()) {
+      if (!contact[field]?.trim()) {
         return false;
       }
     }
@@ -160,7 +212,7 @@ function Checkout({ onComplete }) {
   // Proceed to payment
   const handleProceedToPayment = async () => {
     if (!validateContactInfo()) {
-      setError('Please fill in all required fields');
+      setError('Please fill in all required contact fields including phone number (required for ICANN compliance)');
       return;
     }
 
@@ -202,7 +254,9 @@ function Checkout({ onComplete }) {
     setLoading(true);
 
     try {
-      // Create order
+      const registrantContact = getRegistrantContact();
+
+      // Create order with registrant contact
       const res = await fetch(`${API_URL}/orders/checkout`, {
         method: 'POST',
         headers: {
@@ -211,7 +265,8 @@ function Checkout({ onComplete }) {
         },
         body: JSON.stringify({
           payment_intent_id: paymentIntent.id,
-          billing_address: contactInfo
+          billing_address: registrantContact,
+          registrant_contact: registrantContact
         })
       });
 
@@ -235,10 +290,17 @@ function Checkout({ onComplete }) {
 
   // Fallback for when Stripe is not configured
   const handlePlaceOrderWithoutPayment = async () => {
+    if (!validateContactInfo()) {
+      setError('Please fill in all required contact fields including phone');
+      return;
+    }
+
     setLoading(true);
     setError(null);
 
     try {
+      const registrantContact = getRegistrantContact();
+
       const res = await fetch(`${API_URL}/orders/checkout`, {
         method: 'POST',
         headers: {
@@ -246,7 +308,8 @@ function Checkout({ onComplete }) {
           'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
-          billing_address: contactInfo
+          billing_address: registrantContact,
+          registrant_contact: registrantContact
         })
       });
 
@@ -370,127 +433,268 @@ function Checkout({ onComplete }) {
       <div className="grid lg:grid-cols-3 gap-8">
         {/* Form */}
         <div className="lg:col-span-2 space-y-6">
-          {/* Contact Information */}
+          {/* Registrant Contact - Required for domain registration */}
           <div className="card p-6">
-            <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100 mb-4">
-              Contact Information
+            <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100 mb-2">
+              Registrant Contact
             </h2>
-            <div className="grid sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  First Name *
-                </label>
-                <input
-                  type="text"
-                  name="first_name"
-                  value={contactInfo.first_name}
-                  onChange={handleContactChange}
-                  required
-                  className="input"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Last Name *
-                </label>
-                <input
-                  type="text"
-                  name="last_name"
-                  value={contactInfo.last_name}
-                  onChange={handleContactChange}
-                  required
-                  className="input"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Email *
-                </label>
-                <input
-                  type="email"
-                  name="email"
-                  value={contactInfo.email}
-                  onChange={handleContactChange}
-                  required
-                  className="input"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Phone
-                </label>
-                <input
-                  type="tel"
-                  name="phone"
-                  value={contactInfo.phone}
-                  onChange={handleContactChange}
-                  className="input"
-                />
-              </div>
-            </div>
-          </div>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">
+              This information will be used as the WHOIS contact for your domain registration.
+              All fields are required for ICANN compliance.
+            </p>
 
-          {/* Billing Address */}
-          <div className="card p-6">
-            <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100 mb-4">
-              Billing Address
-            </h2>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Street Address *
-                </label>
-                <input
-                  type="text"
-                  name="address_line1"
-                  value={contactInfo.address_line1}
-                  onChange={handleContactChange}
-                  required
-                  className="input"
-                />
+            {loadingContacts ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="w-6 h-6 animate-spin text-indigo-600" />
               </div>
-              <div className="grid sm:grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    City *
-                  </label>
-                  <input
-                    type="text"
-                    name="city"
-                    value={contactInfo.city}
-                    onChange={handleContactChange}
-                    required
-                    className="input"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    State *
-                  </label>
-                  <input
-                    type="text"
-                    name="state"
-                    value={contactInfo.state}
-                    onChange={handleContactChange}
-                    required
-                    className="input"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    ZIP Code *
-                  </label>
-                  <input
-                    type="text"
-                    name="postal_code"
-                    value={contactInfo.postal_code}
-                    onChange={handleContactChange}
-                    required
-                    className="input"
-                  />
-                </div>
-              </div>
-            </div>
+            ) : (
+              <>
+                {/* Contact selection mode */}
+                {savedContacts.length > 0 && (
+                  <div className="mb-6">
+                    <div className="flex gap-4 mb-4">
+                      <button
+                        type="button"
+                        onClick={() => setContactMode('select')}
+                        className={`flex-1 py-2 px-4 rounded-lg border-2 transition-colors ${
+                          contactMode === 'select'
+                            ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300'
+                            : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
+                        }`}
+                      >
+                        <User className="w-4 h-4 inline mr-2" />
+                        Use Saved Contact
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setContactMode('new')}
+                        className={`flex-1 py-2 px-4 rounded-lg border-2 transition-colors ${
+                          contactMode === 'new'
+                            ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300'
+                            : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
+                        }`}
+                      >
+                        <Plus className="w-4 h-4 inline mr-2" />
+                        Enter New Contact
+                      </button>
+                    </div>
+
+                    {contactMode === 'select' && (
+                      <div className="relative">
+                        <select
+                          value={selectedContactId || ''}
+                          onChange={(e) => setSelectedContactId(parseInt(e.target.value))}
+                          className="input appearance-none pr-10"
+                        >
+                          <option value="">Select a contact...</option>
+                          {savedContacts.map(contact => (
+                            <option key={contact.id} value={contact.id}>
+                              {contact.first_name} {contact.last_name} - {contact.email}
+                              {contact.is_default && ' (Default)'}
+                            </option>
+                          ))}
+                        </select>
+                        <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Show selected contact preview OR new contact form */}
+                {contactMode === 'select' && selectedContactId ? (
+                  <div className="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-4">
+                    {(() => {
+                      const contact = savedContacts.find(c => c.id === selectedContactId);
+                      if (!contact) return null;
+                      return (
+                        <div className="grid sm:grid-cols-2 gap-4 text-sm">
+                          <div>
+                            <span className="text-slate-500 dark:text-slate-400">Name:</span>
+                            <span className="ml-2 text-slate-900 dark:text-slate-100">
+                              {contact.first_name} {contact.last_name}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="text-slate-500 dark:text-slate-400">Email:</span>
+                            <span className="ml-2 text-slate-900 dark:text-slate-100">{contact.email}</span>
+                          </div>
+                          <div>
+                            <span className="text-slate-500 dark:text-slate-400">Phone:</span>
+                            <span className="ml-2 text-slate-900 dark:text-slate-100">{contact.phone}</span>
+                          </div>
+                          <div>
+                            <span className="text-slate-500 dark:text-slate-400">Address:</span>
+                            <span className="ml-2 text-slate-900 dark:text-slate-100">
+                              {contact.city}, {contact.state} {contact.postal_code}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                ) : (contactMode === 'new' || savedContacts.length === 0) && (
+                  <div className="space-y-4">
+                    <div className="grid sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                          First Name *
+                        </label>
+                        <input
+                          type="text"
+                          name="first_name"
+                          value={contactInfo.first_name}
+                          onChange={handleContactChange}
+                          required
+                          className="input"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                          Last Name *
+                        </label>
+                        <input
+                          type="text"
+                          name="last_name"
+                          value={contactInfo.last_name}
+                          onChange={handleContactChange}
+                          required
+                          className="input"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                          Organization
+                        </label>
+                        <input
+                          type="text"
+                          name="organization"
+                          value={contactInfo.organization}
+                          onChange={handleContactChange}
+                          placeholder="Optional"
+                          className="input"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                          Email *
+                        </label>
+                        <input
+                          type="email"
+                          name="email"
+                          value={contactInfo.email}
+                          onChange={handleContactChange}
+                          required
+                          className="input"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                          Phone * <span className="text-xs text-slate-500">(Include country code)</span>
+                        </label>
+                        <input
+                          type="tel"
+                          name="phone"
+                          value={contactInfo.phone}
+                          onChange={handleContactChange}
+                          placeholder="+1.5551234567"
+                          required
+                          className="input"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                        Street Address *
+                      </label>
+                      <input
+                        type="text"
+                        name="address_line1"
+                        value={contactInfo.address_line1}
+                        onChange={handleContactChange}
+                        required
+                        className="input"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                        Address Line 2
+                      </label>
+                      <input
+                        type="text"
+                        name="address_line2"
+                        value={contactInfo.address_line2}
+                        onChange={handleContactChange}
+                        placeholder="Apt, Suite, Unit (Optional)"
+                        className="input"
+                      />
+                    </div>
+
+                    <div className="grid sm:grid-cols-3 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                          City *
+                        </label>
+                        <input
+                          type="text"
+                          name="city"
+                          value={contactInfo.city}
+                          onChange={handleContactChange}
+                          required
+                          className="input"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                          State *
+                        </label>
+                        <input
+                          type="text"
+                          name="state"
+                          value={contactInfo.state}
+                          onChange={handleContactChange}
+                          required
+                          className="input"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                          ZIP/Postal Code *
+                        </label>
+                        <input
+                          type="text"
+                          name="postal_code"
+                          value={contactInfo.postal_code}
+                          onChange={handleContactChange}
+                          required
+                          className="input"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                        Country *
+                      </label>
+                      <select
+                        name="country"
+                        value={contactInfo.country}
+                        onChange={handleContactChange}
+                        className="input"
+                      >
+                        <option value="US">United States</option>
+                        <option value="CA">Canada</option>
+                        <option value="GB">United Kingdom</option>
+                        <option value="AU">Australia</option>
+                        <option value="DE">Germany</option>
+                        <option value="FR">France</option>
+                      </select>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
           </div>
 
           {/* Payment Preview */}

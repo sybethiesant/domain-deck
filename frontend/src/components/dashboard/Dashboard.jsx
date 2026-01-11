@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Globe, RefreshCw, Settings, AlertTriangle, Check, Clock, Loader2, X, Server, Shield, Lock, Unlock, Key, ShoppingCart, ChevronDown, ChevronUp } from 'lucide-react';
+import { Globe, RefreshCw, Settings, AlertTriangle, Check, Clock, Loader2, X, Server, Shield, Lock, Unlock, Key, ShoppingCart, ChevronDown, ChevronUp, Users } from 'lucide-react';
 import { useAuth, useCart } from '../../App';
 import { API_URL } from '../../config/api';
 import toast from 'react-hot-toast';
+import DomainContactsPanel from './DomainContactsPanel';
 
 function Dashboard() {
   const { token } = useAuth();
@@ -17,6 +18,7 @@ function Dashboard() {
   const [togglingAutoRenew, setTogglingAutoRenew] = useState(null);
   const [togglingPrivacy, setTogglingPrivacy] = useState(null);
   const [togglingLock, setTogglingLock] = useState(null);
+  const [showContacts, setShowContacts] = useState({});
 
   const fetchDomains = useCallback(async () => {
     try {
@@ -536,6 +538,36 @@ function Dashboard() {
                             </button>
                           </div>
                         </div>
+                      </div>
+                    )}
+
+                    {/* WHOIS Contacts Section */}
+                    {isExpanded && !details?.loading && (
+                      <div className="border-t border-slate-200 dark:border-slate-700 pt-4 mt-4">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setShowContacts(prev => ({ ...prev, [domain.id]: !prev[domain.id] }));
+                          }}
+                          className="flex items-center justify-between w-full text-left px-1"
+                        >
+                          <h4 className="font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                            <Users className="w-4 h-4" />
+                            WHOIS Contacts
+                          </h4>
+                          {showContacts[domain.id] ? (
+                            <ChevronUp className="w-4 h-4 text-slate-400" />
+                          ) : (
+                            <ChevronDown className="w-4 h-4 text-slate-400" />
+                          )}
+                        </button>
+
+                        {showContacts[domain.id] && (
+                          <DomainContactsPanel
+                            domainId={domain.id}
+                            domainName={domain.domain_name}
+                          />
+                        )}
                       </div>
                     )}
                   </div>

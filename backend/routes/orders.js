@@ -81,9 +81,23 @@ router.get('/:id', authMiddleware, async (req, res) => {
 // Create order from cart (checkout)
 router.post('/checkout', authMiddleware, async (req, res) => {
   const pool = req.app.locals.pool;
-  const { payment_intent_id, billing_address } = req.body;
+  const { payment_intent_id, billing_address, registrant_contact } = req.body;
 
   try {
+    // Validate registrant_contact for domain registrations
+    const requiredContactFields = ['first_name', 'last_name', 'email', 'phone', 'address_line1', 'city', 'state', 'postal_code'];
+    if (!registrant_contact) {
+      return res.status(400).json({ error: 'Registrant contact information is required for domain purchases' });
+    }
+
+    const missingFields = requiredContactFields.filter(field => !registrant_contact[field]?.trim());
+    if (missingFields.length > 0) {
+      return res.status(400).json({
+        error: 'Missing required contact fields',
+        missing: missingFields
+      });
+    }
+
     // Get cart items
     const cartResult = await pool.query(
       `SELECT * FROM cart_items
@@ -100,12 +114,12 @@ router.post('/checkout', authMiddleware, async (req, res) => {
     const tax = 0; // TODO: Calculate tax if applicable
     const total = subtotal + tax;
 
-    // Create order
+    // Create order with registrant_contact
     const orderResult = await pool.query(
       `INSERT INTO orders (
         user_id, order_number, status, subtotal, tax, total,
-        stripe_payment_intent_id, payment_status, billing_address
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        stripe_payment_intent_id, payment_status, billing_address, registrant_contact
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       RETURNING *`,
       [
         req.user.id,
@@ -116,7 +130,8 @@ router.post('/checkout', authMiddleware, async (req, res) => {
         total,
         payment_intent_id,
         'pending',
-        JSON.stringify(billing_address || {})
+        JSON.stringify(billing_address || {}),
+        JSON.stringify(registrant_contact)
       ]
     );
 

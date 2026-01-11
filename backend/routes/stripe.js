@@ -173,53 +173,29 @@ async function handlePaymentSuccess(pool, paymentIntent) {
     [order.id]
   );
 
-  // Get user's default contact for registration
-  const contactResult = await pool.query(
-    `SELECT * FROM domain_contacts
-     WHERE user_id = $1
-     ORDER BY is_default DESC, created_at ASC
-     LIMIT 1`,
-    [order.user_id]
-  );
+  // Get registrant contact from order (stored during checkout)
+  const storedContact = order.registrant_contact;
 
-  // Fall back to user profile if no contact
-  let registrantContact;
-  if (contactResult.rows.length > 0) {
-    const c = contactResult.rows[0];
-    registrantContact = {
-      firstName: c.first_name,
-      lastName: c.last_name,
-      organization: c.organization || '',
-      email: c.email,
-      phone: c.phone,
-      address1: c.address_line1,
-      address2: c.address_line2 || '',
-      city: c.city,
-      state: c.state,
-      postalCode: c.postal_code,
-      country: c.country || 'US'
-    };
-  } else {
-    // Use user profile as fallback
-    const userResult = await pool.query(
-      `SELECT * FROM users WHERE id = $1`,
-      [order.user_id]
-    );
-    const u = userResult.rows[0];
-    registrantContact = {
-      firstName: u.full_name?.split(' ')[0] || u.username,
-      lastName: u.full_name?.split(' ').slice(1).join(' ') || u.username,
-      organization: u.company_name || '',
-      email: u.email,
-      phone: u.phone || '+1.5555551234',
-      address1: u.address_line1 || '123 Main St',
-      address2: u.address_line2 || '',
-      city: u.city || 'New York',
-      state: u.state || 'NY',
-      postalCode: u.postal_code || '10001',
-      country: u.country || 'US'
-    };
+  // Validate that registrant contact was provided during checkout
+  if (!storedContact || !storedContact.first_name || !storedContact.email || !storedContact.phone) {
+    console.error('Order missing valid registrant contact:', order.order_number);
+    throw new Error('Order is missing required registrant contact information');
   }
+
+  // Format contact for eNom API
+  const registrantContact = {
+    firstName: storedContact.first_name,
+    lastName: storedContact.last_name,
+    organization: storedContact.organization || '',
+    email: storedContact.email,
+    phone: storedContact.phone,
+    address1: storedContact.address_line1,
+    address2: storedContact.address_line2 || '',
+    city: storedContact.city,
+    state: storedContact.state,
+    postalCode: storedContact.postal_code,
+    country: storedContact.country || 'US'
+  };
 
   // Process each order item
   let allSucceeded = true;

@@ -548,7 +548,7 @@ router.get('/:id/contacts', authMiddleware, async (req, res) => {
   }
 });
 
-// Update domain contacts
+// Update domain contacts (supports partial updates)
 router.put('/:id/contacts', authMiddleware, async (req, res) => {
   const pool = req.app.locals.pool;
   const domainId = parseInt(req.params.id);
@@ -570,8 +570,37 @@ router.put('/:id/contacts', authMiddleware, async (req, res) => {
     const tld = parts.pop();
     const sld = parts.join('.');
 
+    // Get current contacts first (for partial update support)
+    const currentContacts = await enom.getWhoisContacts(sld, tld);
+
+    // Helper to normalize contact format for eNom API
+    const normalizeContact = (contact) => {
+      if (!contact) return null;
+      return {
+        firstName: contact.firstName || contact.first_name,
+        lastName: contact.lastName || contact.last_name,
+        organization: contact.organization || contact.company || '',
+        email: contact.email || contact.emailAddress,
+        phone: contact.phone,
+        address1: contact.address1 || contact.address_line1 || contact.Address1,
+        address2: contact.address2 || contact.address_line2 || contact.Address2 || '',
+        city: contact.city || contact.City,
+        state: contact.state || contact.stateProvince || contact.StateProvince,
+        postalCode: contact.postalCode || contact.postal_code || contact.PostalCode,
+        country: contact.country || contact.Country || 'US'
+      };
+    };
+
+    // Merge provided contacts with current contacts (partial update support)
+    const updatedContacts = {
+      registrant: registrant ? normalizeContact(registrant) : normalizeContact(currentContacts.registrant),
+      admin: admin ? normalizeContact(admin) : normalizeContact(currentContacts.admin),
+      tech: tech ? normalizeContact(tech) : normalizeContact(currentContacts.tech),
+      billing: billing ? normalizeContact(billing) : normalizeContact(currentContacts.billing)
+    };
+
     // Update contacts via eNom
-    await enom.updateContacts(sld, tld, { registrant, admin, tech, billing });
+    await enom.updateContacts(sld, tld, updatedContacts);
 
     res.json({
       success: true,
