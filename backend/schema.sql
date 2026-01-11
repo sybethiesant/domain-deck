@@ -56,6 +56,7 @@ CREATE TABLE domains (
     domain_name VARCHAR(255) NOT NULL UNIQUE,
     tld VARCHAR(20) NOT NULL,
     enom_order_id VARCHAR(100),
+    enom_account VARCHAR(100) DEFAULT 'main',
     status VARCHAR(50) DEFAULT 'pending',
     registration_date TIMESTAMP,
     expiration_date TIMESTAMP,

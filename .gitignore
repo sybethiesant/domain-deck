@@ -37,3 +37,8 @@ Thumbs.db
 # Misc
 *.pem
 .cache/
+
+# Credentials
+CREDENTIALS.md
+CLAUDE.md
+CLAUDE.md
