@@ -1,6 +1,10 @@
 const https = require('https');
 const querystring = require('querystring');
 
+// Balance management constants
+const CC_FEE_PERCENT = 0.05;  // eNom charges 5% for CC refills
+const MIN_REFILL = 25.00;     // Minimum refill amount allowed by eNom
+
 class EnomAPI {
   constructor() {
     this.uid = process.env.ENOM_UID;
@@ -1011,23 +1015,10 @@ class EnomAPI {
       phone: getField('Phone')
     };
   }
-}
-
-// Export singleton instance
 
   // ============================================
   // BALANCE MANAGEMENT FUNCTIONS
   // ============================================
-
-  /**
-   * Credit card fee percentage (eNom charges 5% for CC refills)
-   */
-  static CC_FEE_PERCENT = 0.05;
-
-  /**
-   * Minimum refill amount allowed by eNom
-   */
-  static MIN_REFILL = 25.00;
 
   /**
    * Get detailed account balance with additional info
@@ -1055,8 +1046,8 @@ class EnomAPI {
    * @returns {Promise<object>} - Refill result
    */
   async refillAccount(amount) {
-    if (amount < EnomAPI.MIN_REFILL) {
-      throw new Error('Minimum refill amount is $' + EnomAPI.MIN_REFILL);
+    if (amount < MIN_REFILL) {
+      throw new Error('Minimum refill amount is $' + MIN_REFILL);
     }
 
     try {
@@ -1064,13 +1055,13 @@ class EnomAPI {
         Amount: amount.toFixed(2)
       });
 
-      const feeAmount = amount * EnomAPI.CC_FEE_PERCENT;
+      const feeAmount = amount * CC_FEE_PERCENT;
       const netAmount = amount - feeAmount;
 
       return {
         success: true,
         requestedAmount: amount,
-        feePercent: EnomAPI.CC_FEE_PERCENT * 100,
+        feePercent: CC_FEE_PERCENT * 100,
         feeAmount: parseFloat(feeAmount.toFixed(2)),
         netAmount: parseFloat(netAmount.toFixed(2)),
         transactionId: response.TransactionID || response.OrderID,
@@ -1105,20 +1096,20 @@ class EnomAPI {
 
     // Need to refill enough that after 5% fee, we have enough
     // If we refill X, we get X * 0.95 = shortfall, so X = shortfall / 0.95
-    const grossRefillNeeded = shortfall / (1 - EnomAPI.CC_FEE_PERCENT);
+    const grossRefillNeeded = shortfall / (1 - CC_FEE_PERCENT);
     
     let refillAmount;
     let reason;
     
-    if (grossRefillNeeded > EnomAPI.MIN_REFILL) {
+    if (grossRefillNeeded > MIN_REFILL) {
       refillAmount = Math.ceil(grossRefillNeeded * 100) / 100;
       reason = 'Refilling exact amount needed';
     } else {
-      refillAmount = EnomAPI.MIN_REFILL;
+      refillAmount = MIN_REFILL;
       reason = 'Refilling minimum amount ($25)';
     }
 
-    const feeAmount = refillAmount * EnomAPI.CC_FEE_PERCENT;
+    const feeAmount = refillAmount * CC_FEE_PERCENT;
     const netAfterFee = refillAmount - feeAmount;
 
     return {
@@ -1239,6 +1230,6 @@ class EnomAPI {
       throw error;
     }
   }
-
+}
 
 module.exports = new EnomAPI();
