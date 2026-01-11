@@ -182,24 +182,22 @@ function AppContent() {
 
   // Check auth on mount and when token changes
   useEffect(() => {
-    fetchUser();
+    const controller = new AbortController();
+    fetchUser(controller.signal);
+    return () => controller.abort();
   }, [fetchUser]);
 
-  // Fetch cart when user logs in
+  // Fetch cart when user logs in or route changes
   useEffect(() => {
-    if (token) {
-      fetchCart();
-    } else {
+    if (!token) {
       setCart({ items: [], subtotal: 0 });
+      return;
     }
-  }, [token, fetchCart]);
-
-  // Refresh data on route change - ensures fresh data on every page visit
-  useEffect(() => {
-    if (token) {
-      fetchCart();
-    }
-  }, [location.pathname, token, fetchCart]);
+    
+    const controller = new AbortController();
+    fetchCart(controller.signal);
+    return () => controller.abort();
+  }, [token, location.pathname, fetchCart]);
 
   const login = (userData, authToken) => {
     setUser(userData);

@@ -74,8 +74,11 @@ router.get('/stats', async (req, res) => {
 // List all users
 router.get('/users', async (req, res) => {
   const pool = req.app.locals.pool;
-  const { page = 1, limit = 50, search } = req.query;
-  const offset = (parseInt(page) - 1) * parseInt(limit);
+  const { search } = req.query;
+  // Validate pagination parameters
+  const page = Math.max(1, Math.min(parseInt(req.query.page) || 1, 10000));
+  const limit = Math.max(1, Math.min(parseInt(req.query.limit) || 50, 100));
+  const offset = (page - 1) * limit;
 
   try {
     let query = `

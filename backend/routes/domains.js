@@ -6,7 +6,7 @@ const enom = require('../services/enom');
 function isValidNameserver(ns) {
   if (!ns || typeof ns !== 'string') return false;
   // Must be valid hostname format (RFC 1123)
-  const nsRegex = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
+  const nsRegex = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
   return nsRegex.test(ns) && ns.length <= 253 && ns.includes('.');
 }
 

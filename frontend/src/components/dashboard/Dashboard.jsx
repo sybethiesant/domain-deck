@@ -14,6 +14,9 @@ function Dashboard() {
   const [managementData, setManagementData] = useState({});
   const [savingNS, setSavingNS] = useState(false);
   const [nsInputs, setNsInputs] = useState(['', '', '', '']);
+  const [togglingAutoRenew, setTogglingAutoRenew] = useState(null);
+  const [togglingPrivacy, setTogglingPrivacy] = useState(null);
+  const [togglingLock, setTogglingLock] = useState(null);
 
   const fetchDomains = useCallback(async () => {
     try {
@@ -114,12 +117,14 @@ function Dashboard() {
         toast.error(data.error || 'Failed to update nameservers');
       }
     } catch (err) {
-      toast.error('Connection error');
+      toast.error("Connection error");
     }
     setSavingNS(false);
   };
 
   const handleToggleAutoRenew = async (domain) => {
+    if (togglingAutoRenew === domain.id) return; // Prevent double-click
+    setTogglingAutoRenew(domain.id);
     try {
       const newValue = !domain.auto_renew;
       const res = await fetch(`${API_URL}/domains/${domain.id}/autorenew`, {
@@ -141,11 +146,15 @@ function Dashboard() {
         toast.error(data.error || 'Failed to update');
       }
     } catch (err) {
-      toast.error('Connection error');
+      toast.error("Connection error");
+    } finally {
+      setTogglingAutoRenew(null);
     }
   };
 
   const handleTogglePrivacy = async (domain) => {
+    if (togglingPrivacy === domain.id) return; // Prevent double-click
+    setTogglingPrivacy(domain.id);
     try {
       const newValue = !domain.privacy_enabled;
       const res = await fetch(`${API_URL}/domains/${domain.id}/privacy`, {
@@ -167,7 +176,9 @@ function Dashboard() {
         toast.error(data.error || 'Failed to update');
       }
     } catch (err) {
-      toast.error('Connection error');
+      toast.error("Connection error");
+    } finally {
+      setTogglingPrivacy(null);
     }
   };
 
@@ -184,6 +195,8 @@ function Dashboard() {
   };
 
   const handleToggleLock = async (domain) => {
+    if (togglingLock === domain.id) return; // Prevent double-click
+    setTogglingLock(domain.id);
     try {
       const newValue = !domain.lock_status;
       const res = await fetch(`${API_URL}/domains/${domain.id}/lock`, {
@@ -205,7 +218,9 @@ function Dashboard() {
         toast.error(data.error || 'Failed to update lock status');
       }
     } catch (err) {
-      toast.error('Connection error');
+      toast.error("Connection error");
+    } finally {
+      setTogglingLock(null);
     }
   };
 
@@ -231,7 +246,7 @@ function Dashboard() {
         toast.error(data.error || 'Failed to get auth code');
       }
     } catch (err) {
-      toast.error('Connection error');
+      toast.error("Connection error");
     }
   };
 
