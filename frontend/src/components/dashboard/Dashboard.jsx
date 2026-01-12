@@ -1,34 +1,70 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Globe, RefreshCw, Settings, AlertTriangle, Check, Clock, Loader2, X, Server, Shield, Lock, Unlock, Key, ShoppingCart, ChevronDown, ChevronUp, Users } from 'lucide-react';
+import { Globe, RefreshCw, Settings, AlertTriangle, Check, Clock, Loader2, X, Server, Shield, Lock, Unlock, Key, ShoppingCart, Users, Search, ChevronLeft, ChevronRight, Eye } from 'lucide-react';
 import { useAuth, useCart } from '../../App';
 import { API_URL } from '../../config/api';
 import toast from 'react-hot-toast';
 import DomainContactsPanel from './DomainContactsPanel';
+import PrivacyPurchaseModal from './PrivacyPurchaseModal';
 
 function Dashboard() {
   const { token } = useAuth();
   const { addToCart } = useCart();
+
+  // Domain list state
   const [domains, setDomains] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [expandedDomain, setExpandedDomain] = useState(null);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [total, setTotal] = useState(0);
+
+  // Filters
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [expiringFilter, setExpiringFilter] = useState('');
+
+  // Selected domain modal
+  const [selectedDomain, setSelectedDomain] = useState(null);
+  const [activeTab, setActiveTab] = useState('details');
+
+  // Domain management state
   const [managementData, setManagementData] = useState({});
-  const [savingNS, setSavingNS] = useState(false);
   const [nsInputs, setNsInputs] = useState(['', '', '', '']);
-  const [togglingAutoRenew, setTogglingAutoRenew] = useState(null);
-  const [togglingPrivacy, setTogglingPrivacy] = useState(null);
-  const [togglingLock, setTogglingLock] = useState(null);
-  const [showContacts, setShowContacts] = useState({});
+  const [savingNS, setSavingNS] = useState(false);
+  const [togglingAutoRenew, setTogglingAutoRenew] = useState(false);
+  const [togglingPrivacy, setTogglingPrivacy] = useState(false);
+  const [togglingLock, setTogglingLock] = useState(false);
+  const [showContacts, setShowContacts] = useState(false);
+  const [privacyPurchaseDomain, setPrivacyPurchaseDomain] = useState(null);
 
   const fetchDomains = useCallback(async () => {
+    setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/domains`, {
+      const params = new URLSearchParams({
+        page: page.toString(),
+        limit: '20'
+      });
+
+      if (search) params.append('search', search);
+      if (statusFilter) params.append('status', statusFilter);
+      if (expiringFilter) params.append('expiring', expiringFilter);
+
+      const res = await fetch(`${API_URL}/domains?${params}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
 
       if (res.ok) {
         const data = await res.json();
-        setDomains(data);
+        // Handle both array response and paginated response
+        if (Array.isArray(data)) {
+          setDomains(data);
+          setTotal(data.length);
+          setTotalPages(1);
+        } else {
+          setDomains(data.domains || []);
+          setTotal(data.total || data.domains?.length || 0);
+          setTotalPages(data.totalPages || 1);
+        }
       } else {
         setError('Failed to load domains');
       }
@@ -36,7 +72,7 @@ function Dashboard() {
       setError('Connection error');
     }
     setLoading(false);
-  }, [token]);
+  }, [token, page, search, statusFilter, expiringFilter]);
 
   useEffect(() => {
     fetchDomains();
@@ -44,8 +80,6 @@ function Dashboard() {
 
   const fetchDomainDetails = async (domain) => {
     try {
-      const [sld, tld] = domain.domain_name.split('.');
-
       // Fetch nameservers
       const nsRes = await fetch(`${API_URL}/domains/${domain.id}/nameservers`, {
         headers: { 'Authorization': `Bearer ${token}` }
@@ -64,31 +98,30 @@ function Dashboard() {
       // Initialize NS inputs
       const ns = nsData.nameservers || [];
       setNsInputs([ns[0] || '', ns[1] || '', ns[2] || '', ns[3] || '']);
-
     } catch (err) {
       console.error('Error fetching domain details:', err);
     }
   };
 
-  const toggleExpand = (domain) => {
-    if (expandedDomain === domain.id) {
-      setExpandedDomain(null);
+  const openDomainModal = (domain) => {
+    setSelectedDomain(domain);
+    setActiveTab('details');
+    setShowContacts(false);
+
+    if (!managementData[domain.id]) {
+      setManagementData(prev => ({
+        ...prev,
+        [domain.id]: { loading: true }
+      }));
+      fetchDomainDetails(domain);
     } else {
-      setExpandedDomain(domain.id);
-      if (!managementData[domain.id]) {
-        setManagementData(prev => ({
-          ...prev,
-          [domain.id]: { loading: true }
-        }));
-        fetchDomainDetails(domain);
-      } else {
-        const ns = managementData[domain.id]?.nameservers || [];
-        setNsInputs([ns[0] || '', ns[1] || '', ns[2] || '', ns[3] || '']);
-      }
+      const ns = managementData[domain.id]?.nameservers || [];
+      setNsInputs([ns[0] || '', ns[1] || '', ns[2] || '', ns[3] || '']);
     }
   };
 
-  const handleSaveNameservers = async (domain) => {
+  const handleSaveNameservers = async () => {
+    if (!selectedDomain) return;
     setSavingNS(true);
     try {
       const nameservers = nsInputs.filter(ns => ns.trim());
@@ -99,7 +132,7 @@ function Dashboard() {
         return;
       }
 
-      const res = await fetch(`${API_URL}/domains/${domain.id}/nameservers`, {
+      const res = await fetch(`${API_URL}/domains/${selectedDomain.id}/nameservers`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -112,7 +145,7 @@ function Dashboard() {
         toast.success('Nameservers updated');
         setManagementData(prev => ({
           ...prev,
-          [domain.id]: { ...prev[domain.id], nameservers }
+          [selectedDomain.id]: { ...prev[selectedDomain.id], nameservers }
         }));
       } else {
         const data = await res.json();
@@ -124,12 +157,12 @@ function Dashboard() {
     setSavingNS(false);
   };
 
-  const handleToggleAutoRenew = async (domain) => {
-    if (togglingAutoRenew === domain.id) return; // Prevent double-click
-    setTogglingAutoRenew(domain.id);
+  const handleToggleAutoRenew = async () => {
+    if (!selectedDomain || togglingAutoRenew) return;
+    setTogglingAutoRenew(true);
     try {
-      const newValue = !domain.auto_renew;
-      const res = await fetch(`${API_URL}/domains/${domain.id}/autorenew`, {
+      const newValue = !selectedDomain.auto_renew;
+      const res = await fetch(`${API_URL}/domains/${selectedDomain.id}/autorenew`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -140,8 +173,9 @@ function Dashboard() {
 
       if (res.ok) {
         toast.success(`Auto-renew ${newValue ? 'enabled' : 'disabled'}`);
+        setSelectedDomain(prev => ({ ...prev, auto_renew: newValue }));
         setDomains(prev => prev.map(d =>
-          d.id === domain.id ? { ...d, auto_renew: newValue } : d
+          d.id === selectedDomain.id ? { ...d, auto_renew: newValue } : d
         ));
       } else {
         const data = await res.json();
@@ -150,16 +184,39 @@ function Dashboard() {
     } catch (err) {
       toast.error("Connection error");
     } finally {
-      setTogglingAutoRenew(null);
+      setTogglingAutoRenew(false);
     }
   };
 
-  const handleTogglePrivacy = async (domain) => {
-    if (togglingPrivacy === domain.id) return; // Prevent double-click
-    setTogglingPrivacy(domain.id);
+  const handleTogglePrivacy = async () => {
+    if (!selectedDomain || togglingPrivacy) return;
+
+    const newValue = !selectedDomain.privacy_enabled;
+
+    // If trying to enable privacy, check if payment is required
+    if (newValue) {
+      setTogglingPrivacy(true);
+      try {
+        const statusRes = await fetch(`${API_URL}/domains/${selectedDomain.id}/privacy`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+
+        if (statusRes.ok) {
+          const status = await statusRes.json();
+          if (status.willCharge) {
+            setTogglingPrivacy(false);
+            setPrivacyPurchaseDomain(selectedDomain);
+            return;
+          }
+        }
+      } catch (err) {
+        console.error('Error checking privacy status:', err);
+      }
+    }
+
+    setTogglingPrivacy(true);
     try {
-      const newValue = !domain.privacy_enabled;
-      const res = await fetch(`${API_URL}/domains/${domain.id}/privacy`, {
+      const res = await fetch(`${API_URL}/domains/${selectedDomain.id}/privacy`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -170,38 +227,43 @@ function Dashboard() {
 
       if (res.ok) {
         toast.success(`WHOIS privacy ${newValue ? 'enabled' : 'disabled'}`);
+        setSelectedDomain(prev => ({ ...prev, privacy_enabled: newValue }));
         setDomains(prev => prev.map(d =>
-          d.id === domain.id ? { ...d, privacy_enabled: newValue } : d
+          d.id === selectedDomain.id ? { ...d, privacy_enabled: newValue } : d
         ));
       } else {
         const data = await res.json();
-        toast.error(data.error || 'Failed to update');
+        if (res.status === 402) {
+          setPrivacyPurchaseDomain(selectedDomain);
+        } else {
+          toast.error(data.error || 'Failed to update');
+        }
       }
     } catch (err) {
       toast.error("Connection error");
     } finally {
-      setTogglingPrivacy(null);
+      setTogglingPrivacy(false);
     }
   };
 
-  const handleAddRenewalToCart = (domain) => {
-    const [sld, tld] = domain.domain_name.split('.');
-    addToCart({
-      item_type: 'renew',
-      domain_name: sld,
-      tld: tld,
-      years: 1,
-      options: {}
-    });
-    toast.success('Renewal added to cart');
+  const handlePrivacyPurchaseSuccess = () => {
+    if (privacyPurchaseDomain) {
+      setSelectedDomain(prev =>
+        prev?.id === privacyPurchaseDomain.id ? { ...prev, privacy_enabled: true } : prev
+      );
+      setDomains(prev => prev.map(d =>
+        d.id === privacyPurchaseDomain.id ? { ...d, privacy_enabled: true } : d
+      ));
+    }
+    setPrivacyPurchaseDomain(null);
   };
 
-  const handleToggleLock = async (domain) => {
-    if (togglingLock === domain.id) return; // Prevent double-click
-    setTogglingLock(domain.id);
+  const handleToggleLock = async () => {
+    if (!selectedDomain || togglingLock) return;
+    setTogglingLock(true);
     try {
-      const newValue = !domain.lock_status;
-      const res = await fetch(`${API_URL}/domains/${domain.id}/lock`, {
+      const newValue = !selectedDomain.lock_status;
+      const res = await fetch(`${API_URL}/domains/${selectedDomain.id}/lock`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -212,8 +274,9 @@ function Dashboard() {
 
       if (res.ok) {
         toast.success(`Domain ${newValue ? 'locked' : 'unlocked'}`);
+        setSelectedDomain(prev => ({ ...prev, lock_status: newValue }));
         setDomains(prev => prev.map(d =>
-          d.id === domain.id ? { ...d, lock_status: newValue } : d
+          d.id === selectedDomain.id ? { ...d, lock_status: newValue } : d
         ));
       } else {
         const data = await res.json();
@@ -222,13 +285,14 @@ function Dashboard() {
     } catch (err) {
       toast.error("Connection error");
     } finally {
-      setTogglingLock(null);
+      setTogglingLock(false);
     }
   };
 
-  const handleGetAuthCode = async (domain) => {
+  const handleGetAuthCode = async () => {
+    if (!selectedDomain) return;
     try {
-      const res = await fetch(`${API_URL}/domains/${domain.id}/authcode`, {
+      const res = await fetch(`${API_URL}/domains/${selectedDomain.id}/authcode`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
 
@@ -236,11 +300,12 @@ function Dashboard() {
         const data = await res.json();
         setManagementData(prev => ({
           ...prev,
-          [domain.id]: { ...prev[domain.id], authCode: data.authCode }
+          [selectedDomain.id]: { ...prev[selectedDomain.id], authCode: data.authCode }
         }));
         // Also update lock status since getting auth code unlocks domain
+        setSelectedDomain(prev => ({ ...prev, lock_status: false }));
         setDomains(prev => prev.map(d =>
-          d.id === domain.id ? { ...d, lock_status: false } : d
+          d.id === selectedDomain.id ? { ...d, lock_status: false } : d
         ));
         toast.success('Auth code retrieved. Domain has been unlocked.');
       } else {
@@ -252,37 +317,50 @@ function Dashboard() {
     }
   };
 
-  const getStatusBadge = (status) => {
-    switch (status) {
-      case 'active':
-        return (
-          <span className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 text-xs font-medium rounded-full">
-            <Check className="w-3 h-3" />
-            Active
-          </span>
-        );
-      case 'pending':
-      case 'transfer_pending':
-        return (
-          <span className="inline-flex items-center gap-1 px-2 py-1 bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 text-xs font-medium rounded-full">
-            <Clock className="w-3 h-3" />
-            {status === 'transfer_pending' ? 'Transfer Pending' : 'Pending'}
-          </span>
-        );
-      case 'expired':
-        return (
-          <span className="inline-flex items-center gap-1 px-2 py-1 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 text-xs font-medium rounded-full">
-            <AlertTriangle className="w-3 h-3" />
-            Expired
-          </span>
-        );
-      default:
-        return (
-          <span className="px-2 py-1 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 text-xs font-medium rounded-full">
-            {status}
-          </span>
-        );
-    }
+  const handleAddRenewalToCart = () => {
+    if (!selectedDomain) return;
+    const parts = selectedDomain.domain_name.split('.');
+    const tld = parts.pop();
+    const sld = parts.join('.');
+    addToCart({
+      item_type: 'renew',
+      domain_name: sld,
+      tld: tld,
+      years: 1,
+      options: {}
+    });
+    toast.success('Renewal added to cart');
+  };
+
+  const StatusBadge = ({ status }) => {
+    const styles = {
+      active: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
+      pending: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400',
+      transfer_pending: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400',
+      expired: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
+      suspended: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+    };
+
+    const icons = {
+      active: <Check className="w-3 h-3" />,
+      pending: <Clock className="w-3 h-3" />,
+      transfer_pending: <Clock className="w-3 h-3" />,
+      expired: <AlertTriangle className="w-3 h-3" />,
+      suspended: <AlertTriangle className="w-3 h-3" />
+    };
+
+    return (
+      <span className={`inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-full ${styles[status] || 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'}`}>
+        {icons[status]}
+        {status === 'transfer_pending' ? 'Transfer Pending' : status?.charAt(0).toUpperCase() + status?.slice(1)}
+      </span>
+    );
+  };
+
+  const daysUntilExpiry = (date) => {
+    if (!date) return null;
+    const days = Math.ceil((new Date(date) - new Date()) / (1000 * 60 * 60 * 24));
+    return days;
   };
 
   const formatDate = (dateString) => {
@@ -294,24 +372,55 @@ function Dashboard() {
     });
   };
 
-  const getDaysUntilExpiry = (expirationDate) => {
-    if (!expirationDate) return null;
-    const days = Math.ceil((new Date(expirationDate) - new Date()) / (1000 * 60 * 60 * 24));
-    return days;
-  };
-
-  if (loading) {
-    return (
-      <div className="min-h-[60vh] flex items-center justify-center">
-        <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
+  const Pagination = () => (
+    <div className="flex items-center justify-between px-4 py-3 border-t border-slate-200 dark:border-slate-700">
+      <div className="text-sm text-slate-600 dark:text-slate-400">
+        Showing {domains.length} of {total} domains
       </div>
-    );
-  }
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => setPage(p => Math.max(1, p - 1))}
+          disabled={page === 1}
+          className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 disabled:opacity-50 hover:bg-slate-50 dark:hover:bg-slate-800"
+        >
+          <ChevronLeft className="w-4 h-4" />
+        </button>
+        <span className="text-sm text-slate-600 dark:text-slate-400">
+          Page {page} of {totalPages}
+        </span>
+        <button
+          onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+          disabled={page === totalPages}
+          className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 disabled:opacity-50 hover:bg-slate-50 dark:hover:bg-slate-800"
+        >
+          <ChevronRight className="w-4 h-4" />
+        </button>
+      </div>
+    </div>
+  );
+
+  const ToggleSwitch = ({ enabled, onChange, loading: isLoading }) => (
+    <button
+      onClick={onChange}
+      disabled={isLoading}
+      className={`relative w-11 h-6 rounded-full transition-colors ${
+        enabled ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-600'
+      } ${isLoading ? 'opacity-50' : ''}`}
+    >
+      {isLoading ? (
+        <Loader2 className="w-4 h-4 absolute top-1 left-1 animate-spin text-white" />
+      ) : (
+        <span className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${
+          enabled ? 'left-6' : 'left-1'
+        }`} />
+      )}
+    </button>
+  );
 
   return (
-    <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       {/* Header */}
-      <div className="flex items-center justify-between mb-8">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
         <div>
           <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">
             My Domains
@@ -324,9 +433,46 @@ function Dashboard() {
           onClick={() => { setLoading(true); fetchDomains(); }}
           className="btn-secondary"
         >
-          <RefreshCw className="w-4 h-4 mr-2" />
+          <RefreshCw className={`w-4 h-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
           Refresh
         </button>
+      </div>
+
+      {/* Filters */}
+      <div className="card mb-6">
+        <div className="p-4 flex flex-col sm:flex-row gap-4">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+            <input
+              type="text"
+              placeholder="Search domains..."
+              value={search}
+              onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+              className="input pl-10 w-full"
+            />
+          </div>
+          <select
+            value={statusFilter}
+            onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
+            className="input w-full sm:w-40"
+          >
+            <option value="">All Status</option>
+            <option value="active">Active</option>
+            <option value="pending">Pending</option>
+            <option value="expired">Expired</option>
+          </select>
+          <select
+            value={expiringFilter}
+            onChange={(e) => { setExpiringFilter(e.target.value); setPage(1); }}
+            className="input w-full sm:w-48"
+          >
+            <option value="">All Expiration</option>
+            <option value="7">Expiring in 7 days</option>
+            <option value="30">Expiring in 30 days</option>
+            <option value="90">Expiring in 90 days</option>
+            <option value="expired">Already Expired</option>
+          </select>
+        </div>
       </div>
 
       {error && (
@@ -335,247 +481,436 @@ function Dashboard() {
         </div>
       )}
 
-      {domains.length === 0 ? (
-        <div className="card p-12 text-center">
-          <Globe className="w-12 h-12 text-slate-300 dark:text-slate-700 mx-auto mb-4" />
-          <h2 className="text-xl font-semibold text-slate-900 dark:text-slate-100 mb-2">
-            No Domains Yet
-          </h2>
-          <p className="text-slate-600 dark:text-slate-400 mb-6">
-            Register your first domain to get started
-          </p>
-        </div>
-      ) : (
-        <div className="space-y-4">
-          {domains.map((domain) => {
-            const daysUntil = getDaysUntilExpiry(domain.expiration_date);
-            const isExpiringSoon = daysUntil !== null && daysUntil <= 30 && daysUntil > 0;
-            const isExpanded = expandedDomain === domain.id;
-            const details = managementData[domain.id];
+      {/* Domains Table */}
+      <div className="card overflow-hidden">
+        {loading ? (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
+          </div>
+        ) : domains.length === 0 ? (
+          <div className="text-center py-12">
+            <Globe className="w-12 h-12 text-slate-300 dark:text-slate-700 mx-auto mb-4" />
+            <h2 className="text-xl font-semibold text-slate-900 dark:text-slate-100 mb-2">
+              No Domains Found
+            </h2>
+            <p className="text-slate-600 dark:text-slate-400">
+              {search || statusFilter || expiringFilter
+                ? 'No domains match your filters'
+                : 'Register your first domain to get started'}
+            </p>
+          </div>
+        ) : (
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-slate-50 dark:bg-slate-800/50">
+                  <tr>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Domain</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Status</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Expires</th>
+                    <th className="px-4 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Auto-Renew</th>
+                    <th className="px-4 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Privacy</th>
+                    <th className="px-4 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Lock</th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
+                  {domains.map((domain) => {
+                    const days = daysUntilExpiry(domain.expiration_date);
+                    const isExpiringSoon = days !== null && days <= 30 && days > 0;
+                    const isExpired = days !== null && days <= 0;
 
-            return (
-              <div key={domain.id} className="card overflow-hidden">
-                {/* Main Row */}
-                <div
-                  className="flex flex-col sm:flex-row sm:items-center justify-between p-4 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/50"
-                  onClick={() => toggleExpand(domain)}
+                    return (
+                      <tr key={domain.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                        <td className="px-4 py-4">
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 bg-indigo-100 dark:bg-indigo-900/30 rounded-lg flex items-center justify-center">
+                              <Globe className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                            </div>
+                            <span className="font-mono font-medium text-slate-900 dark:text-slate-100">
+                              {domain.domain_name}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-4">
+                          <StatusBadge status={domain.status} />
+                        </td>
+                        <td className="px-4 py-4">
+                          <div className="text-sm text-slate-900 dark:text-slate-100">
+                            {formatDate(domain.expiration_date)}
+                          </div>
+                          {isExpiringSoon && (
+                            <div className="text-xs text-amber-600 dark:text-amber-400">
+                              {days} days left
+                            </div>
+                          )}
+                          {isExpired && (
+                            <div className="text-xs text-red-600 dark:text-red-400">
+                              Expired
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-4 py-4 text-center">
+                          {domain.auto_renew ? (
+                            <Check className="w-5 h-5 text-emerald-500 mx-auto" />
+                          ) : (
+                            <X className="w-5 h-5 text-slate-400 mx-auto" />
+                          )}
+                        </td>
+                        <td className="px-4 py-4 text-center">
+                          {domain.privacy_enabled ? (
+                            <Shield className="w-5 h-5 text-emerald-500 mx-auto" />
+                          ) : (
+                            <X className="w-5 h-5 text-slate-400 mx-auto" />
+                          )}
+                        </td>
+                        <td className="px-4 py-4 text-center">
+                          {domain.lock_status ? (
+                            <Lock className="w-5 h-5 text-emerald-500 mx-auto" />
+                          ) : (
+                            <Unlock className="w-5 h-5 text-slate-400 mx-auto" />
+                          )}
+                        </td>
+                        <td className="px-4 py-4 text-right">
+                          <button
+                            onClick={() => openDomainModal(domain)}
+                            className="p-2 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors"
+                            title="Manage Domain"
+                          >
+                            <Eye className="w-5 h-5" />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <Pagination />
+          </>
+        )}
+      </div>
+
+      {/* Domain Detail Modal */}
+      {selectedDomain && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl max-w-3xl w-full max-h-[90vh] overflow-hidden">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 dark:border-slate-700 bg-gradient-to-r from-indigo-500 to-purple-600">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-white/20 rounded-lg">
+                  <Globe className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold text-white font-mono">
+                    {selectedDomain.domain_name}
+                  </h2>
+                  <p className="text-sm text-white/80">
+                    Domain Management
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setSelectedDomain(null)}
+                className="p-2 text-white/80 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Tabs */}
+            <div className="flex border-b border-slate-200 dark:border-slate-700">
+              {[
+                { id: 'details', label: 'Details', icon: Globe },
+                { id: 'nameservers', label: 'Nameservers', icon: Server },
+                { id: 'settings', label: 'Settings', icon: Settings },
+                { id: 'transfer', label: 'Transfer', icon: Key }
+              ].map(tab => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
+                    activeTab === tab.id
+                      ? 'text-indigo-600 dark:text-indigo-400 border-b-2 border-indigo-600 dark:border-indigo-400 bg-indigo-50 dark:bg-indigo-900/20'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700/50'
+                  }`}
                 >
-                  <div className="flex items-center gap-4 mb-3 sm:mb-0">
-                    <div className="w-10 h-10 bg-indigo-100 dark:bg-indigo-900/30 rounded-lg flex items-center justify-center">
-                      <Globe className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+                  <tab.icon className="w-4 h-4" />
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Modal Content */}
+            <div className="p-6 overflow-y-auto max-h-[calc(90vh-12rem)]">
+              {/* Details Tab */}
+              {activeTab === 'details' && (
+                <div className="space-y-6">
+                  {/* Status Grid */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                    <div className="p-4 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
+                      <p className="text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-1">Status</p>
+                      <StatusBadge status={selectedDomain.status} />
                     </div>
-                    <div>
-                      <h3 className="font-mono font-semibold text-slate-900 dark:text-slate-100">
-                        {domain.domain_name}
-                      </h3>
-                      <div className="flex items-center gap-3 mt-1">
-                        {getStatusBadge(domain.status)}
-                        {domain.privacy_enabled && (
-                          <span className="text-xs text-slate-500 flex items-center gap-1">
-                            <Shield className="w-3 h-3" /> Privacy
-                          </span>
-                        )}
-                        {domain.lock_status && (
-                          <span className="text-xs text-slate-500 flex items-center gap-1">
-                            <Lock className="w-3 h-3" /> Locked
-                          </span>
-                        )}
-                      </div>
+                    <div className="p-4 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
+                      <p className="text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-1">Expires</p>
+                      <p className="text-sm font-medium text-slate-900 dark:text-slate-100">
+                        {formatDate(selectedDomain.expiration_date)}
+                      </p>
+                    </div>
+                    <div className="p-4 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
+                      <p className="text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-1">Auto-Renew</p>
+                      <p className={`text-sm font-medium ${selectedDomain.auto_renew ? 'text-emerald-600' : 'text-slate-500'}`}>
+                        {selectedDomain.auto_renew ? 'Enabled' : 'Disabled'}
+                      </p>
+                    </div>
+                    <div className="p-4 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
+                      <p className="text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-1">Privacy</p>
+                      <p className={`text-sm font-medium ${selectedDomain.privacy_enabled ? 'text-emerald-600' : 'text-slate-500'}`}>
+                        {selectedDomain.privacy_enabled ? 'Protected' : 'Public'}
+                      </p>
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-6">
-                    <div className="text-right hidden sm:block">
-                      <p className="text-sm text-slate-900 dark:text-slate-100">
-                        Expires: {formatDate(domain.expiration_date)}
-                      </p>
-                      {isExpiringSoon && (
-                        <p className="text-xs text-amber-600 dark:text-amber-400">
-                          {daysUntil} days remaining
-                        </p>
+                  {/* Nameservers Preview */}
+                  <div className="p-4 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
+                    <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-3 flex items-center gap-2">
+                      <Server className="w-4 h-4" />
+                      Current Nameservers
+                    </h4>
+                    <div className="space-y-1">
+                      {(managementData[selectedDomain.id]?.nameservers || []).length > 0 ? (
+                        managementData[selectedDomain.id].nameservers.map((ns, idx) => (
+                          <p key={idx} className="font-mono text-sm text-slate-600 dark:text-slate-400">
+                            {ns}
+                          </p>
+                        ))
+                      ) : managementData[selectedDomain.id]?.loading ? (
+                        <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
+                      ) : (
+                        <p className="text-sm text-slate-500">No nameservers configured</p>
                       )}
                     </div>
-                    <button className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200">
-                      {isExpanded ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+                  </div>
+
+                  {/* WHOIS Contacts Section */}
+                  <div className="p-4 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
+                    <button
+                      onClick={() => setShowContacts(!showContacts)}
+                      className="w-full flex items-center justify-between"
+                    >
+                      <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                        <Users className="w-4 h-4" />
+                        WHOIS Contacts
+                      </h4>
+                      {showContacts ? (
+                        <ChevronLeft className="w-4 h-4 text-slate-400 rotate-90" />
+                      ) : (
+                        <ChevronRight className="w-4 h-4 text-slate-400 rotate-90" />
+                      )}
                     </button>
+                    {showContacts && (
+                      <div className="mt-4">
+                        <DomainContactsPanel
+                          domainId={selectedDomain.id}
+                          domainName={selectedDomain.domain_name}
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Renew Button */}
+                  <button
+                    onClick={handleAddRenewalToCart}
+                    className="w-full flex items-center justify-center gap-2 p-4 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-400 rounded-xl border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 dark:hover:bg-indigo-900/30 transition-colors"
+                  >
+                    <ShoppingCart className="w-5 h-5" />
+                    <span className="font-medium">Add Renewal to Cart</span>
+                  </button>
+                </div>
+              )}
+
+              {/* Nameservers Tab */}
+              {activeTab === 'nameservers' && (
+                <div className="space-y-4">
+                  <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-200 dark:border-blue-800">
+                    <p className="text-sm text-blue-700 dark:text-blue-400">
+                      <strong>Note:</strong> Changes to nameservers may take up to 48 hours to propagate globally.
+                      At least 2 nameservers are required.
+                    </p>
+                  </div>
+
+                  <div className="space-y-3">
+                    {nsInputs.map((ns, idx) => (
+                      <div key={idx}>
+                        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                          Nameserver {idx + 1} {idx < 2 && <span className="text-red-500">*</span>}
+                        </label>
+                        <input
+                          type="text"
+                          value={ns}
+                          onChange={(e) => {
+                            const newNs = [...nsInputs];
+                            newNs[idx] = e.target.value;
+                            setNsInputs(newNs);
+                          }}
+                          placeholder={`ns${idx + 1}.example.com`}
+                          className="input w-full font-mono"
+                        />
+                      </div>
+                    ))}
+                  </div>
+
+                  <button
+                    onClick={handleSaveNameservers}
+                    disabled={savingNS}
+                    className="btn-primary w-full"
+                  >
+                    {savingNS ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Saving...
+                      </>
+                    ) : (
+                      'Save Nameservers'
+                    )}
+                  </button>
+                </div>
+              )}
+
+              {/* Settings Tab */}
+              {activeTab === 'settings' && (
+                <div className="space-y-4">
+                  {/* Auto-Renew */}
+                  <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <RefreshCw className="w-4 h-4 text-slate-500" />
+                        <span className="font-medium text-slate-900 dark:text-slate-100">Auto-Renew</span>
+                      </div>
+                      <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+                        Automatically renew this domain before expiration
+                      </p>
+                    </div>
+                    <ToggleSwitch
+                      enabled={selectedDomain.auto_renew}
+                      onChange={handleToggleAutoRenew}
+                      loading={togglingAutoRenew}
+                    />
+                  </div>
+
+                  {/* WHOIS Privacy */}
+                  <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <Shield className="w-4 h-4 text-slate-500" />
+                        <span className="font-medium text-slate-900 dark:text-slate-100">WHOIS Privacy</span>
+                      </div>
+                      <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+                        Hide your personal information from public WHOIS lookups
+                      </p>
+                    </div>
+                    <ToggleSwitch
+                      enabled={selectedDomain.privacy_enabled}
+                      onChange={handleTogglePrivacy}
+                      loading={togglingPrivacy}
+                    />
+                  </div>
+
+                  {/* Transfer Lock */}
+                  <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        {selectedDomain.lock_status ? (
+                          <Lock className="w-4 h-4 text-slate-500" />
+                        ) : (
+                          <Unlock className="w-4 h-4 text-slate-500" />
+                        )}
+                        <span className="font-medium text-slate-900 dark:text-slate-100">Transfer Lock</span>
+                      </div>
+                      <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+                        Prevent unauthorized domain transfers
+                      </p>
+                    </div>
+                    <ToggleSwitch
+                      enabled={selectedDomain.lock_status}
+                      onChange={handleToggleLock}
+                      loading={togglingLock}
+                    />
                   </div>
                 </div>
+              )}
 
-                {/* Expanded Management Panel */}
-                {isExpanded && (
-                  <div className="border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 p-6">
-                    {details?.loading ? (
-                      <div className="flex items-center justify-center py-8">
-                        <Loader2 className="w-6 h-6 animate-spin text-indigo-600" />
+              {/* Transfer Tab */}
+              {activeTab === 'transfer' && (
+                <div className="space-y-6">
+                  <div className="p-4 bg-amber-50 dark:bg-amber-900/20 rounded-xl border border-amber-200 dark:border-amber-800">
+                    <div className="flex items-start gap-3">
+                      <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
+                      <div>
+                        <h4 className="font-medium text-amber-800 dark:text-amber-300">Transfer Out</h4>
+                        <p className="text-sm text-amber-700 dark:text-amber-400 mt-1">
+                          To transfer this domain to another registrar, you'll need the EPP auth code below.
+                          Getting the auth code will automatically unlock the domain.
+                        </p>
                       </div>
-                    ) : (
-                      <div className="grid md:grid-cols-2 gap-6">
-                        {/* Nameservers */}
-                        <div>
-                          <h4 className="font-semibold text-slate-900 dark:text-slate-100 mb-3 flex items-center gap-2">
-                            <Server className="w-4 h-4" />
-                            Nameservers
-                          </h4>
-                          <div className="space-y-2">
-                            {nsInputs.map((ns, idx) => (
-                              <input
-                                key={idx}
-                                type="text"
-                                value={ns}
-                                onChange={(e) => {
-                                  const newNs = [...nsInputs];
-                                  newNs[idx] = e.target.value;
-                                  setNsInputs(newNs);
-                                }}
-                                placeholder={`NS${idx + 1} (e.g., ns${idx + 1}.example.com)`}
-                                className="input text-sm"
-                                onClick={(e) => e.stopPropagation()}
-                              />
-                            ))}
-                          </div>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); handleSaveNameservers(domain); }}
-                            disabled={savingNS}
-                            className="btn-primary mt-3 text-sm py-2"
-                          >
-                            {savingNS ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Save Nameservers'}
-                          </button>
-                        </div>
-
-                        {/* Quick Actions */}
-                        <div>
-                          <h4 className="font-semibold text-slate-900 dark:text-slate-100 mb-3 flex items-center gap-2">
-                            <Settings className="w-4 h-4" />
-                            Settings
-                          </h4>
-                          <div className="space-y-3">
-                            {/* Auto-Renew Toggle */}
-                            <div className="flex items-center justify-between p-3 bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700">
-                              <div className="flex items-center gap-2">
-                                <RefreshCw className="w-4 h-4 text-slate-500" />
-                                <span className="text-sm text-slate-700 dark:text-slate-300">Auto-Renew</span>
-                              </div>
-                              <button
-                                onClick={(e) => { e.stopPropagation(); handleToggleAutoRenew(domain); }}
-                                className={`relative w-11 h-6 rounded-full transition-colors ${
-                                  domain.auto_renew ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-600'
-                                }`}
-                              >
-                                <span className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${
-                                  domain.auto_renew ? 'left-6' : 'left-1'
-                                }`} />
-                              </button>
-                            </div>
-
-                            {/* Privacy Toggle */}
-                            <div className="flex items-center justify-between p-3 bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700">
-                              <div className="flex items-center gap-2">
-                                <Shield className="w-4 h-4 text-slate-500" />
-                                <span className="text-sm text-slate-700 dark:text-slate-300">WHOIS Privacy</span>
-                              </div>
-                              <button
-                                onClick={(e) => { e.stopPropagation(); handleTogglePrivacy(domain); }}
-                                className={`relative w-11 h-6 rounded-full transition-colors ${
-                                  domain.privacy_enabled ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-600'
-                                }`}
-                              >
-                                <span className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${
-                                  domain.privacy_enabled ? 'left-6' : 'left-1'
-                                }`} />
-                              </button>
-                            </div>
-
-                            {/* Domain Lock Toggle */}
-                            <div className="flex items-center justify-between p-3 bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700">
-                              <div className="flex items-center gap-2">
-                                {domain.lock_status ? (
-                                  <Lock className="w-4 h-4 text-slate-500" />
-                                ) : (
-                                  <Unlock className="w-4 h-4 text-slate-500" />
-                                )}
-                                <span className="text-sm text-slate-700 dark:text-slate-300">Transfer Lock</span>
-                              </div>
-                              <button
-                                onClick={(e) => { e.stopPropagation(); handleToggleLock(domain); }}
-                                className={`relative w-11 h-6 rounded-full transition-colors ${
-                                  domain.lock_status ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-600'
-                                }`}
-                              >
-                                <span className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${
-                                  domain.lock_status ? 'left-6' : 'left-1'
-                                }`} />
-                              </button>
-                            </div>
-
-                            {/* Auth Code / Transfer Out */}
-                            <div className="p-3 bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700">
-                              <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                  <Key className="w-4 h-4 text-slate-500" />
-                                  <span className="text-sm text-slate-700 dark:text-slate-300">Auth Code (EPP)</span>
-                                </div>
-                                <button
-                                  onClick={(e) => { e.stopPropagation(); handleGetAuthCode(domain); }}
-                                  className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline"
-                                >
-                                  Get Code
-                                </button>
-                              </div>
-                              {details?.authCode && (
-                                <div className="mt-2 p-2 bg-slate-100 dark:bg-slate-800 rounded font-mono text-sm text-slate-900 dark:text-slate-100 break-all">
-                                  {details.authCode}
-                                </div>
-                              )}
-                            </div>
-
-                            {/* Renew Button */}
-                            <button
-                              onClick={(e) => { e.stopPropagation(); handleAddRenewalToCart(domain); }}
-                              className="w-full flex items-center justify-center gap-2 p-3 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-400 rounded-lg border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 dark:hover:bg-indigo-900/30 transition-colors"
-                            >
-                              <ShoppingCart className="w-4 h-4" />
-                              <span className="text-sm font-medium">Renew Domain</span>
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* WHOIS Contacts Section */}
-                    {isExpanded && !details?.loading && (
-                      <div className="border-t border-slate-200 dark:border-slate-700 pt-4 mt-4">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setShowContacts(prev => ({ ...prev, [domain.id]: !prev[domain.id] }));
-                          }}
-                          className="flex items-center justify-between w-full text-left px-1"
-                        >
-                          <h4 className="font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                            <Users className="w-4 h-4" />
-                            WHOIS Contacts
-                          </h4>
-                          {showContacts[domain.id] ? (
-                            <ChevronUp className="w-4 h-4 text-slate-400" />
-                          ) : (
-                            <ChevronDown className="w-4 h-4 text-slate-400" />
-                          )}
-                        </button>
-
-                        {showContacts[domain.id] && (
-                          <DomainContactsPanel
-                            domainId={domain.id}
-                            domainName={domain.domain_name}
-                          />
-                        )}
-                      </div>
-                    )}
+                    </div>
                   </div>
-                )}
-              </div>
-            );
-          })}
+
+                  {/* Domain Status */}
+                  <div className="p-4 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
+                    <div className="flex items-center justify-between mb-4">
+                      <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Transfer Lock Status</span>
+                      <span className={`text-sm font-medium ${selectedDomain.lock_status ? 'text-emerald-600' : 'text-amber-600'}`}>
+                        {selectedDomain.lock_status ? 'Locked' : 'Unlocked'}
+                      </span>
+                    </div>
+
+                    {/* Auth Code */}
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                        EPP Auth Code
+                      </label>
+                      {managementData[selectedDomain.id]?.authCode ? (
+                        <div className="p-3 bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-600 font-mono text-sm break-all">
+                          {managementData[selectedDomain.id].authCode}
+                        </div>
+                      ) : (
+                        <button
+                          onClick={handleGetAuthCode}
+                          className="btn-secondary w-full"
+                        >
+                          <Key className="w-4 h-4 mr-2" />
+                          Get Auth Code
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="p-4 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
+                    <h4 className="font-medium text-slate-900 dark:text-slate-100 mb-2">Transfer Steps</h4>
+                    <ol className="text-sm text-slate-600 dark:text-slate-400 space-y-2 list-decimal list-inside">
+                      <li>Get the EPP auth code above (domain will be unlocked)</li>
+                      <li>Initiate a transfer at your new registrar</li>
+                      <li>Provide the auth code when requested</li>
+                      <li>Approve the transfer confirmation email</li>
+                      <li>Transfer typically completes within 5-7 days</li>
+                    </ol>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
+      )}
+
+      {/* Privacy Purchase Modal */}
+      {privacyPurchaseDomain && (
+        <PrivacyPurchaseModal
+          domain={privacyPurchaseDomain}
+          onClose={() => setPrivacyPurchaseDomain(null)}
+          onSuccess={handlePrivacyPurchaseSuccess}
+        />
       )}
     </div>
   );

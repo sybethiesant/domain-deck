@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Loader2, User, Upload, Edit3, Check } from 'lucide-react';
+import { X, Loader2, Upload, Edit3, Check, Copy } from 'lucide-react';
 import { useAuth } from '../../App';
 import { API_URL } from '../../config/api';
 import toast from 'react-hot-toast';
@@ -16,11 +16,14 @@ export default function DomainContactEditModal({
   domainName,
   contactType, // Initial contact type to select
   currentContact,
+  registrantContact, // Registrant data for copy functionality
   onClose,
   onSaved
 }) {
   const { token } = useAuth();
-  const [mode, setMode] = useState('import'); // 'import' or 'manual'
+  // Check if registrant has data to enable copy option
+  const hasRegistrantData = registrantContact && (registrantContact.firstName || registrantContact.first_name);
+  const [mode, setMode] = useState('import'); // 'import', 'manual', or 'registrant'
   const [savedContacts, setSavedContacts] = useState([]);
   const [loadingContacts, setLoadingContacts] = useState(true);
   const [selectedContactId, setSelectedContactId] = useState(null);
@@ -58,15 +61,17 @@ export default function DomainContactEditModal({
         });
         if (res.ok) {
           const data = await res.json();
-          setSavedContacts(data.contacts || []);
+          // API returns array directly, not { contacts: [] }
+          const contacts = Array.isArray(data) ? data : (data.contacts || []);
+          setSavedContacts(contacts);
           // Auto-select default contact if available
-          const defaultContact = data.contacts?.find(c => c.is_default);
+          const defaultContact = contacts.find(c => c.is_default);
           if (defaultContact) {
             setSelectedContactId(defaultContact.id);
-          } else if (data.contacts?.length > 0) {
-            setSelectedContactId(data.contacts[0].id);
+          } else if (contacts.length > 0) {
+            setSelectedContactId(contacts[0].id);
           }
-          if (data.contacts?.length === 0) {
+          if (contacts.length === 0) {
             setMode('manual');
           }
         }
@@ -105,8 +110,24 @@ export default function DomainContactEditModal({
 
     let contactToSave;
 
+    // Copy from Registrant mode
+    if (mode === 'registrant' && hasRegistrantData) {
+      contactToSave = {
+        firstName: registrantContact.firstName || registrantContact.first_name,
+        lastName: registrantContact.lastName || registrantContact.last_name,
+        organization: registrantContact.organization || registrantContact.company || '',
+        email: registrantContact.email || registrantContact.emailAddress,
+        phone: registrantContact.phone,
+        address1: registrantContact.address1 || registrantContact.address_line1,
+        address2: registrantContact.address2 || registrantContact.address_line2 || '',
+        city: registrantContact.city || registrantContact.City,
+        state: registrantContact.state || registrantContact.stateProvince,
+        postalCode: registrantContact.postalCode || registrantContact.postal_code,
+        country: registrantContact.country || registrantContact.Country || 'US'
+      };
+    }
     // Use import mode if we have saved contacts and either selected one or can use the first
-    if (mode === 'import' && savedContacts.length > 0) {
+    else if (mode === 'import' && savedContacts.length > 0) {
       // Use selected contact, or fall back to first saved contact
       const contactId = selectedContactId || savedContacts[0]?.id;
       const selected = savedContacts.find(c => c.id === contactId);
@@ -246,12 +267,27 @@ export default function DomainContactEditModal({
               </div>
 
               {/* Mode selector */}
-              {savedContacts.length > 0 && (
-                <div className="flex gap-4 mb-6">
+              <div className="flex flex-wrap gap-3 mb-6">
+                {/* Copy from Registrant option - only show for non-registrant contact types */}
+                {hasRegistrantData && contactType !== 'registrant' && (
+                  <button
+                    type="button"
+                    onClick={() => setMode('registrant')}
+                    className={`flex-1 min-w-[140px] py-3 px-4 rounded-lg border-2 transition-colors flex items-center justify-center gap-2 ${
+                      mode === 'registrant'
+                        ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300'
+                        : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 text-slate-600 dark:text-slate-400'
+                    }`}
+                  >
+                    <Copy className="w-4 h-4" />
+                    Copy from Registrant
+                  </button>
+                )}
+                {savedContacts.length > 0 && (
                   <button
                     type="button"
                     onClick={() => setMode('import')}
-                    className={`flex-1 py-3 px-4 rounded-lg border-2 transition-colors flex items-center justify-center gap-2 ${
+                    className={`flex-1 min-w-[140px] py-3 px-4 rounded-lg border-2 transition-colors flex items-center justify-center gap-2 ${
                       mode === 'import'
                         ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300'
                         : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 text-slate-600 dark:text-slate-400'
@@ -260,18 +296,63 @@ export default function DomainContactEditModal({
                     <Upload className="w-4 h-4" />
                     Import from Saved
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => setMode('manual')}
-                    className={`flex-1 py-3 px-4 rounded-lg border-2 transition-colors flex items-center justify-center gap-2 ${
-                      mode === 'manual'
-                        ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300'
-                        : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 text-slate-600 dark:text-slate-400'
-                    }`}
-                  >
-                    <Edit3 className="w-4 h-4" />
-                    Enter Manually
-                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setMode('manual')}
+                  className={`flex-1 min-w-[140px] py-3 px-4 rounded-lg border-2 transition-colors flex items-center justify-center gap-2 ${
+                    mode === 'manual'
+                      ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300'
+                      : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 text-slate-600 dark:text-slate-400'
+                  }`}
+                >
+                  <Edit3 className="w-4 h-4" />
+                  Enter Manually
+                </button>
+              </div>
+
+              {/* Registrant copy mode */}
+              {mode === 'registrant' && hasRegistrantData && (
+                <div className="space-y-4">
+                  <div className="p-4 bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 rounded-lg">
+                    <p className="text-sm text-indigo-700 dark:text-indigo-300 mb-3">
+                      The following contact information from the Registrant will be copied:
+                    </p>
+                    <div className="grid sm:grid-cols-2 gap-3 text-sm">
+                      <div>
+                        <span className="text-indigo-500 dark:text-indigo-400">Name:</span>
+                        <span className="ml-2 text-slate-700 dark:text-slate-300">
+                          {registrantContact.firstName || registrantContact.first_name} {registrantContact.lastName || registrantContact.last_name}
+                        </span>
+                      </div>
+                      {(registrantContact.organization || registrantContact.company) && (
+                        <div>
+                          <span className="text-indigo-500 dark:text-indigo-400">Org:</span>
+                          <span className="ml-2 text-slate-700 dark:text-slate-300">
+                            {registrantContact.organization || registrantContact.company}
+                          </span>
+                        </div>
+                      )}
+                      <div>
+                        <span className="text-indigo-500 dark:text-indigo-400">Email:</span>
+                        <span className="ml-2 text-slate-700 dark:text-slate-300">
+                          {registrantContact.email || registrantContact.emailAddress}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-indigo-500 dark:text-indigo-400">Phone:</span>
+                        <span className="ml-2 text-slate-700 dark:text-slate-300">
+                          {registrantContact.phone}
+                        </span>
+                      </div>
+                      <div className="sm:col-span-2">
+                        <span className="text-indigo-500 dark:text-indigo-400">Address:</span>
+                        <span className="ml-2 text-slate-700 dark:text-slate-300">
+                          {registrantContact.address1 || registrantContact.address_line1}, {registrantContact.city || registrantContact.City}, {registrantContact.state || registrantContact.stateProvince} {registrantContact.postalCode || registrantContact.postal_code}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               )}
 
@@ -281,7 +362,7 @@ export default function DomainContactEditModal({
                   <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
                     Select a saved contact to apply:
                   </label>
-                  <div className="space-y-2 max-h-64 overflow-y-auto">
+                  <div className="space-y-3 max-h-96 overflow-y-auto">
                     {savedContacts.map(contact => (
                       <label
                         key={contact.id}
@@ -299,23 +380,49 @@ export default function DomainContactEditModal({
                           onChange={() => setSelectedContactId(contact.id)}
                           className="sr-only"
                         />
-                        <div className="flex items-start gap-3">
-                          <User className="w-5 h-5 text-slate-400 mt-0.5" />
-                          <div className="flex-1 min-w-0">
+                        <div className="space-y-2">
+                          {/* Name and Default Badge */}
+                          <div className="flex items-center justify-between">
                             <div className="font-medium text-slate-900 dark:text-slate-100">
                               {contact.first_name} {contact.last_name}
-                              {contact.is_default && (
-                                <span className="ml-2 text-xs bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 px-2 py-0.5 rounded">
-                                  Default
-                                </span>
-                              )}
                             </div>
-                            <div className="text-sm text-slate-500 dark:text-slate-400 truncate">
-                              {contact.email}
+                            {contact.is_default && (
+                              <span className="text-xs bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 px-2 py-0.5 rounded">
+                                Default
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Organization (if present) */}
+                          {contact.organization && (
+                            <div className="text-sm text-slate-600 dark:text-slate-300">
+                              {contact.organization}
                             </div>
-                            <div className="text-sm text-slate-500 dark:text-slate-400">
-                              {contact.city}, {contact.state}
+                          )}
+
+                          {/* Contact Details Grid */}
+                          <div className="grid sm:grid-cols-2 gap-x-4 gap-y-1 text-sm text-slate-500 dark:text-slate-400">
+                            {/* Email */}
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-slate-400">Email:</span>
+                              <span className="truncate">{contact.email}</span>
                             </div>
+
+                            {/* Phone */}
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-slate-400">Phone:</span>
+                              <span>{contact.phone}</span>
+                            </div>
+                          </div>
+
+                          {/* Address */}
+                          <div className="text-sm text-slate-500 dark:text-slate-400 border-t border-slate-200 dark:border-slate-700 pt-2 mt-2">
+                            <div>{contact.address_line1}</div>
+                            {contact.address_line2 && <div>{contact.address_line2}</div>}
+                            <div>
+                              {contact.city}, {contact.state} {contact.postal_code}
+                            </div>
+                            <div className="text-slate-400">{contact.country || 'US'}</div>
                           </div>
                         </div>
                       </label>

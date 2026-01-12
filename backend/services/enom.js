@@ -537,7 +537,10 @@ class EnomAPI {
 
     // Parse privacy status
     if (privacyResult.status === 'fulfilled') {
-      result.privacyEnabled = privacyResult.value.WPPSEnabled === '1';
+      const wpps = privacyResult.value;
+      result.privacyEnabled = wpps.WPPSEnabled === '1';
+      result.privacyExpDate = wpps.WPPSExpDate || wpps['wpps-exp-date'] || null;
+      result.privacyPurchased = !!(result.privacyExpDate && new Date(result.privacyExpDate) > new Date());
     }
 
     return result;
@@ -566,6 +569,36 @@ class EnomAPI {
       };
     } catch (error) {
       console.error(`eNom privacy error for ${sld}.${tld}:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Get WHOIS privacy service status
+   * @param {string} sld - Second level domain
+   * @param {string} tld - Top level domain
+   * @returns {Promise<object>} - Privacy status including expiration
+   */
+  async getPrivacyStatus(sld, tld) {
+    try {
+      const response = await this.request('GetWPPSInfo', { sld, tld });
+
+      const expDate = response.WPPSExpDate || response['wpps-exp-date'] || null;
+      const isEnabled = response.WPPSEnabled === '1';
+      const isPurchased = !!(expDate && new Date(expDate) > new Date());
+
+      return {
+        domainName: `${sld}.${tld}`,
+        enabled: isEnabled,
+        purchased: isPurchased,
+        expirationDate: expDate,
+        // If purchased but not enabled, can enable for free
+        // If not purchased, enabling will incur a charge
+        canEnableFree: isPurchased && !isEnabled,
+        willCharge: !isPurchased
+      };
+    } catch (error) {
+      console.error(`eNom get privacy status error for ${sld}.${tld}:`, error.message);
       throw error;
     }
   }
@@ -1004,7 +1037,7 @@ class EnomAPI {
     return {
       firstName: getField('FirstName'),
       lastName: getField('LastName'),
-      organization: getField('Organization') || getField('OrgName'),
+      organization: getField('OrganizationName') || getField('Organization') || getField('OrgName'),
       address1: getField('Address1'),
       address2: getField('Address2'),
       city: getField('City'),

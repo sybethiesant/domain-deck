@@ -87,6 +87,105 @@ router.post('/create-payment-intent', authMiddleware, async (req, res) => {
   }
 });
 
+// Create payment intent for WHOIS privacy purchase
+router.post('/privacy-purchase', authMiddleware, async (req, res) => {
+  if (!stripe) {
+    return res.status(503).json({ error: 'Payment processing not configured' });
+  }
+
+  const pool = req.app.locals.pool;
+  const { domain_id } = req.body;
+
+  if (!domain_id) {
+    return res.status(400).json({ error: 'Domain ID is required' });
+  }
+
+  try {
+    // Verify domain ownership
+    const domainResult = await pool.query(
+      'SELECT * FROM domains WHERE id = $1 AND user_id = $2',
+      [domain_id, req.user.id]
+    );
+
+    if (domainResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Domain not found' });
+    }
+
+    const domain = domainResult.rows[0];
+    const parts = domain.domain_name.split('.');
+    const tld = parts.pop();
+    const sld = parts.join('.');
+
+    // Check if privacy is already purchased
+    const privacyStatus = await enom.getPrivacyStatus(sld, tld);
+    if (!privacyStatus.willCharge) {
+      return res.status(400).json({
+        error: 'Privacy is already purchased for this domain',
+        privacyStatus
+      });
+    }
+
+    // Get privacy price from TLD pricing
+    const pricingResult = await pool.query(
+      'SELECT price_privacy FROM tld_pricing WHERE tld = $1',
+      [tld]
+    );
+
+    const privacyPrice = pricingResult.rows[0]?.price_privacy || 9.99;
+    const amountInCents = Math.round(privacyPrice * 100);
+
+    // Get or create Stripe customer
+    const userResult = await pool.query(
+      'SELECT stripe_customer_id, email FROM users WHERE id = $1',
+      [req.user.id]
+    );
+
+    let customerId = userResult.rows[0].stripe_customer_id;
+
+    if (!customerId) {
+      const customer = await stripe.customers.create({
+        email: userResult.rows[0].email,
+        metadata: { userId: req.user.id.toString() }
+      });
+      customerId = customer.id;
+
+      await pool.query(
+        'UPDATE users SET stripe_customer_id = $1 WHERE id = $2',
+        [customerId, req.user.id]
+      );
+    }
+
+    // Create payment intent for privacy purchase
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount: amountInCents,
+      currency: 'usd',
+      customer: customerId,
+      metadata: {
+        userId: req.user.id.toString(),
+        type: 'privacy_purchase',
+        domainId: domain_id.toString(),
+        domainName: domain.domain_name,
+        sld: sld,
+        tld: tld
+      },
+      automatic_payment_methods: {
+        enabled: true
+      }
+    });
+
+    res.json({
+      clientSecret: paymentIntent.client_secret,
+      paymentIntentId: paymentIntent.id,
+      amount: privacyPrice,
+      domainName: domain.domain_name,
+      privacyStatus
+    });
+  } catch (error) {
+    console.error('Error creating privacy payment intent:', error);
+    res.status(500).json({ error: 'Failed to initialize payment' });
+  }
+});
+
 // Stripe webhook handler
 router.post('/webhook', async (req, res) => {
   if (!stripe) {
@@ -145,7 +244,13 @@ router.post('/webhook', async (req, res) => {
 async function handlePaymentSuccess(pool, paymentIntent) {
   const { id: paymentIntentId, metadata } = paymentIntent;
 
-  console.log('Processing payment success:', paymentIntentId);
+  console.log('Processing payment success:', paymentIntentId, 'type:', metadata?.type);
+
+  // Handle privacy purchase separately
+  if (metadata?.type === 'privacy_purchase') {
+    await handlePrivacyPurchaseSuccess(pool, paymentIntent);
+    return;
+  }
 
   // Update order payment status
   const orderResult = await pool.query(
@@ -434,6 +539,86 @@ async function handleRefund(pool, charge) {
   );
 
   console.log('Refund processed for intent:', paymentIntentId);
+}
+
+/**
+ * Handle successful privacy purchase payment
+ */
+async function handlePrivacyPurchaseSuccess(pool, paymentIntent) {
+  const { id: paymentIntentId, metadata, amount } = paymentIntent;
+
+  console.log('Processing privacy purchase:', paymentIntentId, 'for domain:', metadata.domainName);
+
+  const { domainId, domainName, sld, tld, userId } = metadata;
+
+  try {
+    // Enable privacy via eNom
+    await enom.setWhoisPrivacy(sld, tld, true);
+
+    // Update domain record
+    await pool.query(
+      `UPDATE domains SET
+        privacy_enabled = true,
+        updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1`,
+      [domainId]
+    );
+
+    // Log the transaction
+    await pool.query(
+      `INSERT INTO balance_transactions
+       (transaction_type, amount, fee_amount, net_amount, domain_name, notes, stripe_payment_intent_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        'privacy_purchase',
+        amount / 100,
+        0,
+        amount / 100,
+        domainName,
+        'WHOIS Privacy Protection purchased',
+        paymentIntentId
+      ]
+    );
+
+    // Log activity
+    await pool.query(
+      `INSERT INTO activity_logs (user_id, action, entity_type, entity_id, details)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [
+        userId,
+        'privacy_purchased',
+        'domain',
+        domainId,
+        JSON.stringify({
+          domainName,
+          amount: amount / 100,
+          paymentIntentId
+        })
+      ]
+    );
+
+    console.log(`Privacy enabled for ${domainName}`);
+  } catch (error) {
+    console.error('Error enabling privacy after payment:', error);
+    // The payment succeeded but eNom failed - this should be logged for manual resolution
+    await pool.query(
+      `INSERT INTO activity_logs (user_id, action, entity_type, entity_id, details)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [
+        userId,
+        'privacy_purchase_failed',
+        'domain',
+        domainId,
+        JSON.stringify({
+          domainName,
+          error: error.message,
+          paymentIntentId,
+          requiresManualResolution: true
+        })
+      ]
+    );
+    throw error;
+  }
 }
 
 // Get saved payment methods

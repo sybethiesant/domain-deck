@@ -615,6 +615,7 @@ router.post('/domains/:id/sync', async (req, res) => {
       if (expMatch) {
         expDate = `${expMatch[3]}-${expMatch[1].padStart(2, '0')}-${expMatch[2].padStart(2, '0')}`;
       }
+    }
 
     // Update domain
     const result = await pool.query(
@@ -649,6 +650,181 @@ router.post('/domains/:id/sync', async (req, res) => {
   } catch (error) {
     console.error('Error syncing domain:', error);
     res.status(500).json({ error: 'Failed to sync domain' });
+  }
+});
+
+// Get domain auth code (for transfers)
+router.post('/domains/:id/auth-code', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+
+  try {
+    const domainResult = await pool.query('SELECT * FROM domains WHERE id = $1', [domainId]);
+    if (domainResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Domain not found' });
+    }
+
+    const domain = domainResult.rows[0];
+    const parts = domain.domain_name.split('.');
+    const tld = parts.pop();
+    const sld = parts.join('.');
+
+    // Get auth code from eNom
+    const authCode = await enom.getAuthCode(sld, tld);
+
+    await logAudit(pool, req.user.id, 'get_auth_code', 'domain', domainId, null, { domain: domain.domain_name }, req);
+
+    res.json({ authCode, domain: domain.domain_name });
+  } catch (error) {
+    console.error('Error getting auth code:', error);
+    res.status(500).json({ error: 'Failed to get auth code' });
+  }
+});
+
+// Lock/unlock domain
+router.post('/domains/:id/lock', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+  const { lock } = req.body;
+
+  try {
+    const domainResult = await pool.query('SELECT * FROM domains WHERE id = $1', [domainId]);
+    if (domainResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Domain not found' });
+    }
+
+    const domain = domainResult.rows[0];
+    const parts = domain.domain_name.split('.');
+    const tld = parts.pop();
+    const sld = parts.join('.');
+
+    // Lock/unlock at eNom
+    await enom.setDomainLock(sld, tld, lock);
+
+    // Update local database
+    await pool.query(
+      'UPDATE domains SET lock_status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      [lock, domainId]
+    );
+
+    await logAudit(pool, req.user.id, lock ? 'lock_domain' : 'unlock_domain', 'domain', domainId, { lock_status: !lock }, { lock_status: lock }, req);
+
+    res.json({ success: true, locked: lock, domain: domain.domain_name });
+  } catch (error) {
+    console.error('Error toggling domain lock:', error);
+    res.status(500).json({ error: 'Failed to update domain lock' });
+  }
+});
+
+// Admin: Toggle WHOIS privacy (bypasses payment check)
+router.put('/domains/:id/privacy', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+  const { enabled } = req.body;
+
+  try {
+    const domainResult = await pool.query('SELECT * FROM domains WHERE id = $1', [domainId]);
+    if (domainResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Domain not found' });
+    }
+
+    const domain = domainResult.rows[0];
+    const parts = domain.domain_name.split('.');
+    const tld = parts.pop();
+    const sld = parts.join('.');
+
+    // Update at eNom (admin bypass - no payment check)
+    await enom.setWhoisPrivacy(sld, tld, !!enabled);
+
+    // Update local database
+    const result = await pool.query(
+      'UPDATE domains SET privacy_enabled = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *',
+      [!!enabled, domainId]
+    );
+
+    await logAudit(pool, req.user.id, enabled ? 'enable_privacy' : 'disable_privacy', 'domain', domainId,
+      { privacy_enabled: !enabled }, { privacy_enabled: enabled }, req);
+
+    res.json({ success: true, privacy_enabled: enabled, domain: domain.domain_name });
+  } catch (error) {
+    console.error('Error toggling privacy:', error);
+    res.status(500).json({ error: 'Failed to update privacy' });
+  }
+});
+
+// Admin: Toggle auto-renew
+router.put('/domains/:id/autorenew', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+  const { auto_renew } = req.body;
+
+  try {
+    const domainResult = await pool.query('SELECT * FROM domains WHERE id = $1', [domainId]);
+    if (domainResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Domain not found' });
+    }
+
+    const domain = domainResult.rows[0];
+    const parts = domain.domain_name.split('.');
+    const tld = parts.pop();
+    const sld = parts.join('.');
+
+    // Update at eNom
+    await enom.setAutoRenew(sld, tld, !!auto_renew);
+
+    // Update local database
+    const result = await pool.query(
+      'UPDATE domains SET auto_renew = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *',
+      [!!auto_renew, domainId]
+    );
+
+    await logAudit(pool, req.user.id, auto_renew ? 'enable_autorenew' : 'disable_autorenew', 'domain', domainId,
+      { auto_renew: !auto_renew }, { auto_renew: auto_renew }, req);
+
+    res.json({ success: true, auto_renew: auto_renew, domain: domain.domain_name });
+  } catch (error) {
+    console.error('Error toggling auto-renew:', error);
+    res.status(500).json({ error: 'Failed to update auto-renew' });
+  }
+});
+
+// Admin: Update nameservers
+router.put('/domains/:id/nameservers', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+  const { nameservers } = req.body;
+
+  if (!nameservers || !Array.isArray(nameservers) || nameservers.length < 2) {
+    return res.status(400).json({ error: 'At least 2 nameservers required' });
+  }
+
+  try {
+    const domainResult = await pool.query('SELECT * FROM domains WHERE id = $1', [domainId]);
+    if (domainResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Domain not found' });
+    }
+
+    const domain = domainResult.rows[0];
+    const parts = domain.domain_name.split('.');
+    const tld = parts.pop();
+    const sld = parts.join('.');
+
+    // Update at eNom
+    await enom.setNameservers(sld, tld, nameservers);
+
+    // Update local database
+    const result = await pool.query(
+      'UPDATE domains SET nameservers = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *',
+      [JSON.stringify(nameservers), domainId]
+    );
+
+    await logAudit(pool, req.user.id, 'update_nameservers', 'domain', domainId,
+      { nameservers: domain.nameservers }, { nameservers }, req);
+
+    res.json({ success: true, nameservers, domain: domain.domain_name });
+  } catch (error) {
+    console.error('Error updating nameservers:', error);
+    res.status(500).json({ error: 'Failed to update nameservers' });
   }
 });
 
@@ -696,10 +872,10 @@ router.get('/orders', async (req, res) => {
   }
 });
 
-// List all domains
+// List all domains (with advanced filters)
 router.get('/domains', async (req, res) => {
   const pool = req.app.locals.pool;
-  const { page = 1, limit = 50, status, expiring } = req.query;
+  const { page = 1, limit = 50, status, expiring, search, tld } = req.query;
   const offset = (parseInt(page) - 1) * parseInt(limit);
 
   try {
@@ -711,23 +887,78 @@ router.get('/domains', async (req, res) => {
     `;
     const params = [];
 
+    // Search filter (domain name or owner)
+    if (search) {
+      params.push(`%${search}%`);
+      query += ` AND (d.domain_name ILIKE $${params.length} OR u.username ILIKE $${params.length} OR u.email ILIKE $${params.length})`;
+    }
+
+    // Status filter
     if (status) {
       params.push(status);
       query += ` AND d.status = $${params.length}`;
     }
 
-    if (expiring === 'true') {
-      query += ` AND d.expiration_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'`;
+    // TLD filter
+    if (tld) {
+      params.push(tld.toLowerCase().replace('.', ''));
+      query += ` AND d.tld = $${params.length}`;
     }
 
-    query += ` ORDER BY d.expiration_date ASC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+    // Expiring filter
+    if (expiring === 'true' || expiring === '30') {
+      query += ` AND d.expiration_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'`;
+    } else if (expiring === '7') {
+      query += ` AND d.expiration_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days'`;
+    } else if (expiring === '90') {
+      query += ` AND d.expiration_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '90 days'`;
+    } else if (expiring === 'expired') {
+      query += ` AND d.expiration_date < CURRENT_DATE`;
+    }
+
+    query += ` ORDER BY d.expiration_date ASC NULLS LAST LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
     params.push(parseInt(limit), offset);
 
     const result = await pool.query(query, params);
 
+    // Get total count with same filters
+    let countQuery = `
+      SELECT COUNT(*) FROM domains d
+      LEFT JOIN users u ON d.user_id = u.id
+      WHERE 1=1
+    `;
+    const countParams = [];
+
+    if (search) {
+      countParams.push(`%${search}%`);
+      countQuery += ` AND (d.domain_name ILIKE $${countParams.length} OR u.username ILIKE $${countParams.length} OR u.email ILIKE $${countParams.length})`;
+    }
+    if (status) {
+      countParams.push(status);
+      countQuery += ` AND d.status = $${countParams.length}`;
+    }
+    if (tld) {
+      countParams.push(tld.toLowerCase().replace('.', ''));
+      countQuery += ` AND d.tld = $${countParams.length}`;
+    }
+    if (expiring === 'true' || expiring === '30') {
+      countQuery += ` AND d.expiration_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'`;
+    } else if (expiring === '7') {
+      countQuery += ` AND d.expiration_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days'`;
+    } else if (expiring === '90') {
+      countQuery += ` AND d.expiration_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '90 days'`;
+    } else if (expiring === 'expired') {
+      countQuery += ` AND d.expiration_date < CURRENT_DATE`;
+    }
+
+    const countResult = await pool.query(countQuery, countParams);
+    const total = parseInt(countResult.rows[0].count);
+
     res.json({
       domains: result.rows,
-      page: parseInt(page)
+      page: parseInt(page),
+      total,
+      totalPages: Math.ceil(total / parseInt(limit))
     });
   } catch (error) {
     console.error('Error fetching domains:', error);
@@ -898,6 +1129,7 @@ router.post('/sync-enom', async (req, res) => {
           if (parts.length === 3) {
             expDate = `${parts[2]}-${parts[0].padStart(2, '0')}-${parts[1].padStart(2, '0')}`;
           }
+        }
 
         // Upsert domain
         await pool.query(`
@@ -915,6 +1147,7 @@ router.post('/sync-enom', async (req, res) => {
       } catch (err) {
         errors.push({ domain: domain.domain, error: err.message });
       }
+    }
 
     // Try to get domains from sub-accounts by querying each domain directly
     for (const subAccount of subAccounts) {
@@ -933,6 +1166,8 @@ router.post('/sync-enom', async (req, res) => {
                 tld: parts[parts.length - 1]
               });
             }
+          }
+        }
 
         for (const pd of possibleDomains) {
           try {
@@ -946,6 +1181,7 @@ router.post('/sync-enom', async (req, res) => {
                 if (expParts.length === 3) {
                   expDate = `${expParts[2]}-${expParts[0].padStart(2, '0')}-${expParts[1].padStart(2, '0')}`;
                 }
+              }
 
               await pool.query(`
                 INSERT INTO domains (user_id, domain_name, tld, status, expiration_date, auto_renew, privacy_enabled, enom_account)
@@ -963,6 +1199,9 @@ router.post('/sync-enom', async (req, res) => {
           } catch (err) {
             // Domain might not exist or not be accessible
           }
+        }
+      }
+    }
 
     res.json({
       message: 'eNom sync completed',
@@ -1063,6 +1302,7 @@ router.post('/enom/sync-pricing', async (req, res) => {
       } catch (err) {
         errors.push({ tld, error: err.message });
       }
+    }
 
     res.json({
       message: 'Pricing sync completed',
@@ -1128,6 +1368,7 @@ router.post('/enom/import-domain', async (req, res) => {
       if (expMatch) {
         expDate = `${expMatch[3]}-${expMatch[1].padStart(2, '0')}-${expMatch[2].padStart(2, '0')}`;
       }
+    }
 
     let regDate = null;
     if (info.registrationDate) {
@@ -1135,6 +1376,7 @@ router.post('/enom/import-domain', async (req, res) => {
       if (regMatch) {
         regDate = `${regMatch[3]}-${regMatch[1].padStart(2, '0')}-${regMatch[2].padStart(2, '0')}`;
       }
+    }
 
     // Upsert domain
     const result = await pool.query(`
@@ -1194,6 +1436,7 @@ router.post('/sync-domains', async (req, res) => {
           if (match) {
             expDate = `${match[3]}-${match[1].padStart(2, '0')}-${match[2].padStart(2, '0')}`;
           }
+        }
 
         // Determine status
         let status = 'active';

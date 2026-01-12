@@ -393,11 +393,10 @@ router.put('/:id/autorenew', authMiddleware, async (req, res) => {
   }
 });
 
-// Toggle privacy
-router.put('/:id/privacy', authMiddleware, async (req, res) => {
+// Get privacy status for a domain
+router.get('/:id/privacy', authMiddleware, async (req, res) => {
   const pool = req.app.locals.pool;
   const domainId = parseInt(req.params.id);
-  const privacy_enabled = req.body.privacy_enabled ?? req.body.privacy;
 
   try {
     // Verify ownership
@@ -414,6 +413,58 @@ router.put('/:id/privacy', authMiddleware, async (req, res) => {
     const parts = domain.domain_name.split('.');
     const tld = parts.pop();
     const sld = parts.join('.');
+
+    // Get privacy status from eNom
+    const privacyStatus = await enom.getPrivacyStatus(sld, tld);
+
+    res.json({
+      domainId,
+      domainName: domain.domain_name,
+      ...privacyStatus
+    });
+  } catch (error) {
+    console.error('Error getting privacy status:', error);
+    res.status(500).json({ error: 'Failed to get privacy status' });
+  }
+});
+
+// Toggle privacy
+router.put('/:id/privacy', authMiddleware, async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+  const privacy_enabled = req.body.privacy_enabled ?? req.body.privacy;
+  const force = req.body.force === true; // Allow forcing even if it will charge
+
+  try {
+    // Verify ownership
+    const domainResult = await pool.query(
+      'SELECT * FROM domains WHERE id = $1 AND user_id = $2',
+      [domainId, req.user.id]
+    );
+
+    if (domainResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Domain not found' });
+    }
+
+    const domain = domainResult.rows[0];
+    const parts = domain.domain_name.split('.');
+    const tld = parts.pop();
+    const sld = parts.join('.');
+
+    // If trying to enable privacy, check if it's already purchased
+    if (privacy_enabled) {
+      const privacyStatus = await enom.getPrivacyStatus(sld, tld);
+
+      // If privacy will incur a charge and force is not set, return warning
+      if (privacyStatus.willCharge && !force) {
+        return res.status(402).json({
+          error: 'Privacy service requires payment',
+          code: 'PAYMENT_REQUIRED',
+          message: 'Enabling WHOIS privacy will incur a charge. Set force=true to proceed or purchase through checkout.',
+          privacyStatus
+        });
+      }
+    }
 
     // Call eNom API to toggle privacy
     await enom.setWhoisPrivacy(sld, tld, !!privacy_enabled);

@@ -5,10 +5,10 @@ import { API_URL } from '../../config/api';
 import DomainContactEditModal from './DomainContactEditModal';
 
 const CONTACT_TYPES = [
-  { key: 'registrant', label: 'Registrant', description: 'Domain owner' },
-  { key: 'admin', label: 'Admin', description: 'Administrative contact' },
-  { key: 'tech', label: 'Tech', description: 'Technical contact' },
-  { key: 'billing', label: 'Billing', description: 'Billing contact' }
+  { key: 'registrant', label: 'Registrant', description: 'Domain owner', required: true },
+  { key: 'admin', label: 'Admin', description: 'Administrative contact', required: false },
+  { key: 'tech', label: 'Tech', description: 'Technical contact', required: false },
+  { key: 'billing', label: 'Billing', description: 'Billing contact', required: false }
 ];
 
 export default function DomainContactsPanel({ domainId, domainName }) {
@@ -75,20 +75,87 @@ export default function DomainContactsPanel({ domainId, domainName }) {
     );
   }
 
+  // Check if contact has meaningful data (at least a name or email)
+  const hasContactData = (contact) => {
+    if (!contact) return false;
+    const firstName = contact.firstName || contact.first_name;
+    const lastName = contact.lastName || contact.last_name;
+    const email = contact.email || contact.emailAddress;
+    return !!(firstName || lastName || email);
+  };
+
+  // Helper to render contact details
+  const renderContactDetails = (contact) => (
+    <div className="space-y-2 text-sm">
+      <div className="flex items-start gap-2">
+        <User className="w-4 h-4 text-slate-400 mt-0.5 flex-shrink-0" />
+        <span className="text-slate-700 dark:text-slate-300">
+          {contact.firstName || contact.first_name} {contact.lastName || contact.last_name}
+          {(contact.organization || contact.company) && (
+            <span className="block text-slate-500 dark:text-slate-400 text-xs">
+              {contact.organization || contact.company}
+            </span>
+          )}
+        </span>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <Mail className="w-4 h-4 text-slate-400 flex-shrink-0" />
+        <span className="text-slate-700 dark:text-slate-300 truncate">
+          {contact.email || contact.emailAddress}
+        </span>
+      </div>
+
+      {(contact.phone) && (
+        <div className="flex items-center gap-2">
+          <Phone className="w-4 h-4 text-slate-400 flex-shrink-0" />
+          <span className="text-slate-700 dark:text-slate-300">
+            {contact.phone}
+          </span>
+        </div>
+      )}
+
+      {(contact.city || contact.City) && (
+        <div className="flex items-start gap-2">
+          <MapPin className="w-4 h-4 text-slate-400 mt-0.5 flex-shrink-0" />
+          <span className="text-slate-700 dark:text-slate-300">
+            {contact.city || contact.City}, {contact.state || contact.stateProvince || contact.StateProvince} {contact.postalCode || contact.postal_code || contact.PostalCode}
+            <span className="block text-slate-500 dark:text-slate-400 text-xs">
+              {contact.country || contact.Country || 'US'}
+            </span>
+          </span>
+        </div>
+      )}
+    </div>
+  );
+
+  const registrantContact = contacts?.registrant;
+  const hasRegistrantData = hasContactData(registrantContact);
+
   return (
     <div className="mt-4 space-y-4">
       <div className="grid md:grid-cols-2 gap-4">
-        {CONTACT_TYPES.map(({ key, label, description }) => {
+        {CONTACT_TYPES.map(({ key, label, description, required }) => {
           const contact = contacts?.[key];
+          const hasData = hasContactData(contact);
+          // For non-registrant contacts with no data, they inherit from registrant
+          const inheritsFromRegistrant = !required && !hasData && hasRegistrantData;
 
           return (
             <div
               key={key}
-              className="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-4 border border-slate-200 dark:border-slate-700"
+              className={`bg-slate-50 dark:bg-slate-800/50 rounded-lg p-4 border ${
+                inheritsFromRegistrant
+                  ? 'border-indigo-200 dark:border-indigo-800'
+                  : 'border-slate-200 dark:border-slate-700'
+              }`}
             >
               <div className="flex items-center justify-between mb-3">
                 <div>
-                  <h4 className="font-medium text-slate-900 dark:text-slate-100">{label}</h4>
+                  <h4 className="font-medium text-slate-900 dark:text-slate-100">
+                    {label}
+                    {required && <span className="text-red-500 ml-1">*</span>}
+                  </h4>
                   <p className="text-xs text-slate-500 dark:text-slate-400">{description}</p>
                 </div>
                 <button
@@ -100,42 +167,16 @@ export default function DomainContactsPanel({ domainId, domainName }) {
                 </button>
               </div>
 
-              {contact ? (
-                <div className="space-y-2 text-sm">
-                  <div className="flex items-start gap-2">
-                    <User className="w-4 h-4 text-slate-400 mt-0.5 flex-shrink-0" />
-                    <span className="text-slate-700 dark:text-slate-300">
-                      {contact.firstName || contact.first_name} {contact.lastName || contact.last_name}
-                      {(contact.organization || contact.company) && (
-                        <span className="block text-slate-500 dark:text-slate-400 text-xs">
-                          {contact.organization || contact.company}
-                        </span>
-                      )}
-                    </span>
+              {hasData ? (
+                renderContactDetails(contact)
+              ) : inheritsFromRegistrant ? (
+                <div>
+                  <div className="flex items-center gap-1.5 mb-2 text-xs text-indigo-600 dark:text-indigo-400">
+                    <User className="w-3 h-3" />
+                    <span>Uses Registrant contact</span>
                   </div>
-
-                  <div className="flex items-center gap-2">
-                    <Mail className="w-4 h-4 text-slate-400 flex-shrink-0" />
-                    <span className="text-slate-700 dark:text-slate-300 truncate">
-                      {contact.email || contact.emailAddress}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <Phone className="w-4 h-4 text-slate-400 flex-shrink-0" />
-                    <span className="text-slate-700 dark:text-slate-300">
-                      {contact.phone}
-                    </span>
-                  </div>
-
-                  <div className="flex items-start gap-2">
-                    <MapPin className="w-4 h-4 text-slate-400 mt-0.5 flex-shrink-0" />
-                    <span className="text-slate-700 dark:text-slate-300">
-                      {contact.city || contact.City}, {contact.state || contact.stateProvince || contact.StateProvince} {contact.postalCode || contact.postal_code || contact.PostalCode}
-                      <span className="block text-slate-500 dark:text-slate-400 text-xs">
-                        {contact.country || contact.Country || 'US'}
-                      </span>
-                    </span>
+                  <div className="opacity-75">
+                    {renderContactDetails(registrantContact)}
                   </div>
                 </div>
               ) : (
@@ -154,6 +195,7 @@ export default function DomainContactsPanel({ domainId, domainName }) {
           domainName={domainName}
           contactType={editingType}
           currentContact={contacts?.[editingType]}
+          registrantContact={contacts?.registrant}
           onClose={() => setEditingType(null)}
           onSaved={handleEditSaved}
         />
