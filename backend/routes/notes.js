@@ -176,6 +176,21 @@ router.post('/:noteId/toggle-pin', async (req, res) => {
   const { noteId } = req.params;
 
   try {
+    // Check if note exists and get ownership info
+    const existing = await pool.query(
+      `SELECT staff_user_id FROM staff_notes WHERE id = $1`,
+      [noteId]
+    );
+
+    if (!existing.rows[0]) {
+      return res.status(404).json({ error: 'Note not found' });
+    }
+
+    // Only allow toggle if they created it or are admin (level 3+)
+    if (existing.rows[0].staff_user_id !== req.user.id && req.user.role_level < 3) {
+      return res.status(403).json({ error: 'You can only toggle pin on your own notes' });
+    }
+
     const result = await pool.query(
       `UPDATE staff_notes SET
         is_pinned = NOT is_pinned,
@@ -184,10 +199,6 @@ router.post('/:noteId/toggle-pin', async (req, res) => {
        RETURNING *`,
       [noteId]
     );
-
-    if (!result.rows[0]) {
-      return res.status(404).json({ error: 'Note not found' });
-    }
 
     res.json(result.rows[0]);
   } catch (error) {

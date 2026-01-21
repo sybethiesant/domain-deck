@@ -375,6 +375,12 @@ app.get('/api/site-config', async (req, res) => {
 
 // ============ ERROR HANDLING ============
 
+// DEBUG: Log unmatched routes
+app.use((req, res, next) => {
+  require("fs").appendFileSync("/tmp/debug.log", new Date().toISOString() + " " + req.method + " " + req.path + "\n");
+  next();
+});
+
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({ error: 'Not found', path: req.path });
@@ -395,7 +401,7 @@ app.use((err, req, res, next) => {
 // ============ START SERVER ============
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`WorxTech API running on port ${PORT}`);
+  console.log(`DEBUG SERVER STARTING - WorxTech API running on port ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`eNom Environment: ${process.env.ENOM_ENV || 'test'}`);
 

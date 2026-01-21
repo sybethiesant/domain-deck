@@ -73,8 +73,26 @@ module.exports = {
     `)
   }),
 
+  // Email verification (uses snake_case key to match sendEmailVerification call)
+  email_verification: ({ username, verificationUrl }) => ({
+    subject: 'Verify Your Email - WorxTech',
+    html: baseWrapper(`
+      <h2>Verify Your Email Address</h2>
+      <p>Hi ${username},</p>
+      <p>Thanks for signing up! Please verify your email address by clicking the button below:</p>
+      <p style="text-align: center;">
+        <a href="${verificationUrl}" class="btn btn-success">Verify Email</a>
+      </p>
+      <p>This link will expire in 24 hours.</p>
+      <div class="highlight">
+        <p><strong>Why verify?</strong> Email verification helps us ensure the security of your account and enables important notifications about your domains.</p>
+      </div>
+      <p><strong>Didn't sign up?</strong> You can safely ignore this email.</p>
+    `)
+  }),
+
   // Password reset
-  passwordReset: ({ username, resetLink, expiresIn }) => ({
+  password_reset: ({ username, resetLink, expiresIn }) => ({
     subject: 'Reset Your Password - WorxTech',
     html: baseWrapper(`
       <h2>Password Reset Request</h2>
@@ -89,7 +107,7 @@ module.exports = {
   }),
 
   // Order confirmation
-  orderConfirmation: ({ orderNumber, items, total, username }) => ({
+  order_confirmation: ({ orderNumber, items, total, username }) => ({
     subject: `Order Confirmed - ${orderNumber}`,
     html: baseWrapper(`
       <h2>Order Confirmed!</h2>
@@ -130,7 +148,7 @@ module.exports = {
   }),
 
   // Domain registered
-  domainRegistered: ({ domain, expirationDate, username }) => ({
+  domain_registered: ({ domain, expirationDate, username }) => ({
     subject: `Domain Registered: ${domain}`,
     html: baseWrapper(`
       <h2><span class="status-badge status-success">Success</span></h2>
@@ -154,7 +172,7 @@ module.exports = {
   }),
 
   // Domain expiring warning
-  domainExpiring: ({ domain, expirationDate, daysLeft, renewLink }) => ({
+  domain_expiring: ({ domain, expirationDate, daysLeft, renewLink }) => ({
     subject: `Action Required: ${domain} expires in ${daysLeft} days`,
     html: baseWrapper(`
       <h2><span class="status-badge status-warning">Expiring Soon</span></h2>
@@ -179,7 +197,7 @@ module.exports = {
   }),
 
   // Order failed
-  orderFailed: ({ orderNumber, items, error, username }) => ({
+  order_failed: ({ orderNumber, items, error, username }) => ({
     subject: `Order Issue - ${orderNumber}`,
     html: baseWrapper(`
       <h2><span class="status-badge status-error">Action Required</span></h2>
@@ -200,7 +218,7 @@ module.exports = {
   }),
 
   // Transfer initiated
-  transferInitiated: ({ domain, authEmail, username }) => ({
+  transfer_initiated: ({ domain, authEmail, username }) => ({
     subject: `Transfer Started: ${domain}`,
     html: baseWrapper(`
       <h2>Domain Transfer Initiated</h2>
@@ -223,7 +241,7 @@ module.exports = {
   }),
 
   // Transfer complete
-  transferComplete: ({ domain, username }) => ({
+  transfer_complete: ({ domain, username }) => ({
     subject: `Transfer Complete: ${domain}`,
     html: baseWrapper(`
       <h2><span class="status-badge status-success">Complete</span></h2>
@@ -241,7 +259,7 @@ module.exports = {
   }),
 
   // Admin: New order notification
-  adminNewOrder: ({ orderNumber, customerEmail, total, itemCount }) => ({
+  admin_new_order: ({ orderNumber, customerEmail, total, itemCount }) => ({
     subject: `[Admin] New Order: ${orderNumber}`,
     html: baseWrapper(`
       <h2>New Order Received</h2>
@@ -258,7 +276,7 @@ module.exports = {
   }),
 
   // Admin: Order failed notification
-  adminOrderFailed: ({ orderNumber, customerEmail, error, itemCount }) => ({
+  admin_order_failed: ({ orderNumber, customerEmail, error, itemCount }) => ({
     subject: `[Admin] Order Failed: ${orderNumber}`,
     html: baseWrapper(`
       <h2><span class="status-badge status-error">Failed</span></h2>
@@ -277,7 +295,7 @@ module.exports = {
   }),
 
   // Domain renewal confirmation
-  renewalConfirmation: ({ domain, years, newExpiration, cost }) => ({
+  renewal_confirmation: ({ domain, years, newExpiration, cost }) => ({
     subject: `Domain Renewed: ${domain}`,
     html: baseWrapper(`
       <h2><span class="status-badge status-success">Renewed</span></h2>
@@ -315,7 +333,7 @@ module.exports = {
   }),
 
   // Domain renewal failed
-  renewalFailed: ({ domain, error, expirationDate }) => ({
+  renewal_failed: ({ domain, error, expirationDate }) => ({
     subject: `Action Required: ${domain} renewal failed`,
     html: baseWrapper(`
       <h2><span class="status-badge status-error">Renewal Failed</span></h2>

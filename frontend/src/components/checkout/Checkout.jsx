@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { loadStripe } from '@stripe/stripe-js';
 import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js';
 import { ArrowLeft, CreditCard, Lock, Check, Loader2, AlertCircle, User, Plus, ChevronDown } from 'lucide-react';
@@ -309,10 +309,10 @@ function Checkout({ onComplete }) {
         setError(`Payment ${redirectStatus}. Please try again.`);
       }
     }
-  }, [token]);
+  }, [token, handleRedirectPaymentSuccess]);
 
   // Handle payment success from redirect-based methods
-  const handleRedirectPaymentSuccess = async (paymentIntentId) => {
+  const handleRedirectPaymentSuccess = useCallback(async (paymentIntentId) => {
     setLoading(true);
 
     try {
@@ -365,7 +365,7 @@ function Checkout({ onComplete }) {
     }
 
     setLoading(false);
-  };
+  }, [token, fetchCart]);
 
   const handleContactChange = (e) => {
     setContactInfo({ ...contactInfo, [e.target.name]: e.target.value });
@@ -626,7 +626,7 @@ function Checkout({ onComplete }) {
             <PaymentForm
               clientSecret={clientSecret}
               onSuccess={handlePaymentSuccess}
-              billingAddress={contactInfo}
+              billingAddress={getRegistrantContact()}
             />
           </Elements>
         </div>

@@ -418,6 +418,9 @@ router.get('/me', authMiddleware, async (req, res) => {
       [req.user.id]
     );
 
+    if (!result.rows[0]) {
+      return res.status(404).json({ error: 'User not found' });
+    }
 
     res.json(result.rows[0]);
   } catch (error) {
@@ -497,6 +500,9 @@ router.put('/password', authMiddleware, async (req, res) => {
       [req.user.id]
     );
 
+    if (!result.rows[0]) {
+      return res.status(404).json({ error: 'User not found' });
+    }
 
     const validPassword = await bcrypt.compare(current_password, result.rows[0].password_hash);
 

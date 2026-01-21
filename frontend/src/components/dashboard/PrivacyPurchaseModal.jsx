@@ -96,6 +96,29 @@ export default function PrivacyPurchaseModal({ domain, onClose, onSuccess }) {
   const [amount, setAmount] = useState(0);
   const [privacyStatus, setPrivacyStatus] = useState(null);
 
+  // Validate domain prop
+  if (!domain || !domain.id) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+        <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl p-6 max-w-md w-full">
+          <div className="text-red-600 dark:text-red-400 flex items-center gap-2 mb-4">
+            <AlertCircle className="w-5 h-5" />
+            <span className="font-medium">Invalid domain</span>
+          </div>
+          <p className="text-slate-600 dark:text-slate-400 mb-4">
+            Domain information is missing. Please try again.
+          </p>
+          <button
+            onClick={onClose}
+            className="w-full px-4 py-2 bg-slate-100 dark:bg-slate-700 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   // Initialize Stripe and create payment intent
   useEffect(() => {
     async function initPayment() {
@@ -103,14 +126,12 @@ export default function PrivacyPurchaseModal({ domain, onClose, onSuccess }) {
         // Get Stripe config
         const configRes = await fetch(`${API_URL}/stripe/config`);
         const config = await configRes.json();
-        console.log('[PrivacyPurchase] Stripe config:', config);
 
         if (!config.publishableKey) {
           throw new Error('Payment processing is not configured');
         }
 
         // Always create fresh stripePromise to avoid stale key issues
-        console.log('[PrivacyPurchase] Loading Stripe with key:', config.publishableKey.substring(0, 20) + '...');
         stripePromise = loadStripe(config.publishableKey);
 
         // Create privacy purchase payment intent
@@ -124,12 +145,6 @@ export default function PrivacyPurchaseModal({ domain, onClose, onSuccess }) {
         });
 
         const data = await res.json();
-        console.log('[PrivacyPurchase] API response:', {
-          ok: res.ok,
-          clientSecret: data.clientSecret ? data.clientSecret.substring(0, 30) + '...' : null,
-          amount: data.amount,
-          error: data.error
-        });
 
         if (!res.ok) {
           throw new Error(data.error || 'Failed to initialize payment');

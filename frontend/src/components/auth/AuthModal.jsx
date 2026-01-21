@@ -66,6 +66,7 @@ function AuthModal({ mode, onClose, onSwitchMode }) {
       }
 
       login(data.user, data.token);
+      setLoading(false);
     } catch (err) {
       setError('Connection error. Please try again.');
       setLoading(false);

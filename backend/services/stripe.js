@@ -98,57 +98,123 @@ class StripeService {
     return this.configured;
   }
 
-  // Convenience methods that proxy to the stripe instance
+  // Convenience methods that proxy to the stripe instance with error handling
+
+  /**
+   * Wrap Stripe API calls with consistent error handling
+   * @private
+   */
+  _handleStripeError(error, operation) {
+    // Stripe error types: StripeCardError, StripeRateLimitError, StripeInvalidRequestError,
+    // StripeAPIError, StripeConnectionError, StripeAuthenticationError
+    const stripeError = new Error(`Stripe ${operation} failed: ${error.message}`);
+    stripeError.type = error.type || 'unknown';
+    stripeError.code = error.code;
+    stripeError.statusCode = error.statusCode;
+    stripeError.originalError = error;
+    throw stripeError;
+  }
 
   async createCustomer(params) {
     if (!this.stripe) throw new Error('Stripe not configured');
-    return this.stripe.customers.create(params);
+    try {
+      return await this.stripe.customers.create(params);
+    } catch (error) {
+      this._handleStripeError(error, 'createCustomer');
+    }
   }
 
   async updateCustomer(customerId, params) {
     if (!this.stripe) throw new Error('Stripe not configured');
-    return this.stripe.customers.update(customerId, params);
+    try {
+      return await this.stripe.customers.update(customerId, params);
+    } catch (error) {
+      this._handleStripeError(error, 'updateCustomer');
+    }
   }
 
   async createPaymentIntent(params) {
     if (!this.stripe) throw new Error('Stripe not configured');
-    return this.stripe.paymentIntents.create(params);
+    try {
+      return await this.stripe.paymentIntents.create(params);
+    } catch (error) {
+      this._handleStripeError(error, 'createPaymentIntent');
+    }
   }
 
   async retrievePaymentIntent(id) {
     if (!this.stripe) throw new Error('Stripe not configured');
-    return this.stripe.paymentIntents.retrieve(id);
+    try {
+      return await this.stripe.paymentIntents.retrieve(id);
+    } catch (error) {
+      this._handleStripeError(error, 'retrievePaymentIntent');
+    }
   }
 
   async createSetupIntent(params) {
     if (!this.stripe) throw new Error('Stripe not configured');
-    return this.stripe.setupIntents.create(params);
+    try {
+      return await this.stripe.setupIntents.create(params);
+    } catch (error) {
+      this._handleStripeError(error, 'createSetupIntent');
+    }
   }
 
   async retrieveSetupIntent(id) {
     if (!this.stripe) throw new Error('Stripe not configured');
-    return this.stripe.setupIntents.retrieve(id);
+    try {
+      return await this.stripe.setupIntents.retrieve(id);
+    } catch (error) {
+      this._handleStripeError(error, 'retrieveSetupIntent');
+    }
   }
 
   async retrievePaymentMethod(id) {
     if (!this.stripe) throw new Error('Stripe not configured');
-    return this.stripe.paymentMethods.retrieve(id);
+    try {
+      return await this.stripe.paymentMethods.retrieve(id);
+    } catch (error) {
+      this._handleStripeError(error, 'retrievePaymentMethod');
+    }
   }
 
   async detachPaymentMethod(id) {
     if (!this.stripe) throw new Error('Stripe not configured');
-    return this.stripe.paymentMethods.detach(id);
+    try {
+      return await this.stripe.paymentMethods.detach(id);
+    } catch (error) {
+      this._handleStripeError(error, 'detachPaymentMethod');
+    }
   }
 
   async createRefund(params) {
     if (!this.stripe) throw new Error('Stripe not configured');
-    return this.stripe.refunds.create(params);
+    try {
+      return await this.stripe.refunds.create(params);
+    } catch (error) {
+      this._handleStripeError(error, 'createRefund');
+    }
   }
 
+  /**
+   * Construct and verify a webhook event
+   * @param {Buffer|string} body - Raw request body
+   * @param {string} sig - Stripe signature header
+   * @returns {Object} - Verified Stripe event object
+   * @throws {Error} - If signature verification fails
+   */
   constructWebhookEvent(body, sig) {
     if (!this.stripe) throw new Error('Stripe not configured');
     if (!this.webhookSecret) throw new Error('Webhook secret not configured');
-    return this.stripe.webhooks.constructEvent(body, sig, this.webhookSecret);
+
+    try {
+      return this.stripe.webhooks.constructEvent(body, sig, this.webhookSecret);
+    } catch (error) {
+      const webhookError = new Error(`Webhook signature verification failed: ${error.message}`);
+      webhookError.type = 'webhook_signature_error';
+      webhookError.originalError = error;
+      throw webhookError;
+    }
   }
 }
 

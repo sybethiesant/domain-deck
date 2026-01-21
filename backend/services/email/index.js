@@ -269,6 +269,9 @@ class EmailService {
   }
 
   async sendOrderConfirmation(to, { orderNumber, items, total, username }) {
+    // Validate items array
+    const safeItems = Array.isArray(items) ? items : [];
+
     // Build items table HTML
     const itemsTable = `
       <table class="order-table">
@@ -281,17 +284,17 @@ class EmailService {
           </tr>
         </thead>
         <tbody>
-          ${items.map(item => `
+          ${safeItems.map(item => `
             <tr>
-              <td class="domain-name">${item.domain_name || item.domain}</td>
-              <td>${item.item_type || item.type}</td>
-              <td>${item.years}</td>
-              <td>$${parseFloat(item.total_price || item.price).toFixed(2)}</td>
+              <td class="domain-name">${item.domain_name || item.domain || 'Unknown'}</td>
+              <td>${item.item_type || item.type || 'N/A'}</td>
+              <td>${item.years || 1}</td>
+              <td>$${parseFloat(item.total_price || item.price || 0).toFixed(2)}</td>
             </tr>
           `).join('')}
           <tr class="total-row">
             <td colspan="3" style="text-align: right;">Total:</td>
-            <td>$${parseFloat(total).toFixed(2)}</td>
+            <td>$${parseFloat(total || 0).toFixed(2)}</td>
           </tr>
         </tbody>
       </table>
@@ -308,8 +311,12 @@ class EmailService {
   }
 
   async sendOrderFailed(to, { orderNumber, items, error, username }) {
-    const domainsList = `<ul>${items.map(item => `<li class="domain-name">${item.domain_name || item.domain}</li>`).join('')}</ul>`;
-    return this.sendTemplate('order_failed', to, { orderNumber, domainsList, error, username });
+    // Validate items array
+    const safeItems = Array.isArray(items) ? items : [];
+    const domainsList = safeItems.length > 0
+      ? `<ul>${safeItems.map(item => `<li class="domain-name">${item.domain_name || item.domain || 'Unknown domain'}</li>`).join('')}</ul>`
+      : '<p>No domains specified</p>';
+    return this.sendTemplate('order_failed', to, { orderNumber, domainsList, error: error || 'Unknown error', username });
   }
 
   async sendTransferInitiated(to, { domain, authEmail, username }) {

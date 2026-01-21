@@ -1,7 +1,8 @@
 const express = require('express');
 const crypto = require('crypto');
 const router = express.Router();
-const { authMiddleware } = require('../middleware/auth');
+const { authMiddleware, parseIntParam } = require('../middleware/auth');
+const enomService = require('../services/enom');
 
 // Generate order number
 function generateOrderNumber() {
@@ -50,7 +51,11 @@ router.get('/', authMiddleware, async (req, res) => {
 // Get single order details
 router.get('/:id', authMiddleware, async (req, res) => {
   const pool = req.app.locals.pool;
-  const orderId = parseInt(req.params.id);
+  const orderId = parseIntParam(req.params.id);
+
+  if (orderId === null) {
+    return res.status(400).json({ error: 'Invalid order ID' });
+  }
 
   try {
     // Get order
@@ -191,13 +196,18 @@ router.post('/checkout', authMiddleware, async (req, res) => {
 // Retry failed order item
 router.post('/:orderId/items/:itemId/retry', authMiddleware, async (req, res) => {
   const pool = req.app.locals.pool;
-  const { orderId, itemId } = req.params;
+  const orderId = parseIntParam(req.params.orderId);
+  const itemId = parseIntParam(req.params.itemId);
+
+  if (orderId === null || itemId === null) {
+    return res.status(400).json({ error: 'Invalid order ID or item ID' });
+  }
 
   try {
     // Verify ownership
     const orderResult = await pool.query(
       'SELECT * FROM orders WHERE id = $1 AND user_id = $2',
-      [parseInt(orderId), req.user.id]
+      [orderId, req.user.id]
     );
 
     if (orderResult.rows.length === 0) {
@@ -207,7 +217,7 @@ router.post('/:orderId/items/:itemId/retry', authMiddleware, async (req, res) =>
     // Get item
     const itemResult = await pool.query(
       'SELECT * FROM order_items WHERE id = $1 AND order_id = $2',
-      [parseInt(itemId), parseInt(orderId)]
+      [itemId, orderId]
     );
 
     if (itemResult.rows.length === 0) {
@@ -220,15 +230,97 @@ router.post('/:orderId/items/:itemId/retry', authMiddleware, async (req, res) =>
       return res.status(400).json({ error: 'Can only retry failed items' });
     }
 
-    // TODO: Call eNom API to retry registration/transfer
-
+    // Set status to processing before retry attempt
     await pool.query(
       `UPDATE order_items SET status = 'processing', updated_at = CURRENT_TIMESTAMP
        WHERE id = $1`,
       [parseInt(itemId)]
     );
 
-    res.json({ message: 'Retry initiated' });
+    const fullDomain = `${item.domain_name}.${item.tld}`;
+    let result;
+
+    try {
+      // Call appropriate eNom API based on item type
+      switch (item.item_type) {
+        case 'register':
+          // Get registrant contact from the order
+          const orderData = orderResult.rows[0];
+          const registrantContact = orderData.registrant_contact || {};
+
+          result = await enomService.registerDomain(
+            item.domain_name,
+            item.tld,
+            item.years || 1,
+            registrantContact
+          );
+          break;
+
+        case 'transfer':
+          // Transfers need EPP/auth code - check if stored or require user input
+          if (!item.options?.auth_code) {
+            await pool.query(
+              `UPDATE order_items SET status = 'failed', error = 'Authorization code required for transfer retry', updated_at = CURRENT_TIMESTAMP
+               WHERE id = $1`,
+              [parseInt(itemId)]
+            );
+            return res.status(400).json({ error: 'Authorization code required. Please contact support.' });
+          }
+          result = await enomService.initiateTransfer(
+            item.domain_name,
+            item.tld,
+            item.options.auth_code
+          );
+          break;
+
+        case 'renew':
+          result = await enomService.renewDomain(
+            item.domain_name,
+            item.tld,
+            item.years || 1
+          );
+          break;
+
+        default:
+          await pool.query(
+            `UPDATE order_items SET status = 'failed', error = 'Unknown item type', updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1`,
+            [parseInt(itemId)]
+          );
+          return res.status(400).json({ error: `Unknown item type: ${item.item_type}` });
+      }
+
+      // Success - update status
+      await pool.query(
+        `UPDATE order_items SET
+          status = 'completed',
+          enom_order_id = $1,
+          updated_at = CURRENT_TIMESTAMP
+         WHERE id = $2`,
+        [result?.orderId || null, parseInt(itemId)]
+      );
+
+      res.json({
+        message: 'Retry successful',
+        domain: fullDomain,
+        result
+      });
+
+    } catch (enomError) {
+      // Retry failed - update with error
+      await pool.query(
+        `UPDATE order_items SET
+          status = 'failed',
+          error = $1,
+          updated_at = CURRENT_TIMESTAMP
+         WHERE id = $2`,
+        [enomError.message || 'eNom API error', parseInt(itemId)]
+      );
+      return res.status(500).json({
+        error: 'Retry failed',
+        details: enomError.message
+      });
+    }
   } catch (error) {
     console.error('Error retrying order item:', error);
     res.status(500).json({ error: 'Failed to retry' });

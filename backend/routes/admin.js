@@ -363,6 +363,14 @@ router.post('/orders/:orderId/items/:itemId/retry', async (req, res) => {
       });
     } else if (item.item_type === 'renew') {
       result = await enom.renewDomain(sld, tld, item.years);
+    } else if (item.item_type === 'transfer') {
+      return res.status(400).json({ error: 'Transfer retry not supported. Please initiate a new transfer.' });
+    } else {
+      return res.status(400).json({ error: `Unknown item type: ${item.item_type}` });
+    }
+
+    if (!result || !result.orderId) {
+      return res.status(500).json({ error: 'Registration failed - no order ID returned' });
     }
 
     // Update the order item
@@ -826,6 +834,84 @@ router.put('/domains/:id/nameservers', async (req, res) => {
   } catch (error) {
     console.error('Error updating nameservers:', error);
     res.status(500).json({ error: 'Failed to update nameservers' });
+  }
+});
+
+// Admin: Push domain to another user (immediate transfer, no acceptance needed)
+router.post('/domains/:id/push', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+  const { to_email, notes } = req.body;
+
+  if (!to_email) {
+    return res.status(400).json({ error: 'Recipient email is required' });
+  }
+
+  try {
+    // Get domain
+    const domainResult = await pool.query('SELECT * FROM domains WHERE id = $1', [domainId]);
+    if (domainResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Domain not found' });
+    }
+
+    const domain = domainResult.rows[0];
+    const previousOwnerId = domain.user_id;
+
+    // Find recipient user
+    const recipientResult = await pool.query(
+      'SELECT id, email, full_name FROM users WHERE LOWER(email) = LOWER($1)',
+      [to_email.trim()]
+    );
+
+    if (recipientResult.rows.length === 0) {
+      return res.status(404).json({ error: 'No user found with that email address' });
+    }
+
+    const recipient = recipientResult.rows[0];
+
+    if (recipient.id === previousOwnerId) {
+      return res.status(400).json({ error: 'User already owns this domain' });
+    }
+
+    // Start transaction
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Create a completed push record for history
+      await client.query(`
+        INSERT INTO domain_push_requests
+          (domain_id, from_user_id, to_user_id, to_email, notes, initiated_by_admin, status, responded_at)
+        VALUES ($1, $2, $3, $4, $5, true, 'accepted', CURRENT_TIMESTAMP)
+      `, [domainId, previousOwnerId, recipient.id, recipient.email, notes || 'Admin transfer']);
+
+      // Transfer domain ownership
+      await client.query(`
+        UPDATE domains
+        SET user_id = $1, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $2
+      `, [recipient.id, domainId]);
+
+      await client.query('COMMIT');
+
+      // Audit log
+      await logAudit(pool, req.user.id, 'admin_push_domain', 'domain', domainId,
+        { previous_owner_id: previousOwnerId },
+        { new_owner_id: recipient.id, to_email: recipient.email }, req);
+
+      res.json({
+        success: true,
+        message: `Domain ${domain.domain_name}.${domain.tld} transferred to ${recipient.email}`
+      });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('Error pushing domain:', error);
+    res.status(500).json({ error: 'Failed to push domain' });
   }
 });
 

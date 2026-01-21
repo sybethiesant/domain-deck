@@ -645,4 +645,181 @@ router.post('/domains/:id/lock', async (req, res) => {
   }
 });
 
+// ============================================
+// ADMIN DNS HOST RECORD MANAGEMENT
+// ============================================
+
+// Get DNS records for any domain (admin)
+router.get('/domains/:id/dns', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+
+  try {
+    const result = await pool.query('SELECT * FROM domains WHERE id = $1', [domainId]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Domain not found' });
+    }
+
+    const domain = result.rows[0];
+    const domainMode = getDomainEnomMode(domain);
+
+    const records = await enom.getHostRecords(domain.domain_name, domain.tld, { mode: domainMode });
+    res.json(records);
+  } catch (error) {
+    console.error('Error getting DNS records:', error);
+    res.status(500).json({ error: 'Failed to get DNS records' });
+  }
+});
+
+// Set all DNS records for any domain (admin)
+router.put('/domains/:id/dns', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+  const { records } = req.body;
+
+  if (!Array.isArray(records)) {
+    return res.status(400).json({ error: 'records array is required' });
+  }
+
+  try {
+    const result = await pool.query('SELECT * FROM domains WHERE id = $1', [domainId]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Domain not found' });
+    }
+
+    const domain = result.rows[0];
+    const domainMode = getDomainEnomMode(domain);
+
+    const setResult = await enom.setHostRecords(domain.domain_name, domain.tld, records, { mode: domainMode });
+
+    await logAudit(pool, req.user.id, 'update_dns', 'domain', domainId, null, { recordCount: records.length }, req);
+
+    res.json(setResult);
+  } catch (error) {
+    console.error('Error setting DNS records:', error);
+    res.status(500).json({ error: error.message || 'Failed to set DNS records' });
+  }
+});
+
+// Add DNS record for any domain (admin)
+router.post('/domains/:id/dns', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+  const { hostName, recordType, address, mxPref } = req.body;
+
+  if (!recordType || !address) {
+    return res.status(400).json({ error: 'recordType and address are required' });
+  }
+
+  try {
+    const result = await pool.query('SELECT * FROM domains WHERE id = $1', [domainId]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Domain not found' });
+    }
+
+    const domain = result.rows[0];
+    const domainMode = getDomainEnomMode(domain);
+
+    const addResult = await enom.addHostRecord(domain.domain_name, domain.tld, {
+      hostName: hostName || '@',
+      recordType,
+      address,
+      mxPref
+    }, { mode: domainMode });
+
+    await logAudit(pool, req.user.id, 'add_dns_record', 'domain', domainId, null, { hostName, recordType, address }, req);
+
+    res.json(addResult);
+  } catch (error) {
+    console.error('Error adding DNS record:', error);
+    res.status(500).json({ error: error.message || 'Failed to add DNS record' });
+  }
+});
+
+// Delete DNS record for any domain (admin)
+router.delete('/domains/:id/dns/:recordIndex', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+  const recordIndex = parseInt(req.params.recordIndex);
+
+  try {
+    const result = await pool.query('SELECT * FROM domains WHERE id = $1', [domainId]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Domain not found' });
+    }
+
+    const domain = result.rows[0];
+    const domainMode = getDomainEnomMode(domain);
+
+    const deleteResult = await enom.deleteHostRecord(domain.domain_name, domain.tld, recordIndex, { mode: domainMode });
+
+    await logAudit(pool, req.user.id, 'delete_dns_record', 'domain', domainId, null, { recordIndex }, req);
+
+    res.json(deleteResult);
+  } catch (error) {
+    console.error('Error deleting DNS record:', error);
+    res.status(500).json({ error: error.message || 'Failed to delete DNS record' });
+  }
+});
+
+// Update URL forwarding for any domain (admin)
+router.put('/domains/:id/url-forwarding', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+  const { forwardUrl, forwardType, cloak, cloakTitle } = req.body;
+
+  if (!forwardUrl) {
+    return res.status(400).json({ error: 'forwardUrl is required' });
+  }
+
+  try {
+    const result = await pool.query('SELECT * FROM domains WHERE id = $1', [domainId]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Domain not found' });
+    }
+
+    const domain = result.rows[0];
+    const domainMode = getDomainEnomMode(domain);
+
+    const setResult = await enom.setUrlForwarding(domain.domain_name, domain.tld, {
+      forwardUrl,
+      forwardType: forwardType || 'temporary',
+      cloak: cloak || false,
+      cloakTitle
+    }, { mode: domainMode });
+
+    await logAudit(pool, req.user.id, 'set_url_forwarding', 'domain', domainId, null, { forwardUrl, forwardType }, req);
+
+    res.json(setResult);
+  } catch (error) {
+    console.error('Error setting URL forwarding:', error);
+    res.status(500).json({ error: error.message || 'Failed to set URL forwarding' });
+  }
+});
+
+// Disable URL forwarding for any domain (admin)
+router.delete('/domains/:id/url-forwarding', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+
+  try {
+    const result = await pool.query('SELECT * FROM domains WHERE id = $1', [domainId]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Domain not found' });
+    }
+
+    const domain = result.rows[0];
+    const domainMode = getDomainEnomMode(domain);
+
+    const deleteResult = await enom.disableUrlForwarding(domain.domain_name, domain.tld, { mode: domainMode });
+
+    await logAudit(pool, req.user.id, 'disable_url_forwarding', 'domain', domainId, null, null, req);
+
+    res.json(deleteResult);
+  } catch (error) {
+    console.error('Error disabling URL forwarding:', error);
+    res.status(500).json({ error: error.message || 'Failed to disable URL forwarding' });
+  }
+});
+
 module.exports = router;

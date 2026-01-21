@@ -1,15 +1,31 @@
 const https = require('https');
 const querystring = require('querystring');
+const { BALANCE } = require('../config/constants');
+
+// Crypto utilities for encrypted card storage (lazy-loaded for optional dependency)
+let cryptoModule = null;
+function getCryptoModule() {
+  if (!cryptoModule) {
+    try {
+      cryptoModule = require('./crypto');
+    } catch (e) {
+      cryptoModule = { loadCredentials: null, credentialsExist: () => false };
+    }
+  }
+  return cryptoModule;
+}
 
 // Balance management constants
 const CC_FEE_PERCENT = 0.05;  // eNom charges 5% for CC refills
-const MIN_REFILL = 25.00;     // Minimum refill amount allowed by eNom
+const MIN_REFILL = BALANCE.MIN_REFILL;
 
-// White-label/branded nameservers (point to eNom's DNS infrastructure)
-// These should be set up as glue records at your registrar
-const BRANDED_NAMESERVERS = [
-  'ns1.worxtech.biz',  // → 64.98.148.137 (dns1.name-services.com)
-  'ns2.worxtech.biz'   // → 216.40.47.201 (dns2.name-services.com)
+// eNom's default nameservers (required for DNS hosting/URL forwarding to work)
+// Branded/vanity nameservers don't work with eNom's DNS hosting
+const DEFAULT_NAMESERVERS = [
+  'dns1.name-services.com',
+  'dns2.name-services.com',
+  'dns3.name-services.com',
+  'dns4.name-services.com'
 ];
 
 class EnomAPI {
@@ -344,16 +360,24 @@ class EnomAPI {
     try {
       const response = await this.request('PE_GetTLDList', {});
 
+      if (!response) {
+        console.warn('eNom getTLDList: Empty response');
+        return [];
+      }
+
       const tlds = [];
       const tldList = response.tldlist?.tld || response.TLDList?.TLD || [];
-      const tldArray = Array.isArray(tldList) ? tldList : [tldList];
+
+      // Handle single item vs array response from eNom
+      const tldArray = Array.isArray(tldList) ? tldList : (tldList ? [tldList] : []);
 
       for (const t of tldArray) {
-        if (t && (t.tld || t.TLD)) {
+        const tldName = t?.tld || t?.TLD;
+        if (t && tldName && typeof tldName === 'string' && tldName.trim()) {
           tlds.push({
-            tld: (t.tld || t.TLD).toLowerCase(),
-            minYears: parseInt(t.MinRegPeriod || t.minregperiod || 1),
-            maxYears: parseInt(t.MaxRegPeriod || t.maxregperiod || 10),
+            tld: tldName.toLowerCase().trim(),
+            minYears: parseInt(t.MinRegPeriod || t.minregperiod || '1', 10) || 1,
+            maxYears: parseInt(t.MaxRegPeriod || t.maxregperiod || '10', 10) || 10,
             transferSupported: t.TransferSupported !== 'False'
           });
         }
@@ -414,8 +438,8 @@ class EnomAPI {
     // Validate domain parts
     this.validateDomainParts(sld, tld);
 
-    // Use branded nameservers as default if none specified
-    const nsToUse = nameservers.length > 0 ? nameservers : BRANDED_NAMESERVERS;
+    // Use eNom default nameservers if none specified (required for DNS hosting)
+    const nsToUse = nameservers.length > 0 ? nameservers : DEFAULT_NAMESERVERS;
 
     const requestParams = {
       sld,
@@ -455,7 +479,7 @@ class EnomAPI {
     }
 
     // Add privacy if requested
-    if (privacy) {
+    if (privacy && registrant && registrant.email) {
       requestParams.WPPSEmail = registrant.email;
     }
 
@@ -569,6 +593,34 @@ class EnomAPI {
       };
     } catch (error) {
       console.error(`eNom NS update error for ${sld}.${tld}:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Enable DNS hosting with eNom's default nameservers
+   * This is required before SetHosts will work if DNS hosting isn't already enabled
+   * @param {string} sld - Second level domain
+   * @param {string} tld - Top level domain
+   * @returns {Promise<object>} - Result
+   */
+  async enableDnsHosting(sld, tld, options = {}) {
+    this.validateDomainParts(sld, tld);
+    try {
+      console.log(`[eNom] Enabling DNS hosting for ${sld}.${tld}`);
+      const response = await this.request('ModifyNS', {
+        sld,
+        tld,
+        UseDNS: 'default'  // This enables DNS hosting with eNom's default nameservers
+      }, { mode: options.mode });
+
+      return {
+        success: true,
+        domainName: `${sld}.${tld}`,
+        message: 'DNS hosting enabled'
+      };
+    } catch (error) {
+      console.error(`eNom enable DNS hosting error for ${sld}.${tld}:`, error.message);
       throw error;
     }
   }
@@ -852,21 +904,28 @@ class EnomAPI {
     try {
       const response = await this.request('GetSubAccounts', {});
 
-      const accounts = [];
-      const subAccounts = response.SubAccounts?.SubAccount || [];
+      if (!response) {
+        console.warn('eNom getSubAccounts: Empty response');
+        return [];
+      }
 
-      const accountArray = Array.isArray(subAccounts) ? subAccounts : [subAccounts];
+      const accounts = [];
+      const subAccounts = response.SubAccounts?.SubAccount || response.subaccounts?.subaccount || [];
+
+      // Handle single item vs array response from eNom
+      const accountArray = Array.isArray(subAccounts) ? subAccounts : (subAccounts ? [subAccounts] : []);
 
       for (const sa of accountArray) {
-        if (sa && sa.LoginID) {
+        // Ensure we have a valid sub-account object with required fields
+        if (sa && typeof sa === 'object' && sa.LoginID) {
           accounts.push({
-            accountId: sa.Account,
+            accountId: sa.Account || null,
             loginId: sa.LoginID,
-            partyId: sa.PartyID,
-            firstName: sa.FName,
-            lastName: sa.LName,
-            email: sa.EmailAddress,
-            domainCount: parseInt(sa.DomainCount) || 0
+            partyId: sa.PartyID || null,
+            firstName: sa.FName || '',
+            lastName: sa.LName || '',
+            email: sa.EmailAddress || '',
+            domainCount: parseInt(sa.DomainCount || '0', 10) || 0
           });
         }
       }
@@ -915,6 +974,9 @@ class EnomAPI {
       billing,
       years = 1
     } = params;
+
+    // Validate domain parts to prevent malformed domains
+    this.validateDomainParts(sld, tld);
 
     const requestParams = {
       sld,
@@ -1287,15 +1349,15 @@ class EnomAPI {
       throw new Error('Minimum refill amount is $' + MIN_REFILL);
     }
 
-    // Load encrypted card details
-    const { loadCredentials, credentialsExist } = require('./crypto');
+    // Load encrypted card details using lazy-loaded crypto module
+    const { loadCredentials, credentialsExist } = getCryptoModule();
     const encryptionKey = process.env.ENOM_CC_KEY;
 
     if (!encryptionKey) {
       throw new Error('ENOM_CC_KEY not configured. Cannot process refill.');
     }
 
-    if (!credentialsExist()) {
+    if (!loadCredentials || !credentialsExist()) {
       throw new Error(
         'Credit card not configured. Run: node backend/scripts/store-card.js'
       );
@@ -2067,6 +2129,173 @@ class EnomAPI {
   }
 
   // ============================================
+  // DNS HOST RECORD MANAGEMENT
+  // ============================================
+
+  /**
+   * Get all DNS host records for a domain
+   * @param {string} sld - Second level domain
+   * @param {string} tld - Top level domain
+   * @returns {Promise<object>} - Host records
+   */
+  async getHostRecords(sld, tld, options = {}) {
+    try {
+      this.validateDomainParts(sld, tld);
+      const response = await this.request('GetHosts', { sld, tld }, { mode: options.mode });
+
+      const records = [];
+
+      // eNom returns host records as HostName1, RecordType1, Address1, MXPref1, etc.
+      for (let i = 1; i <= 50; i++) {
+        const hostName = response[`HostName${i}`];
+        const recordType = response[`RecordType${i}`];
+        const address = response[`Address${i}`];
+        const mxPref = response[`MXPref${i}`];
+
+        if (!recordType || !address) break;
+
+        records.push({
+          id: i,
+          hostName: hostName || '@',
+          recordType,
+          address,
+          mxPref: mxPref ? parseInt(mxPref) : null,
+          ttl: 300 // eNom default
+        });
+      }
+
+      return {
+        domainName: `${sld}.${tld}`,
+        records,
+        count: records.length
+      };
+    } catch (error) {
+      console.error(`eNom get host records error for ${sld}.${tld}:`, error.message);
+      return {
+        domainName: `${sld}.${tld}`,
+        records: [],
+        count: 0,
+        error: error.message
+      };
+    }
+  }
+
+  /**
+   * Set DNS host records for a domain (replaces all existing records)
+   * @param {string} sld - Second level domain
+   * @param {string} tld - Top level domain
+   * @param {Array} records - Array of record objects
+   * @returns {Promise<object>} - Result
+   */
+  async setHostRecords(sld, tld, records, options = {}) {
+    try {
+      this.validateDomainParts(sld, tld);
+
+      const requestParams = { sld, tld };
+
+      // Validate and add each record
+      records.forEach((record, index) => {
+        const i = index + 1;
+
+        // Validate record type
+        const validTypes = ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'URL', 'URL301', 'Frame'];
+        if (!validTypes.includes(record.recordType)) {
+          throw new Error(`Invalid record type: ${record.recordType}`);
+        }
+
+        requestParams[`HostName${i}`] = record.hostName || '@';
+        requestParams[`RecordType${i}`] = record.recordType;
+        requestParams[`Address${i}`] = record.address;
+
+        // Add MX preference if applicable
+        if (record.recordType === 'MX' && record.mxPref) {
+          requestParams[`MXPref${i}`] = record.mxPref;
+        }
+      });
+
+      await this.request('SetHosts', requestParams, { mode: options.mode });
+
+      return {
+        success: true,
+        domainName: `${sld}.${tld}`,
+        recordCount: records.length
+      };
+    } catch (error) {
+      console.error(`eNom set host records error for ${sld}.${tld}:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Add a single DNS record (preserves existing records)
+   * @param {string} sld - Second level domain
+   * @param {string} tld - Top level domain
+   * @param {object} record - Record to add
+   * @returns {Promise<object>} - Result
+   */
+  async addHostRecord(sld, tld, record, options = {}) {
+    try {
+      // Get existing records
+      const existing = await this.getHostRecords(sld, tld, options);
+      const records = existing.records || [];
+
+      // Add new record
+      records.push({
+        hostName: record.hostName || '@',
+        recordType: record.recordType,
+        address: record.address,
+        mxPref: record.mxPref
+      });
+
+      // Set all records
+      return await this.setHostRecords(sld, tld, records, options);
+    } catch (error) {
+      console.error(`eNom add host record error for ${sld}.${tld}:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Delete a DNS record by index (preserves other records)
+   * @param {string} sld - Second level domain
+   * @param {string} tld - Top level domain
+   * @param {number} recordIndex - Index of record to delete (0-based)
+   * @returns {Promise<object>} - Result
+   */
+  async deleteHostRecord(sld, tld, recordIndex, options = {}) {
+    try {
+      // Get existing records
+      const existing = await this.getHostRecords(sld, tld, options);
+      const records = existing.records || [];
+
+      if (recordIndex < 0 || recordIndex >= records.length) {
+        throw new Error('Invalid record index');
+      }
+
+      // Remove the record
+      records.splice(recordIndex, 1);
+
+      // Set remaining records (or clear if none left)
+      if (records.length === 0) {
+        // eNom requires at least one record, so we'll set a placeholder
+        // Actually, let's just try to set empty and see what happens
+        await this.request('SetHosts', { sld, tld }, { mode: options.mode });
+      } else {
+        await this.setHostRecords(sld, tld, records, options);
+      }
+
+      return {
+        success: true,
+        domainName: `${sld}.${tld}`,
+        recordCount: records.length
+      };
+    } catch (error) {
+      console.error(`eNom delete host record error for ${sld}.${tld}:`, error.message);
+      throw error;
+    }
+  }
+
+  // ============================================
   // URL FORWARDING FUNCTIONS
   // ============================================
 
@@ -2082,9 +2311,10 @@ class EnomAPI {
       this.validateDomainParts(sld, tld);
       const response = await this.request('GetHosts', { sld, tld }, { mode: options.mode });
 
-      // Look for URL or URL301 record types in the host records
+      // Look for URL or Frame record types in the host records
       let forwardUrl = null;
       let forwardType = null;
+      let cloak = false;
 
       // eNom returns host records as HostName1, RecordType1, Address1, etc.
       for (let i = 1; i <= 20; i++) {
@@ -2092,10 +2322,18 @@ class EnomAPI {
         const hostName = response[`HostName${i}`];
         const address = response[`Address${i}`];
 
-        if (recordType === 'URL' || recordType === 'URL301') {
+        if (recordType === 'URL' || recordType === 'Frame') {
           if (hostName === '@' || hostName === '' || !hostName) {
-            forwardUrl = address;
-            forwardType = recordType === 'URL301' ? 'permanent' : 'temporary';
+            // Check if it's a 301 redirect by looking for redir_mode=301 in the URL
+            if (address && address.includes('redir_mode=301')) {
+              forwardType = 'permanent';
+              // Remove the redir_mode parameter from displayed URL
+              forwardUrl = address.replace(/[?&]redir_mode=301/, '');
+            } else {
+              forwardType = 'temporary';
+              forwardUrl = address;
+            }
+            cloak = recordType === 'Frame';
             break;
           }
         }
@@ -2106,7 +2344,7 @@ class EnomAPI {
         enabled: !!forwardUrl,
         forwardUrl,
         forwardType,
-        cloak: false // Cloaking would need Frame record type
+        cloak
       };
     } catch (error) {
       console.error(`eNom get URL forwarding error for ${sld}.${tld}:`, error.message);
@@ -2123,7 +2361,7 @@ class EnomAPI {
 
   /**
    * Set URL forwarding for a domain
-   * Uses SetHosts with URL or URL301 record type
+   * Uses SetHosts with URL record type (append ?redir_mode=301 for permanent redirects)
    * @param {string} sld - Second level domain
    * @param {string} tld - Top level domain
    * @param {object} params - Forwarding parameters
@@ -2151,29 +2389,98 @@ class EnomAPI {
         normalizedUrl = 'https://' + normalizedUrl;
       }
 
-      // Determine record type: URL (302), URL301 (301), or Frame (cloak)
-      let recordType = 'URL'; // Default: 302 temporary redirect
-      if (forwardType === 'permanent') {
-        recordType = 'URL301';
-      }
-      if (cloak) {
-        recordType = 'Frame';
-      }
+      // Determine record type: URL (for redirects) or Frame (for cloaking)
+      // For 301 permanent redirects, append ?redir_mode=301 to the URL
+      let urlRecordType = cloak ? 'Frame' : 'URL';
+      let finalUrl = normalizedUrl;
 
-      const requestParams = {
-        sld,
-        tld,
-        HostName1: '@',
-        RecordType1: recordType,
-        Address1: normalizedUrl
-      };
+      // For permanent (301) redirect, append redir_mode=301 to URL
+      if (forwardType === 'permanent' && !cloak) {
+        // Check if URL already has query parameters
+        const separator = normalizedUrl.includes('?') ? '&' : '?';
+        finalUrl = `${normalizedUrl}${separator}redir_mode=301`;
+      }
 
       // Add title for Frame (cloaking)
       if (cloak && cloakTitle) {
-        requestParams.Address1 = `${normalizedUrl},${cloakTitle}`;
+        finalUrl = `${finalUrl},${cloakTitle}`;
       }
 
+      // First, get current nameservers so we can restore them after enabling DNS hosting
+      let currentNS = [];
+      try {
+        currentNS = await this.getNameservers(sld, tld, { mode: options.mode });
+      } catch (err) {
+        console.log(`[eNom] Could not get current NS: ${err.message}`);
+      }
+
+      // Ensure DNS hosting is enabled (required for SetHosts to work)
+      // This temporarily sets nameservers to eNom's default
+      try {
+        console.log(`[eNom] Enabling DNS hosting for ${sld}.${tld} before setting forwarding`);
+        await this.request('ModifyNS', { sld, tld, UseDNS: 'default' }, { mode: options.mode });
+      } catch (err) {
+        console.log(`[eNom] DNS hosting enable note: ${err.message}`);
+        // Continue anyway - might already be enabled
+      }
+
+      // Get existing host records to preserve non-forwarding records
+      const existingHosts = await this.request('GetHosts', { sld, tld }, { mode: options.mode });
+
+      // Build new host list preserving non-URL/Frame records
+      const requestParams = { sld, tld };
+      let hostIndex = 1;
+
+      // Add the URL forwarding record first (for @ / root domain)
+      requestParams[`HostName${hostIndex}`] = '@';
+      requestParams[`RecordType${hostIndex}`] = urlRecordType;
+      requestParams[`Address${hostIndex}`] = finalUrl;
+      hostIndex++;
+
+      // Preserve existing records that aren't URL/Frame for @ (root domain)
+      for (let i = 1; i <= 20; i++) {
+        const recordType = existingHosts[`RecordType${i}`];
+        const hostName = existingHosts[`HostName${i}`];
+        const address = existingHosts[`Address${i}`];
+        const mxPref = existingHosts[`MXPref${i}`];
+
+        if (!recordType || !address) continue;
+
+        // Skip URL/Frame records for @ (we're replacing those)
+        if ((recordType === 'URL' || recordType === 'Frame') &&
+            (hostName === '@' || hostName === '' || !hostName)) {
+          continue;
+        }
+
+        // Skip A records for @ (URL forwarding creates its own A record)
+        if (recordType === 'A' && (hostName === '@' || hostName === '' || !hostName)) {
+          continue;
+        }
+
+        // Keep all other records (MX, TXT, subdomains, etc.)
+        requestParams[`HostName${hostIndex}`] = hostName || '@';
+        requestParams[`RecordType${hostIndex}`] = recordType;
+        requestParams[`Address${hostIndex}`] = address;
+        if (recordType === 'MX' && mxPref) {
+          requestParams[`MXPref${hostIndex}`] = mxPref;
+        }
+        hostIndex++;
+      }
+
+      console.log(`[eNom SetHosts] Request for ${sld}.${tld}:`, JSON.stringify(requestParams));
       await this.request('SetHosts', requestParams, { mode: options.mode });
+      console.log(`[eNom SetHosts] Success for ${sld}.${tld}`);
+
+      // Restore branded nameservers if they were previously set
+      if (currentNS.length >= 2 && currentNS.some(ns => ns.toLowerCase().includes('worxtech'))) {
+        try {
+          console.log(`[eNom] Restoring branded nameservers for ${sld}.${tld}`);
+          await this.updateNameservers(sld, tld, currentNS, { mode: options.mode });
+        } catch (err) {
+          console.log(`[eNom] Could not restore branded NS: ${err.message}`);
+          // Not critical - DNS hosting is enabled and forwarding is set
+        }
+      }
 
       return {
         success: true,

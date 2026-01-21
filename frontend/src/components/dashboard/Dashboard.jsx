@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Globe, RefreshCw, Settings, AlertTriangle, Check, Clock, Loader2, X, Server, Shield, Lock, Unlock, Key, ShoppingCart, Users, Search, ChevronLeft, ChevronRight, Eye, CreditCard, Trash2, Plus, Mail, ExternalLink } from 'lucide-react';
+import { Globe, RefreshCw, Settings, AlertTriangle, Check, Clock, Loader2, X, Server, Shield, Lock, Unlock, Key, ShoppingCart, Users, Search, ChevronLeft, ChevronRight, Eye, CreditCard, Trash2, Plus, ExternalLink, Database, Send, ArrowRightLeft, CheckCircle, XCircle } from 'lucide-react';
 import { useAuth, useCart } from '../../App';
 import { API_URL } from '../../config/api';
 import toast from 'react-hot-toast';
 import DomainContactsPanel from './DomainContactsPanel';
 import PrivacyPurchaseModal from './PrivacyPurchaseModal';
 import AutoRenewSetupModal from './AutoRenewSetupModal';
-import EmailForwardingPanel from './EmailForwardingPanel';
 import UrlForwardingPanel from './UrlForwardingPanel';
+import DnsManagementPanel from './DnsManagementPanel';
 
 function Dashboard() {
   const { token } = useAuth();
@@ -41,6 +41,134 @@ function Dashboard() {
   const [privacyPurchaseDomain, setPrivacyPurchaseDomain] = useState(null);
   const [autoRenewSetupDomain, setAutoRenewSetupDomain] = useState(null);
   const [renewalYears, setRenewalYears] = useState(1);
+
+  // Push requests state
+  const [pushRequests, setPushRequests] = useState({ incoming: [], outgoing: [] });
+  const [pushEmail, setPushEmail] = useState('');
+  const [pushNotes, setPushNotes] = useState('');
+  const [pushingDomain, setPushingDomain] = useState(false);
+  const [processingPush, setProcessingPush] = useState(null);
+
+  const fetchPushRequests = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_URL}/domains/push-requests`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setPushRequests(data);
+      }
+    } catch (err) {
+      console.error('Error fetching push requests:', err);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    fetchPushRequests();
+  }, [fetchPushRequests]);
+
+  const handlePushDomain = async () => {
+    if (!pushEmail.trim()) {
+      toast.error('Please enter the recipient email');
+      return;
+    }
+
+    setPushingDomain(true);
+    try {
+      const res = await fetch(`${API_URL}/domains/${selectedDomain.id}/push`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          to_email: pushEmail.trim(),
+          notes: pushNotes.trim() || undefined
+        })
+      });
+
+      const data = await res.json();
+
+      if (res.ok) {
+        toast.success(data.message || 'Push request sent');
+        setPushEmail('');
+        setPushNotes('');
+        fetchPushRequests();
+      } else {
+        toast.error(data.error || 'Failed to send push request');
+      }
+    } catch (err) {
+      toast.error('Connection error');
+    }
+    setPushingDomain(false);
+  };
+
+  const handleAcceptPush = async (requestId) => {
+    setProcessingPush(requestId);
+    try {
+      const res = await fetch(`${API_URL}/domains/push-requests/${requestId}/accept`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+
+      const data = await res.json();
+
+      if (res.ok) {
+        toast.success(data.message || 'Domain accepted');
+        fetchPushRequests();
+        fetchDomains();
+      } else {
+        toast.error(data.error || 'Failed to accept');
+      }
+    } catch (err) {
+      toast.error('Connection error');
+    }
+    setProcessingPush(null);
+  };
+
+  const handleRejectPush = async (requestId) => {
+    setProcessingPush(requestId);
+    try {
+      const res = await fetch(`${API_URL}/domains/push-requests/${requestId}/reject`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+
+      const data = await res.json();
+
+      if (res.ok) {
+        toast.success(data.message || 'Push request rejected');
+        fetchPushRequests();
+      } else {
+        toast.error(data.error || 'Failed to reject');
+      }
+    } catch (err) {
+      toast.error('Connection error');
+    }
+    setProcessingPush(null);
+  };
+
+  const handleCancelPush = async (requestId) => {
+    setProcessingPush(requestId);
+    try {
+      const res = await fetch(`${API_URL}/domains/push-requests/${requestId}/cancel`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+
+      const data = await res.json();
+
+      if (res.ok) {
+        toast.success(data.message || 'Push request cancelled');
+        fetchPushRequests();
+      } else {
+        toast.error(data.error || 'Failed to cancel');
+      }
+    } catch (err) {
+      toast.error('Connection error');
+    }
+    setProcessingPush(null);
+  };
 
   const fetchDomains = useCallback(async () => {
     setLoading(true);
@@ -475,6 +603,105 @@ function Dashboard() {
         </button>
       </div>
 
+      {/* Pending Incoming Push Requests */}
+      {pushRequests.incoming.length > 0 && (
+        <div className="card mb-6 border-2 border-indigo-200 dark:border-indigo-800">
+          <div className="p-4 bg-indigo-50 dark:bg-indigo-900/30 border-b border-indigo-200 dark:border-indigo-800">
+            <div className="flex items-center gap-2">
+              <ArrowRightLeft className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+              <h3 className="font-semibold text-indigo-800 dark:text-indigo-200">
+                Incoming Domain Transfers ({pushRequests.incoming.length})
+              </h3>
+            </div>
+          </div>
+          <div className="divide-y divide-slate-200 dark:divide-slate-700">
+            {pushRequests.incoming.map(req => (
+              <div key={req.id} className="p-4 flex items-center justify-between gap-4">
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-slate-900 dark:text-slate-100 truncate">
+                    {req.domain_name}.{req.tld}
+                  </p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    From: {req.from_name || req.from_email}
+                  </p>
+                  {req.notes && (
+                    <p className="text-sm text-slate-500 dark:text-slate-400 mt-1 italic">
+                      "{req.notes}"
+                    </p>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleAcceptPush(req.id)}
+                    disabled={processingPush === req.id}
+                    className="btn-primary py-2 px-3"
+                  >
+                    {processingPush === req.id ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <>
+                        <CheckCircle className="w-4 h-4 mr-1" />
+                        Accept
+                      </>
+                    )}
+                  </button>
+                  <button
+                    onClick={() => handleRejectPush(req.id)}
+                    disabled={processingPush === req.id}
+                    className="btn-secondary py-2 px-3 text-red-600 dark:text-red-400 border-red-200 dark:border-red-800 hover:bg-red-50 dark:hover:bg-red-900/20"
+                  >
+                    <XCircle className="w-4 h-4 mr-1" />
+                    Reject
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Pending Outgoing Push Requests */}
+      {pushRequests.outgoing.length > 0 && (
+        <div className="card mb-6">
+          <div className="p-4 bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-800">
+            <div className="flex items-center gap-2">
+              <Send className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+              <h3 className="font-semibold text-amber-800 dark:text-amber-200">
+                Pending Outgoing Transfers ({pushRequests.outgoing.length})
+              </h3>
+            </div>
+          </div>
+          <div className="divide-y divide-slate-200 dark:divide-slate-700">
+            {pushRequests.outgoing.map(req => (
+              <div key={req.id} className="p-4 flex items-center justify-between gap-4">
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-slate-900 dark:text-slate-100 truncate">
+                    {req.domain_name}.{req.tld}
+                  </p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    To: {req.to_name || req.to_email}
+                  </p>
+                  <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">
+                    Waiting for acceptance...
+                  </p>
+                </div>
+                <button
+                  onClick={() => handleCancelPush(req.id)}
+                  disabled={processingPush === req.id}
+                  className="btn-secondary py-2 px-3 text-red-600 dark:text-red-400"
+                >
+                  {processingPush === req.id ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    'Cancel'
+                  )}
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Filters */}
       <div className="card mb-6">
         <div className="p-4 flex flex-col sm:flex-row gap-4">
@@ -660,6 +887,7 @@ function Dashboard() {
               {[
                 { id: 'details', label: 'Details', icon: Globe },
                 { id: 'nameservers', label: 'Nameservers', icon: Server },
+                { id: 'dns', label: 'DNS', icon: Database },
                 { id: 'forwarding', label: 'Forwarding', icon: ExternalLink },
                 { id: 'settings', label: 'Settings', icon: Settings },
                 { id: 'transfer', label: 'Transfer', icon: Key }
@@ -853,38 +1081,41 @@ function Dashboard() {
                 </div>
               )}
 
+              {/* DNS Tab */}
+              {activeTab === 'dns' && (
+                <DnsManagementPanel
+                  domainId={selectedDomain.id}
+                  domainName={selectedDomain.domain_name}
+                  tld={selectedDomain.tld}
+                  nameservers={managementData[selectedDomain.id]?.nameservers || []}
+                  onNameserversUpdated={(newNs) => {
+                    // Update local state when nameservers are restored via DNS panel
+                    setManagementData(prev => ({
+                      ...prev,
+                      [selectedDomain.id]: { ...prev[selectedDomain.id], nameservers: newNs }
+                    }));
+                    setNsInputs([newNs[0] || '', newNs[1] || '', newNs[2] || '', newNs[3] || '']);
+                  }}
+                />
+              )}
+
               {/* Forwarding Tab */}
               {activeTab === 'forwarding' && (
                 <div className="space-y-6">
-                  {/* Email Forwarding Section */}
-                  <div>
-                    <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-3 flex items-center gap-2">
-                      <Mail className="w-4 h-4" />
-                      Email Forwarding
-                    </h3>
-                    <EmailForwardingPanel
-                      domainId={selectedDomain.id}
-                      domainName={selectedDomain.domain_name}
-                      tld={selectedDomain.tld}
-                      nameservers={managementData[selectedDomain.id]?.nameservers || []}
-                    />
-                  </div>
-
-                  <hr className="border-slate-200 dark:border-slate-700" />
-
                   {/* URL Forwarding Section */}
-                  <div>
-                    <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-3 flex items-center gap-2">
-                      <ExternalLink className="w-4 h-4" />
-                      URL Forwarding
-                    </h3>
-                    <UrlForwardingPanel
-                      domainId={selectedDomain.id}
-                      domainName={selectedDomain.domain_name}
-                      tld={selectedDomain.tld}
-                      nameservers={managementData[selectedDomain.id]?.nameservers || []}
-                    />
-                  </div>
+                  <UrlForwardingPanel
+                    domainId={selectedDomain.id}
+                    domainName={selectedDomain.domain_name}
+                    tld={selectedDomain.tld}
+                    nameservers={managementData[selectedDomain.id]?.nameservers || []}
+                    onNameserversUpdated={(newNs) => {
+                      setManagementData(prev => ({
+                        ...prev,
+                        [selectedDomain.id]: { ...prev[selectedDomain.id], nameservers: newNs }
+                      }));
+                      setNsInputs([newNs[0] || '', newNs[1] || '', newNs[2] || '', newNs[3] || '']);
+                    }}
+                  />
                 </div>
               )}
 
@@ -1037,6 +1268,63 @@ function Dashboard() {
                       <li>Approve the transfer confirmation email</li>
                       <li>Transfer typically completes within 5-7 days</li>
                     </ol>
+                  </div>
+
+                  {/* Push to Another User */}
+                  <div className="p-4 bg-indigo-50 dark:bg-indigo-900/20 rounded-xl border border-indigo-200 dark:border-indigo-800">
+                    <div className="flex items-start gap-3 mb-4">
+                      <Send className="w-5 h-5 text-indigo-600 dark:text-indigo-400 flex-shrink-0 mt-0.5" />
+                      <div>
+                        <h4 className="font-medium text-indigo-800 dark:text-indigo-300">Push to Another User</h4>
+                        <p className="text-sm text-indigo-700 dark:text-indigo-400 mt-1">
+                          Transfer this domain to another user on our platform. They will need to accept the transfer.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                          Recipient Email
+                        </label>
+                        <input
+                          type="email"
+                          value={pushEmail}
+                          onChange={(e) => setPushEmail(e.target.value)}
+                          placeholder="user@example.com"
+                          className="input w-full"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                          Note (optional)
+                        </label>
+                        <input
+                          type="text"
+                          value={pushNotes}
+                          onChange={(e) => setPushNotes(e.target.value)}
+                          placeholder="Add a message..."
+                          className="input w-full"
+                        />
+                      </div>
+                      <button
+                        onClick={handlePushDomain}
+                        disabled={pushingDomain || !pushEmail.trim()}
+                        className="btn-primary w-full"
+                      >
+                        {pushingDomain ? (
+                          <>
+                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                            Sending...
+                          </>
+                        ) : (
+                          <>
+                            <Send className="w-4 h-4 mr-2" />
+                            Send Push Request
+                          </>
+                        )}
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}

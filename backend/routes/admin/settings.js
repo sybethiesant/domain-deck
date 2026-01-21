@@ -65,7 +65,7 @@ const DEFAULT_SETTINGS = {
   stripe_test_mode: 'true',
 
   // Domain settings
-  default_nameservers: 'ns1.worxtech.biz,ns2.worxtech.biz',
+  default_nameservers: 'dns1.name-services.com,dns2.name-services.com,dns3.name-services.com,dns4.name-services.com',
   suspended_nameservers: 'ns1.suspended.worxtech.biz,ns2.suspended.worxtech.biz',
   auto_sync_enabled: 'true',
   sync_interval_hours: '24',

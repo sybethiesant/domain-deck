@@ -3,12 +3,13 @@ import {
   Globe, Search, RefreshCw, Loader2, Download, ChevronLeft, ChevronRight,
   Check, X, Shield, Lock, Unlock, Edit2, Eye, Calendar, User, Server,
   AlertTriangle, Clock, Filter, MoreVertical, Trash2, Key, ExternalLink,
-  Save, Users, ArrowRight, Plus, Contact
+  Save, Users, ArrowRight, Plus, Contact, Database
 } from 'lucide-react';
 import { useAuth } from '../../App';
 import { API_URL } from '../../config/api';
 import toast from 'react-hot-toast';
 import DomainContactsPanel from '../dashboard/DomainContactsPanel';
+import DnsManagementPanel from '../dashboard/DnsManagementPanel';
 
 // Status badge component
 const StatusBadge = ({ status }) => {
@@ -126,6 +127,47 @@ function DomainDetailModal({ domain, onClose, onSave, onRefresh, token }) {
       }
     } catch (err) {
       toast.error('Failed to update');
+    }
+    setSaving(false);
+  };
+
+  // Push domain to another user (admin - immediate, no acceptance needed)
+  const handlePushDomain = async () => {
+    if (!formData.user_id || formData.user_id === details?.user_id) {
+      toast.error('Please select a different user');
+      return;
+    }
+
+    const targetUser = users.find(u => u.id === formData.user_id);
+    if (!targetUser) {
+      toast.error('User not found');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const res = await fetch(`${API_URL}/admin/domains/${domain.id}/push`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          to_email: targetUser.email,
+          notes: 'Admin transfer'
+        })
+      });
+
+      const data = await res.json();
+
+      if (res.ok) {
+        toast.success(data.message || 'Domain transferred');
+        onSave();
+      } else {
+        toast.error(data.error || 'Failed to transfer');
+      }
+    } catch (err) {
+      toast.error('Failed to transfer');
     }
     setSaving(false);
   };
@@ -342,6 +384,7 @@ function DomainDetailModal({ domain, onClose, onSave, onRefresh, token }) {
           {[
             { id: 'details', label: 'Details', icon: Eye },
             { id: 'nameservers', label: 'Nameservers', icon: Server },
+            { id: 'dns', label: 'DNS', icon: Database },
             { id: 'settings', label: 'Settings', icon: Edit2 },
             { id: 'contacts', label: 'Contacts', icon: Contact },
             { id: 'transfer', label: 'Transfer', icon: Users },
@@ -567,6 +610,33 @@ function DomainDetailModal({ domain, onClose, onSave, onRefresh, token }) {
             </div>
           )}
 
+          {/* DNS Tab */}
+          {activeSection === 'dns' && (
+            <div className="space-y-4">
+              <div className="p-4 bg-indigo-50 dark:bg-indigo-900/20 rounded-xl border border-indigo-200 dark:border-indigo-800">
+                <p className="text-sm text-indigo-700 dark:text-indigo-300">
+                  <strong>Admin Access:</strong> You can view and edit DNS records for this domain.
+                  Changes are applied directly to eNom.
+                </p>
+              </div>
+              <DnsManagementPanel
+                domainId={domain.id}
+                domainName={domain.domain_name}
+                tld={domain.tld}
+                nameservers={details?.nameservers ?
+                  (typeof details.nameservers === 'string' ? JSON.parse(details.nameservers) : details.nameservers)
+                  : []
+                }
+                isAdmin={true}
+                onNameserversUpdated={(newNs) => {
+                  // Update local state when nameservers are restored via DNS panel
+                  setDetails(prev => ({ ...prev, nameservers: newNs }));
+                  setNameservers([...newNs, '', '', '', ''].slice(0, 4));
+                }}
+              />
+            </div>
+          )}
+
           {activeSection === 'settings' && (
             <div className="space-y-6">
               <div className="grid gap-6">
@@ -734,13 +804,17 @@ function DomainDetailModal({ domain, onClose, onSave, onRefresh, token }) {
               )}
 
               <button
-                onClick={handleSave}
+                onClick={handlePushDomain}
                 disabled={saving || !formData.user_id || formData.user_id === details?.user_id}
                 className="btn-primary w-full"
               >
                 {saving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Users className="w-4 h-4 mr-2" />}
-                Transfer Domain
+                Transfer Domain (Immediate)
               </button>
+
+              <p className="text-xs text-center text-slate-500 dark:text-slate-400 mt-2">
+                Admin transfers are immediate and don't require acceptance.
+              </p>
             </div>
           )}
 

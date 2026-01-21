@@ -3,6 +3,7 @@ import { Save, Loader2, RefreshCw, Globe, Mail, Bell, Server, ShoppingCart, Shie
 import { useAuth } from '../../App';
 import { API_URL } from '../../config/api';
 import { toast } from 'react-hot-toast';
+import DOMPurify from 'dompurify';
 
 function AdminSettings() {
   const { token } = useAuth();
@@ -737,7 +738,7 @@ function AdminSettings() {
               value={settings.default_nameservers || ''}
               onChange={(e) => handleChange('default_nameservers', e.target.value)}
               className="input w-full font-mono text-sm"
-              placeholder="ns1.worxtech.biz,ns2.worxtech.biz"
+              placeholder="dns1.name-services.com,dns2.name-services.com,dns3.name-services.com,dns4.name-services.com"
             />
             <p className="text-xs text-slate-500 mt-1">Used for new domain registrations</p>
           </div>
@@ -1147,7 +1148,7 @@ function AdminSettings() {
             <div className="flex-1 overflow-auto p-4">
               <div
                 className="bg-white rounded-lg shadow-sm"
-                dangerouslySetInnerHTML={{ __html: previewingTemplate.html }}
+                dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(previewingTemplate.html) }}
               />
             </div>
             <div className="border-t dark:border-slate-700 p-4 flex justify-end">

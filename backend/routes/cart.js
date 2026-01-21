@@ -7,8 +7,11 @@ router.get('/', authMiddleware, async (req, res) => {
   const pool = req.app.locals.pool;
 
   try {
-    // Clean expired items first
-    await pool.query('DELETE FROM cart_items WHERE expires_at < CURRENT_TIMESTAMP');
+    // Clean only this user's expired items (global cleanup handled by cron job)
+    await pool.query(
+      'DELETE FROM cart_items WHERE user_id = $1 AND expires_at < CURRENT_TIMESTAMP',
+      [req.user.id]
+    );
 
     const result = await pool.query(
       `SELECT id, item_type, domain_name, tld, years, price, options, created_at
@@ -87,6 +90,8 @@ router.post('/add', authMiddleware, async (req, res) => {
       case 'renew':
         price = parseFloat(pricing.price_renew) * years;
         break;
+      default:
+        return res.status(400).json({ error: `Invalid item type: ${item_type}` });
     }
 
     // Add privacy cost if requested
@@ -111,8 +116,13 @@ router.post('/add', authMiddleware, async (req, res) => {
 // Update cart item
 router.put('/:itemId', authMiddleware, async (req, res) => {
   const pool = req.app.locals.pool;
-  const itemId = parseInt(req.params.itemId);
+  const itemId = parseInt(req.params.itemId, 10);
   const { years, options } = req.body;
+
+  // Validate itemId
+  if (isNaN(itemId) || itemId <= 0) {
+    return res.status(400).json({ error: 'Invalid item ID' });
+  }
 
   try {
     // Get current item
@@ -137,6 +147,10 @@ router.put('/:itemId', authMiddleware, async (req, res) => {
 
       if (pricingResult.rows.length > 0) {
         const pricing = pricingResult.rows[0];
+        // Transfer items don't support year changes
+        if (item.item_type === 'transfer') {
+          return res.status(400).json({ error: 'Cannot change years for transfer items' });
+        }
         const basePrice = item.item_type === 'register'
           ? pricing.price_register
           : pricing.price_renew;
@@ -169,7 +183,12 @@ router.put('/:itemId', authMiddleware, async (req, res) => {
 // Remove item from cart
 router.delete('/:itemId', authMiddleware, async (req, res) => {
   const pool = req.app.locals.pool;
-  const itemId = parseInt(req.params.itemId);
+  const itemId = parseInt(req.params.itemId, 10);
+
+  // Validate itemId
+  if (isNaN(itemId) || itemId <= 0) {
+    return res.status(400).json({ error: 'Invalid item ID' });
+  }
 
   try {
     const result = await pool.query(

@@ -19,6 +19,12 @@ const authMiddleware = (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    // Validate that the token contains required user ID
+    if (!decoded || !decoded.id) {
+      return res.status(401).json({ error: 'Invalid token: missing user ID' });
+    }
+
     req.user = decoded;
     next();
   } catch (error) {
@@ -157,6 +163,42 @@ const salesMiddleware = requireRole(ROLE_LEVELS.SALES);
 // Super admin middleware - super admin only (level 4)
 const superAdminMiddleware = requireRole(ROLE_LEVELS.SUPERADMIN);
 
+// Validation helpers
+
+/**
+ * Parse and validate an integer parameter
+ * @param {string} value - The value to parse
+ * @param {object} options - Options for validation
+ * @returns {number|null} - The parsed integer or null if invalid
+ */
+const parseIntParam = (value, options = {}) => {
+  const { min = 1, max = Number.MAX_SAFE_INTEGER } = options;
+  const parsed = parseInt(value, 10);
+  if (isNaN(parsed) || parsed < min || parsed > max) {
+    return null;
+  }
+  return parsed;
+};
+
+/**
+ * Middleware factory to validate integer parameters
+ * @param {string[]} params - Parameter names to validate
+ * @param {object} options - Validation options
+ */
+const validateIntParams = (params, options = {}) => {
+  return (req, res, next) => {
+    for (const param of params) {
+      const value = req.params[param];
+      const parsed = parseIntParam(value, options);
+      if (parsed === null) {
+        return res.status(400).json({ error: `Invalid ${param}: must be a positive integer` });
+      }
+      req.params[param] = parsed; // Replace with validated integer
+    }
+    next();
+  };
+};
+
 // Audit logging helper
 const logAudit = async (pool, userId, action, entityType, entityId, oldValues, newValues, req) => {
   try {
@@ -188,5 +230,7 @@ module.exports = {
   salesMiddleware,
   superAdminMiddleware,
   logAudit,
+  parseIntParam,
+  validateIntParams,
   ROLE_LEVELS
 };

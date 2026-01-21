@@ -5,6 +5,7 @@
 const express = require('express');
 const router = express.Router();
 const { logAudit } = require('../../middleware/auth');
+const { PRICING } = require('../../config/constants');
 
 // Get all TLD pricing (including costs)
 router.get('/pricing', async (req, res) => {
@@ -109,7 +110,9 @@ router.post('/pricing', async (req, res) => {
   const {
     tld, cost_register, cost_renew, cost_transfer,
     price_register, price_renew, price_transfer,
-    price_privacy = 9.99, min_years = 1, max_years = 10
+    price_privacy = PRICING.DEFAULT_PRIVACY_PRICE,
+    min_years = PRICING.MIN_YEARS,
+    max_years = PRICING.MAX_YEARS
   } = req.body;
 
   if (!tld || !cost_register || !price_register) {

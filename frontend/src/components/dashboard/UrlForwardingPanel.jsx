@@ -1,16 +1,26 @@
 import React, { useState, useEffect } from 'react';
-import { ExternalLink, Loader2, AlertCircle, Save, Trash2, Info } from 'lucide-react';
+import { ExternalLink, Loader2, AlertCircle, Save, Trash2, Info, RotateCcw } from 'lucide-react';
 import { useAuth } from '../../App';
 import { API_URL } from '../../config/api';
 import toast from 'react-hot-toast';
 
-function UrlForwardingPanel({ domainId, domainName, tld, nameservers }) {
+// eNom default nameservers (required for URL forwarding to work)
+const DEFAULT_NAMESERVERS = [
+  'dns1.name-services.com',
+  'dns2.name-services.com',
+  'dns3.name-services.com',
+  'dns4.name-services.com'
+];
+
+function UrlForwardingPanel({ domainId, domainName, tld, nameservers, isAdmin = false, onNameserversUpdated }) {
   const { token } = useAuth();
+  const basePath = isAdmin ? `${API_URL}/admin/domains` : `${API_URL}/domains`;
   const [forwarding, setForwarding] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [restoringNS, setRestoringNS] = useState(false);
 
   // Form state
   const [forwardUrl, setForwardUrl] = useState('');
@@ -19,19 +29,59 @@ function UrlForwardingPanel({ domainId, domainName, tld, nameservers }) {
   const [cloakTitle, setCloakTitle] = useState('');
   const [cloakDescription, setCloakDescription] = useState('');
 
-  // Check if using eNom/WorxTech nameservers (required for forwarding)
-  const isUsingEnomNS = !nameservers || nameservers.length === 0 ||
-    nameservers.some(ns => {
-      const nsLower = ns.toLowerCase();
-      return nsLower.includes('enom') ||
-             nsLower.includes('registrar-servers') ||
-             nsLower.includes('name-services') ||
-             nsLower.includes('worxtech.biz');
-    });
+  // Check if using eNom nameservers (required for URL forwarding)
+  const isUsingEnomNS = React.useMemo(() => {
+    if (!nameservers || nameservers.length === 0) {
+      return true;
+    }
+    const nsLowerList = nameservers.map(ns => ns.toLowerCase().trim());
+    return nsLowerList.some(ns =>
+      ns.includes('name-services') ||
+      ns.includes('enom') ||
+      ns.includes('registrar-servers')
+    );
+  }, [nameservers]);
 
   useEffect(() => {
-    fetchForwarding();
-  }, [domainId]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (isUsingEnomNS) {
+      fetchForwarding();
+    } else {
+      setLoading(false);
+    }
+  }, [domainId, isUsingEnomNS]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleRestoreDefaultNS = async () => {
+    if (!window.confirm(`This will change nameservers to eNom's default DNS servers (dns1.name-services.com, dns2.name-services.com, etc). Continue?`)) {
+      return;
+    }
+
+    setRestoringNS(true);
+    try {
+      const res = await fetch(`${basePath}/${domainId}/nameservers`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          nameservers: DEFAULT_NAMESERVERS
+        })
+      });
+
+      if (res.ok) {
+        toast.success('Nameservers restored to eNom defaults');
+        if (onNameserversUpdated) {
+          onNameserversUpdated(DEFAULT_NAMESERVERS);
+        }
+      } else {
+        const data = await res.json();
+        toast.error(data.error || 'Failed to restore nameservers');
+      }
+    } catch (err) {
+      toast.error('Connection error');
+    }
+    setRestoringNS(false);
+  };
 
   const fetchForwarding = async () => {
     setLoading(true);
@@ -144,22 +194,69 @@ function UrlForwardingPanel({ domainId, domainName, tld, nameservers }) {
     );
   }
 
-  return (
-    <div className="space-y-4">
-      {/* Nameserver Warning */}
-      {!isUsingEnomNS && (
-        <div className="p-4 bg-amber-50 dark:bg-amber-900/20 rounded-xl border border-amber-200 dark:border-amber-800 flex items-start gap-3">
-          <AlertCircle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
-          <div>
-            <p className="text-sm font-medium text-amber-800 dark:text-amber-300">Custom Nameservers Detected</p>
-            <p className="text-sm text-amber-700 dark:text-amber-400 mt-1">
-              URL forwarding requires our default nameservers. You're currently using custom nameservers,
-              so URL forwarding may not work. Configure redirects at your DNS provider instead.
+  // Block URL forwarding when using custom nameservers
+  if (!isUsingEnomNS) {
+    return (
+      <div className="space-y-4">
+        <div className="p-6 bg-amber-50 dark:bg-amber-900/20 rounded-xl border border-amber-200 dark:border-amber-800">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="w-6 h-6 text-amber-500 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <p className="text-base font-semibold text-amber-800 dark:text-amber-300">Custom Nameservers Detected</p>
+              <p className="text-sm text-amber-700 dark:text-amber-400 mt-2">
+                URL forwarding is only available when using eNom's default nameservers.
+                Your domain is currently using custom nameservers:
+              </p>
+              <ul className="mt-2 space-y-1">
+                {nameservers.map((ns, idx) => (
+                  <li key={idx} className="text-sm font-mono text-amber-800 dark:text-amber-300 pl-4">
+                    {ns}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-sm text-amber-700 dark:text-amber-400 mt-3">
+                To use URL forwarding, restore the default eNom nameservers below. Otherwise,
+                configure redirects at your current DNS provider.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-4 pt-4 border-t border-amber-200 dark:border-amber-700">
+            <p className="text-sm text-slate-600 dark:text-slate-400 mb-3">
+              <strong>eNom Default Nameservers:</strong>
             </p>
+            <div className="flex flex-wrap gap-2 mb-4">
+              {DEFAULT_NAMESERVERS.map((ns, idx) => (
+                <span key={idx} className="px-3 py-1 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 rounded-lg font-mono text-sm">
+                  {ns}
+                </span>
+              ))}
+            </div>
+            <button
+              onClick={handleRestoreDefaultNS}
+              disabled={restoringNS}
+              className="btn-primary"
+            >
+              {restoringNS ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Restoring...
+                </>
+              ) : (
+                <>
+                  <RotateCcw className="w-4 h-4 mr-2" />
+                  Restore Default Nameservers
+                </>
+              )}
+            </button>
           </div>
         </div>
-      )}
+      </div>
+    );
+  }
 
+  return (
+    <div className="space-y-4">
       <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-200 dark:border-blue-800 flex items-start gap-3">
         <Info className="w-5 h-5 text-blue-500 flex-shrink-0 mt-0.5" />
         <p className="text-sm text-blue-700 dark:text-blue-400">

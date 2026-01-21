@@ -3,12 +3,13 @@ import { X, Shield, Check, AlertCircle, Loader2, Wallet } from 'lucide-react';
 import { loadStripe } from '@stripe/stripe-js';
 import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js';
 import { API_URL } from '../../config/api';
+import { useAuth } from '../../App';
 
 // Stripe promise loaded dynamically from API config
 let stripePromise = null;
 
 // Inner form component that uses Stripe hooks
-function AutoRenewForm({ domainId, domainName, renewalPrice, setupIntentId, onSuccess, onCancel }) {
+function AutoRenewForm({ domainId, domainName, renewalPrice, setupIntentId, onSuccess, onCancel, token }) {
   const stripe = useStripe();
   const elements = useElements();
   const [loading, setLoading] = useState(false);
@@ -42,7 +43,6 @@ function AutoRenewForm({ domainId, domainName, renewalPrice, setupIntentId, onSu
 
       if (setupIntent && setupIntent.status === 'succeeded') {
         // Confirm with our backend
-        const token = localStorage.getItem('token');
         const confirmResponse = await fetch(`${API_URL}/domains/${domainId}/confirm-auto-renew`, {
           method: 'POST',
           headers: {
@@ -156,6 +156,7 @@ function AutoRenewForm({ domainId, domainName, renewalPrice, setupIntentId, onSu
 
 // Main modal component
 export default function AutoRenewSetupModal({ isOpen, onClose, domain, onSuccess }) {
+  const { token } = useAuth();
   const [success, setSuccess] = useState(false);
   const [successData, setSuccessData] = useState(null);
   const [clientSecret, setClientSecret] = useState(null);
@@ -184,7 +185,6 @@ export default function AutoRenewSetupModal({ isOpen, onClose, domain, onSuccess
           // Initialize Stripe with the key from API
           stripePromise = loadStripe(config.publishableKey);
 
-          const token = localStorage.getItem('token');
           const response = await fetch(`${API_URL}/domains/${domain.id}/setup-auto-renew`, {
             method: 'POST',
             headers: {
@@ -315,6 +315,7 @@ export default function AutoRenewSetupModal({ isOpen, onClose, domain, onSuccess
                 setupIntentId={setupIntentId}
                 onSuccess={handleSuccess}
                 onCancel={handleClose}
+                token={token}
               />
             </Elements>
           )}

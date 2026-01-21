@@ -4,6 +4,7 @@ const { authMiddleware } = require('../middleware/auth');
 const enom = require('../services/enom');
 const stripeService = require('../services/stripe');
 const emailService = require('../services/email');
+const { PRICING } = require('../config/constants');
 
 // Get Stripe config
 router.get('/config', (req, res) => {
@@ -141,7 +142,7 @@ router.post('/privacy-purchase', authMiddleware, async (req, res) => {
       [tld]
     );
 
-    const privacyPrice = pricingResult.rows[0]?.price_privacy || 9.99;
+    const privacyPrice = pricingResult.rows[0]?.price_privacy || PRICING.DEFAULT_PRIVACY_PRICE;
     const amountInCents = Math.round(privacyPrice * 100);
 
     // Get or create Stripe customer
@@ -403,7 +404,7 @@ async function handlePaymentSuccess(pool, paymentIntent) {
           sld: item.domain_name,
           tld: item.tld,
           years: item.years || 1,
-          nameservers: ['ns1.worxtech.biz', 'ns2.worxtech.biz'],
+          nameservers: ['dns1.name-services.com', 'dns2.name-services.com', 'dns3.name-services.com', 'dns4.name-services.com'],
           registrant: registrantContact,
           privacy: false,
           cost: parseFloat(item.total_price),

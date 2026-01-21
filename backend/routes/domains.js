@@ -1076,7 +1076,135 @@ router.get('/admin/balance', authMiddleware, adminMiddleware, async (req, res) =
 });
 
 // ============================================
-// EMAIL FORWARDING ROUTES
+// DNS HOST RECORD ROUTES
+// ============================================
+
+// Get all DNS host records for a domain
+router.get('/:id/dns', authMiddleware, async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+
+  try {
+    // Verify ownership
+    const domainResult = await pool.query(
+      'SELECT * FROM domains WHERE id = $1 AND user_id = $2',
+      [domainId, req.user.id]
+    );
+
+    if (domainResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Domain not found' });
+    }
+
+    const domain = domainResult.rows[0];
+    const sld = domain.domain_name;
+    const tld = domain.tld;
+
+    // Get host records from eNom
+    const records = await enom.getHostRecords(sld, tld, { mode: domain.enom_mode || 'test' });
+
+    res.json(records);
+  } catch (error) {
+    console.error('Error getting DNS records:', error);
+    res.status(500).json({ error: 'Failed to get DNS records' });
+  }
+});
+
+// Set all DNS host records for a domain (replaces existing)
+router.put('/:id/dns', authMiddleware, async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+  const { records } = req.body;
+
+  if (!Array.isArray(records)) {
+    return res.status(400).json({ error: 'records array is required' });
+  }
+
+  try {
+    // Verify ownership and check if suspended
+    const access = await checkDomainAccess(pool, domainId, req.user.id);
+    if (access.error) {
+      return res.status(access.status).json({ error: access.error });
+    }
+
+    const domain = access.domain;
+    const sld = domain.domain_name;
+    const tld = domain.tld;
+
+    // Set host records via eNom
+    const result = await enom.setHostRecords(sld, tld, records, { mode: domain.enomMode });
+
+    res.json(result);
+  } catch (error) {
+    console.error('Error setting DNS records:', error);
+    res.status(500).json({ error: error.message || 'Failed to set DNS records' });
+  }
+});
+
+// Add a single DNS record
+router.post('/:id/dns', authMiddleware, async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+  const { hostName, recordType, address, mxPref } = req.body;
+
+  if (!recordType || !address) {
+    return res.status(400).json({ error: 'recordType and address are required' });
+  }
+
+  try {
+    // Verify ownership and check if suspended
+    const access = await checkDomainAccess(pool, domainId, req.user.id);
+    if (access.error) {
+      return res.status(access.status).json({ error: access.error });
+    }
+
+    const domain = access.domain;
+    const sld = domain.domain_name;
+    const tld = domain.tld;
+
+    // Add host record via eNom
+    const result = await enom.addHostRecord(sld, tld, {
+      hostName: hostName || '@',
+      recordType,
+      address,
+      mxPref
+    }, { mode: domain.enomMode });
+
+    res.json(result);
+  } catch (error) {
+    console.error('Error adding DNS record:', error);
+    res.status(500).json({ error: error.message || 'Failed to add DNS record' });
+  }
+});
+
+// Delete a DNS record by index
+router.delete('/:id/dns/:recordIndex', authMiddleware, async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+  const recordIndex = parseInt(req.params.recordIndex);
+
+  try {
+    // Verify ownership and check if suspended
+    const access = await checkDomainAccess(pool, domainId, req.user.id);
+    if (access.error) {
+      return res.status(access.status).json({ error: access.error });
+    }
+
+    const domain = access.domain;
+    const sld = domain.domain_name;
+    const tld = domain.tld;
+
+    // Delete host record via eNom
+    const result = await enom.deleteHostRecord(sld, tld, recordIndex, { mode: domain.enomMode });
+
+    res.json(result);
+  } catch (error) {
+    console.error('Error deleting DNS record:', error);
+    res.status(500).json({ error: error.message || 'Failed to delete DNS record' });
+  }
+});
+
+// ============================================
+// EMAIL FORWARDING ROUTES (DEPRECATED)
 // ============================================
 
 // Get email forwarding for a domain
@@ -1223,6 +1351,7 @@ router.put('/:id/url-forwarding', authMiddleware, async (req, res) => {
     const tld = domain.tld;
 
     // Set URL forwarding via eNom
+    console.log(`[URL Forward] Setting forwarding for ${sld}.${tld}: type=${forwardType}, url=${forwardUrl}, cloak=${cloak}`);
     const result = await enom.setUrlForwarding(sld, tld, {
       forwardUrl,
       forwardType: forwardType || 'temporary',
@@ -1232,9 +1361,10 @@ router.put('/:id/url-forwarding', authMiddleware, async (req, res) => {
       cloakKeywords
     }, { mode: domain.enomMode });
 
+    console.log(`[URL Forward] Success for ${sld}.${tld}:`, result);
     res.json(result);
   } catch (error) {
-    console.error('Error setting URL forwarding:', error);
+    console.error(`[URL Forward] Error for ${sld}.${tld}:`, error.message);
     res.status(500).json({ error: error.message || 'Failed to set URL forwarding' });
   }
 });
@@ -1262,6 +1392,318 @@ router.delete('/:id/url-forwarding', authMiddleware, async (req, res) => {
   } catch (error) {
     console.error('Error disabling URL forwarding:', error);
     res.status(500).json({ error: error.message || 'Failed to disable URL forwarding' });
+  }
+});
+
+// TEST ROUTE
+router.get("/test-dns-route", (req, res) => { res.json({ working: true }); });
+
+// ============================================
+// DOMAIN PUSH (Internal Transfer) ROUTES
+// ============================================
+
+// Get pending push requests for current user (incoming and outgoing)
+router.get('/push-requests', authMiddleware, async (req, res) => {
+  const pool = req.app.locals.pool;
+  const userId = req.user.id;
+
+  try {
+    // Get incoming requests (domains being pushed TO this user)
+    const incoming = await pool.query(`
+      SELECT
+        dpr.*,
+        d.domain_name, d.tld,
+        u.email as from_email, u.full_name as from_name
+      FROM domain_push_requests dpr
+      JOIN domains d ON d.id = dpr.domain_id
+      JOIN users u ON u.id = dpr.from_user_id
+      WHERE dpr.to_user_id = $1 AND dpr.status = 'pending'
+      ORDER BY dpr.created_at DESC
+    `, [userId]);
+
+    // Get outgoing requests (domains this user is pushing)
+    const outgoing = await pool.query(`
+      SELECT
+        dpr.*,
+        d.domain_name, d.tld,
+        u.email as to_email, u.full_name as to_name
+      FROM domain_push_requests dpr
+      JOIN domains d ON d.id = dpr.domain_id
+      JOIN users u ON u.id = dpr.to_user_id
+      WHERE dpr.from_user_id = $1 AND dpr.status = 'pending'
+      ORDER BY dpr.created_at DESC
+    `, [userId]);
+
+    res.json({
+      incoming: incoming.rows,
+      outgoing: outgoing.rows
+    });
+  } catch (error) {
+    console.error('Error fetching push requests:', error);
+    res.status(500).json({ error: 'Failed to fetch push requests' });
+  }
+});
+
+// Get push history for a domain
+router.get('/:id/push-history', authMiddleware, async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+  const userId = req.user.id;
+
+  try {
+    // Verify ownership
+    const domainResult = await pool.query(
+      'SELECT * FROM domains WHERE id = $1 AND user_id = $2',
+      [domainId, userId]
+    );
+
+    if (domainResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Domain not found' });
+    }
+
+    const history = await pool.query(`
+      SELECT
+        dpr.*,
+        fu.email as from_email, fu.full_name as from_name,
+        tu.email as to_email, tu.full_name as to_name
+      FROM domain_push_requests dpr
+      JOIN users fu ON fu.id = dpr.from_user_id
+      JOIN users tu ON tu.id = dpr.to_user_id
+      WHERE dpr.domain_id = $1
+      ORDER BY dpr.created_at DESC
+      LIMIT 20
+    `, [domainId]);
+
+    res.json(history.rows);
+  } catch (error) {
+    console.error('Error fetching push history:', error);
+    res.status(500).json({ error: 'Failed to fetch push history' });
+  }
+});
+
+// Initiate a domain push to another user
+router.post('/:id/push', authMiddleware, async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+  const userId = req.user.id;
+  const { to_email, notes } = req.body;
+
+  if (!to_email) {
+    return res.status(400).json({ error: 'Recipient email is required' });
+  }
+
+  try {
+    // Verify ownership and check if suspended
+    const access = await checkDomainAccess(pool, domainId, userId);
+    if (access.error) {
+      return res.status(access.status).json({ error: access.error });
+    }
+
+    const domain = access.domain;
+
+    // Check for existing pending push request
+    const existingPush = await pool.query(
+      "SELECT * FROM domain_push_requests WHERE domain_id = $1 AND status = 'pending'",
+      [domainId]
+    );
+    if (existingPush.rows.length > 0) {
+      return res.status(400).json({ error: 'This domain already has a pending push request' });
+    }
+
+    // Find recipient user
+    const recipientResult = await pool.query(
+      'SELECT id, email, full_name FROM users WHERE LOWER(email) = LOWER($1)',
+      [to_email.trim()]
+    );
+
+    if (recipientResult.rows.length === 0) {
+      return res.status(404).json({ error: 'No user found with that email address' });
+    }
+
+    const recipient = recipientResult.rows[0];
+
+    if (recipient.id === userId) {
+      return res.status(400).json({ error: 'You cannot push a domain to yourself' });
+    }
+
+    // Create push request
+    const pushResult = await pool.query(`
+      INSERT INTO domain_push_requests
+        (domain_id, from_user_id, to_user_id, to_email, notes, initiated_by_admin)
+      VALUES ($1, $2, $3, $4, $5, false)
+      RETURNING *
+    `, [domainId, userId, recipient.id, recipient.email, notes || null]);
+
+    res.json({
+      success: true,
+      message: `Domain push request sent to ${recipient.email}`,
+      pushRequest: pushResult.rows[0]
+    });
+  } catch (error) {
+    console.error('Error creating push request:', error);
+    res.status(500).json({ error: 'Failed to create push request' });
+  }
+});
+
+// Accept an incoming push request
+router.post('/push-requests/:requestId/accept', authMiddleware, async (req, res) => {
+  const pool = req.app.locals.pool;
+  const requestId = parseInt(req.params.requestId);
+  const userId = req.user.id;
+
+  try {
+    // Get the push request
+    const pushResult = await pool.query(
+      'SELECT * FROM domain_push_requests WHERE id = $1',
+      [requestId]
+    );
+
+    if (pushResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Push request not found' });
+    }
+
+    const pushRequest = pushResult.rows[0];
+
+    // Verify this user is the recipient
+    if (pushRequest.to_user_id !== userId) {
+      return res.status(403).json({ error: 'You are not authorized to accept this request' });
+    }
+
+    if (pushRequest.status !== 'pending') {
+      return res.status(400).json({ error: `This request is already ${pushRequest.status}` });
+    }
+
+    // Start transaction
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Update push request status
+      await client.query(`
+        UPDATE domain_push_requests
+        SET status = 'accepted', responded_at = CURRENT_TIMESTAMP
+        WHERE id = $1
+      `, [requestId]);
+
+      // Transfer domain ownership
+      await client.query(`
+        UPDATE domains
+        SET user_id = $1, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $2
+      `, [userId, pushRequest.domain_id]);
+
+      await client.query('COMMIT');
+
+      // Get domain details for response
+      const domainResult = await pool.query(
+        'SELECT domain_name, tld FROM domains WHERE id = $1',
+        [pushRequest.domain_id]
+      );
+      const domain = domainResult.rows[0];
+
+      res.json({
+        success: true,
+        message: `Domain ${domain.domain_name}.${domain.tld} has been transferred to your account`
+      });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('Error accepting push request:', error);
+    res.status(500).json({ error: 'Failed to accept push request' });
+  }
+});
+
+// Reject an incoming push request
+router.post('/push-requests/:requestId/reject', authMiddleware, async (req, res) => {
+  const pool = req.app.locals.pool;
+  const requestId = parseInt(req.params.requestId);
+  const userId = req.user.id;
+
+  try {
+    // Get the push request
+    const pushResult = await pool.query(
+      'SELECT * FROM domain_push_requests WHERE id = $1',
+      [requestId]
+    );
+
+    if (pushResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Push request not found' });
+    }
+
+    const pushRequest = pushResult.rows[0];
+
+    // Verify this user is the recipient
+    if (pushRequest.to_user_id !== userId) {
+      return res.status(403).json({ error: 'You are not authorized to reject this request' });
+    }
+
+    if (pushRequest.status !== 'pending') {
+      return res.status(400).json({ error: `This request is already ${pushRequest.status}` });
+    }
+
+    // Update status
+    await pool.query(`
+      UPDATE domain_push_requests
+      SET status = 'rejected', responded_at = CURRENT_TIMESTAMP
+      WHERE id = $1
+    `, [requestId]);
+
+    res.json({
+      success: true,
+      message: 'Push request rejected'
+    });
+  } catch (error) {
+    console.error('Error rejecting push request:', error);
+    res.status(500).json({ error: 'Failed to reject push request' });
+  }
+});
+
+// Cancel an outgoing push request (sender cancels)
+router.post('/push-requests/:requestId/cancel', authMiddleware, async (req, res) => {
+  const pool = req.app.locals.pool;
+  const requestId = parseInt(req.params.requestId);
+  const userId = req.user.id;
+
+  try {
+    // Get the push request
+    const pushResult = await pool.query(
+      'SELECT * FROM domain_push_requests WHERE id = $1',
+      [requestId]
+    );
+
+    if (pushResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Push request not found' });
+    }
+
+    const pushRequest = pushResult.rows[0];
+
+    // Verify this user is the sender
+    if (pushRequest.from_user_id !== userId) {
+      return res.status(403).json({ error: 'You are not authorized to cancel this request' });
+    }
+
+    if (pushRequest.status !== 'pending') {
+      return res.status(400).json({ error: `This request is already ${pushRequest.status}` });
+    }
+
+    // Update status
+    await pool.query(`
+      UPDATE domain_push_requests
+      SET status = 'cancelled', responded_at = CURRENT_TIMESTAMP
+      WHERE id = $1
+    `, [requestId]);
+
+    res.json({
+      success: true,
+      message: 'Push request cancelled'
+    });
+  } catch (error) {
+    console.error('Error cancelling push request:', error);
+    res.status(500).json({ error: 'Failed to cancel push request' });
   }
 });
 

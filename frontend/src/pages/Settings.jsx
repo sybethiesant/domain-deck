@@ -8,7 +8,6 @@ export default function SettingsPage() {
   const { user, token, fetchUser } = useAuth();
   const { theme, setTheme } = useTheme();
   const [activeTab, setActiveTab] = useState('profile');
-  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
   // Profile form state

@@ -1,23 +1,28 @@
 module.exports = {
   apps: [
     {
-      name: "backend",
+      name: "worxtech-api",
       cwd: "/app/backend",
       script: "server.js",
-      watch: false,
+      instances: 1,
       autorestart: true,
-      max_restarts: 10,
-      restart_delay: 1000
+      watch: false,
+      max_memory_restart: "500M",
+      env: {
+        NODE_ENV: "production",
+        PORT: 5001
+      }
     },
     {
-      name: "frontend",
+      name: "worxtech-frontend",
       cwd: "/app/frontend",
-      script: "npx",
-      args: ["serve", "-s", "build", "-l", "3001"],
-      watch: false,
+      script: "/usr/local/bin/serve",
+      args: "-s build -l 3001",
+      interpreter: "none",
+      instances: 1,
       autorestart: true,
-      max_restarts: 10,
-      restart_delay: 1000
+      watch: false,
+      max_memory_restart: "200M"
     }
   ]
 };
