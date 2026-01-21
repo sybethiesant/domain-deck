@@ -583,9 +583,18 @@ class JobScheduler {
           chargeResult.paymentIntentId
         ]);
 
-        // Send confirmation email (handled by eNom if configured)
-        // We can also send our own:
-        // await email.sendRenewalConfirmation(domain.email, { ... });
+        // Send confirmation email
+        try {
+          await email.sendRenewalConfirmation(domain.email, {
+            domain: fullDomain,
+            years: 1,
+            newExpiration: newExpDate ? new Date(newExpDate).toLocaleDateString() : 'N/A',
+            cost: customerPrice
+          });
+          console.log(`[autoRenew] Renewal confirmation email sent for ${fullDomain}`);
+        } catch (emailError) {
+          console.error(`[autoRenew] Failed to send renewal confirmation email:`, emailError.message);
+        }
 
         renewed++;
         console.log(`[autoRenew] Successfully renewed ${fullDomain}`);

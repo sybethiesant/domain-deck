@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { ShoppingCart, Sun, Moon, LogOut, Settings, LayoutDashboard, Package, Users, Menu, X } from 'lucide-react';
 import { useAuth, useCart, useTheme } from '../../App';
+import { API_URL } from '../../config/api';
 
 // Professional WorxTech Logo Component
 function Logo({ className = '' }) {
@@ -49,8 +50,24 @@ function Navbar() {
   const { user, logout, openAuth } = useAuth();
   const { cart, setShowCart } = useCart();
   const { theme, setTheme } = useTheme();
-  const [showUserMenu, setShowUserMenu] = React.useState(false);
-  const [showMobileMenu, setShowMobileMenu] = React.useState(false);
+  const [showUserMenu, setShowUserMenu] = useState(false);
+  const [showMobileMenu, setShowMobileMenu] = useState(false);
+  const [siteConfig, setSiteConfig] = useState(null);
+
+  // Fetch site config (logo, name, etc.) on mount
+  useEffect(() => {
+    const fetchSiteConfig = async () => {
+      try {
+        const res = await fetch(`${API_URL}/site-config`);
+        if (res.ok) {
+          setSiteConfig(await res.json());
+        }
+      } catch (err) {
+        console.error('Failed to fetch site config:', err);
+      }
+    };
+    fetchSiteConfig();
+  }, []);
 
   const isActive = (path) => location.pathname === path;
 
@@ -70,15 +87,35 @@ function Navbar() {
             to="/"
             className="flex items-center gap-2.5 group"
           >
-            <Logo className="w-9 h-9 text-indigo-600 dark:text-indigo-400 transition-transform group-hover:scale-105" />
-            <div className="flex flex-col">
-              <span className="text-xl font-bold tracking-tight text-slate-900 dark:text-white">
-                Worx<span className="text-indigo-600 dark:text-indigo-400">Tech</span>
-              </span>
-              <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400 -mt-1 tracking-wider uppercase">
-                Internet Services
-              </span>
-            </div>
+            {siteConfig?.logo_url ? (
+              <img
+                src={`/api${siteConfig.logo_url}`}
+                alt={siteConfig?.site_name || 'WorxTech'}
+                style={{
+                  maxWidth: `${siteConfig?.logo_width || 180}px`,
+                  maxHeight: `${siteConfig?.logo_height || 50}px`,
+                  objectFit: 'contain'
+                }}
+                className="transition-transform group-hover:scale-105"
+                onError={(e) => {
+                  // If logo fails to load, hide it and show text logo instead
+                  e.target.style.display = 'none';
+                  e.target.nextElementSibling?.style?.removeProperty('display');
+                }}
+              />
+            ) : (
+              <>
+                <Logo className="w-9 h-9 text-indigo-600 dark:text-indigo-400 transition-transform group-hover:scale-105" />
+                <div className="flex flex-col">
+                  <span className="text-xl font-bold tracking-tight text-slate-900 dark:text-white">
+                    Worx<span className="text-indigo-600 dark:text-indigo-400">Tech</span>
+                  </span>
+                  <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400 -mt-1 tracking-wider uppercase">
+                    {siteConfig?.site_tagline || 'Internet Services'}
+                  </span>
+                </div>
+              </>
+            )}
           </Link>
 
           {/* Desktop Navigation */}

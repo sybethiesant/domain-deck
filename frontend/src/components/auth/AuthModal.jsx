@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Loader2, Eye, EyeOff, Globe } from 'lucide-react';
+import { X, Loader2, Eye, EyeOff, Globe, Mail, CheckCircle } from 'lucide-react';
 import { useAuth } from '../../App';
 import { API_URL } from '../../config/api';
 
@@ -21,6 +21,9 @@ function AuthModal({ mode, onClose, onSwitchMode }) {
     setError(null);
   };
 
+  const [verificationSent, setVerificationSent] = useState(false);
+  const [verificationEmail, setVerificationEmail] = useState('');
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -41,7 +44,23 @@ function AuthModal({ mode, onClose, onSwitchMode }) {
       const data = await res.json();
 
       if (!res.ok) {
+        // Handle verification required (login attempt with unverified email)
+        if (data.requiresVerification) {
+          setVerificationEmail(data.email || formData.email);
+          setVerificationSent(true);
+          setError('Please verify your email address to log in. Check your inbox for the verification link.');
+          setLoading(false);
+          return;
+        }
         setError(data.error || 'Something went wrong');
+        setLoading(false);
+        return;
+      }
+
+      // Handle registration that requires verification
+      if (data.requiresVerification) {
+        setVerificationEmail(formData.email);
+        setVerificationSent(true);
         setLoading(false);
         return;
       }
@@ -51,6 +70,27 @@ function AuthModal({ mode, onClose, onSwitchMode }) {
       setError('Connection error. Please try again.');
       setLoading(false);
     }
+  };
+
+  const resendVerification = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/auth/resend-verification`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: verificationEmail })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setError(null);
+        alert('Verification email sent! Please check your inbox.');
+      } else {
+        setError(data.error || 'Failed to resend verification email');
+      }
+    } catch (err) {
+      setError('Failed to resend verification email');
+    }
+    setLoading(false);
   };
 
   return (
@@ -71,6 +111,45 @@ function AuthModal({ mode, onClose, onSwitchMode }) {
           <X className="w-5 h-5" />
         </button>
 
+        {/* Verification Sent View */}
+        {verificationSent && !error ? (
+          <div className="p-6 text-center">
+            <div className="w-16 h-16 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
+              <CheckCircle className="w-8 h-8 text-green-600 dark:text-green-400" />
+            </div>
+            <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-2">
+              Check Your Email
+            </h2>
+            <p className="text-slate-600 dark:text-slate-400 mb-4">
+              We've sent a verification link to:
+            </p>
+            <p className="font-medium text-slate-900 dark:text-slate-100 mb-6">
+              {verificationEmail}
+            </p>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mb-6">
+              Click the link in the email to verify your account. The link will expire in 24 hours.
+            </p>
+            <div className="space-y-3">
+              <button
+                type="button"
+                onClick={resendVerification}
+                disabled={loading}
+                className="btn-secondary w-full"
+              >
+                {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Mail className="w-4 h-4 mr-2" />}
+                Resend Verification Email
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                className="btn-primary w-full"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
         {/* Header */}
         <div className="p-6 pb-0 text-center">
           <div className="w-12 h-12 bg-primary-100 dark:bg-primary-900/30 rounded-xl flex items-center justify-center mx-auto mb-4">
@@ -91,6 +170,16 @@ function AuthModal({ mode, onClose, onSwitchMode }) {
           {error && (
             <div className="bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 px-4 py-3 rounded-lg text-sm">
               {error}
+              {verificationSent && (
+                <button
+                  type="button"
+                  onClick={resendVerification}
+                  disabled={loading}
+                  className="ml-2 underline hover:no-underline"
+                >
+                  Resend verification email
+                </button>
+              )}
             </div>
           )}
 
@@ -211,6 +300,8 @@ function AuthModal({ mode, onClose, onSwitchMode }) {
             )}
           </p>
         </div>
+        </>
+        )}
       </div>
     </div>
   );

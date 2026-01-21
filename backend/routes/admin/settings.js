@@ -9,12 +9,52 @@ const enom = require('../../services/enom');
 const stripeService = require('../../services/stripe');
 const emailService = require('../../services/email');
 
+// File upload setup for logo
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+
+// Configure multer for logo uploads
+const logoStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadDir = path.join(__dirname, '../../uploads/logos');
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, `logo-${Date.now()}${ext}`);
+  }
+});
+
+const logoUpload = multer({
+  storage: logoStorage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB max
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = /jpeg|jpg|png|gif|svg|webp/;
+    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+    const mimetype = allowedTypes.test(file.mimetype) || file.mimetype === 'image/svg+xml';
+    if (extname && mimetype) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files (JPG, PNG, GIF, SVG, WebP) are allowed'));
+    }
+  }
+});
+
 // Default settings schema
 const DEFAULT_SETTINGS = {
   // Site settings
   site_name: 'WorxTech',
   site_tagline: 'Domain Names Made Simple',
   support_email: 'support@worxtech.biz',
+
+  // Logo settings
+  logo_url: '',
+  logo_width: '180',
+  logo_height: '50',
 
   // Registration settings
   registration_enabled: 'true',
@@ -35,6 +75,7 @@ const DEFAULT_SETTINGS = {
   require_contact_for_checkout: 'true',
 
   // Notification settings
+  admin_notification_email: 'admin@worxtech.biz',
   admin_email_notifications: 'true',
   notify_on_new_order: 'true',
   notify_on_failed_order: 'true',
@@ -509,6 +550,171 @@ router.get('/email/status', async (req, res) => {
   } catch (error) {
     console.error('Error getting email status:', error);
     res.status(500).json({ error: 'Failed to get email status' });
+  }
+});
+
+// ============ LOGO MANAGEMENT ============
+
+// Upload logo
+router.post('/logo', logoUpload.single('logo'), async (req, res) => {
+  const pool = req.app.locals.pool;
+
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded' });
+  }
+
+  try {
+    // Delete old logo if exists
+    const oldLogoResult = await pool.query(
+      "SELECT value FROM app_settings WHERE key = 'logo_url'"
+    );
+    if (oldLogoResult.rows.length > 0 && oldLogoResult.rows[0].value) {
+      const oldPath = path.join(__dirname, '../../uploads/logos', path.basename(oldLogoResult.rows[0].value));
+      if (fs.existsSync(oldPath)) {
+        fs.unlinkSync(oldPath);
+      }
+    }
+
+    // Save new logo URL
+    const logoUrl = `/uploads/logos/${req.file.filename}`;
+    await pool.query(
+      `INSERT INTO app_settings (key, value) VALUES ('logo_url', $1)
+       ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = CURRENT_TIMESTAMP`,
+      [logoUrl]
+    );
+
+    // Get logo dimensions from request or use defaults
+    const width = req.body.width || '180';
+    const height = req.body.height || '50';
+
+    await pool.query(
+      `INSERT INTO app_settings (key, value) VALUES ('logo_width', $1)
+       ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = CURRENT_TIMESTAMP`,
+      [width]
+    );
+
+    await pool.query(
+      `INSERT INTO app_settings (key, value) VALUES ('logo_height', $1)
+       ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = CURRENT_TIMESTAMP`,
+      [height]
+    );
+
+    // Log the action
+    await logAudit(pool, req.user.id, 'logo_uploaded', 'settings', null, {
+      filename: req.file.filename,
+      size: req.file.size,
+      width,
+      height
+    });
+
+    res.json({
+      success: true,
+      logo_url: logoUrl,
+      logo_width: width,
+      logo_height: height
+    });
+  } catch (error) {
+    console.error('Error uploading logo:', error);
+    // Clean up uploaded file on error
+    if (req.file) {
+      fs.unlinkSync(req.file.path);
+    }
+    res.status(500).json({ error: 'Failed to upload logo' });
+  }
+});
+
+// Update logo dimensions
+router.put('/logo/dimensions', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const { width, height } = req.body;
+
+  if (!width && !height) {
+    return res.status(400).json({ error: 'Width or height required' });
+  }
+
+  try {
+    if (width) {
+      await pool.query(
+        `INSERT INTO app_settings (key, value) VALUES ('logo_width', $1)
+         ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = CURRENT_TIMESTAMP`,
+        [String(width)]
+      );
+    }
+
+    if (height) {
+      await pool.query(
+        `INSERT INTO app_settings (key, value) VALUES ('logo_height', $1)
+         ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = CURRENT_TIMESTAMP`,
+        [String(height)]
+      );
+    }
+
+    await logAudit(pool, req.user.id, 'logo_dimensions_updated', 'settings', null, { width, height });
+
+    res.json({ success: true, width, height });
+  } catch (error) {
+    console.error('Error updating logo dimensions:', error);
+    res.status(500).json({ error: 'Failed to update logo dimensions' });
+  }
+});
+
+// Delete logo
+router.delete('/logo', async (req, res) => {
+  const pool = req.app.locals.pool;
+
+  try {
+    // Get current logo URL
+    const result = await pool.query(
+      "SELECT value FROM app_settings WHERE key = 'logo_url'"
+    );
+
+    if (result.rows.length > 0 && result.rows[0].value) {
+      // Delete file
+      const logoPath = path.join(__dirname, '../../uploads/logos', path.basename(result.rows[0].value));
+      if (fs.existsSync(logoPath)) {
+        fs.unlinkSync(logoPath);
+      }
+
+      // Clear setting
+      await pool.query(
+        "UPDATE app_settings SET value = '', updated_at = CURRENT_TIMESTAMP WHERE key = 'logo_url'"
+      );
+
+      await logAudit(pool, req.user.id, 'logo_deleted', 'settings', null, {
+        deleted_url: result.rows[0].value
+      });
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting logo:', error);
+    res.status(500).json({ error: 'Failed to delete logo' });
+  }
+});
+
+// Get current logo settings
+router.get('/logo', async (req, res) => {
+  const pool = req.app.locals.pool;
+
+  try {
+    const result = await pool.query(
+      "SELECT key, value FROM app_settings WHERE key IN ('logo_url', 'logo_width', 'logo_height')"
+    );
+
+    const logoSettings = {
+      logo_url: '',
+      logo_width: '180',
+      logo_height: '50'
+    };
+
+    for (const row of result.rows) {
+      logoSettings[row.key] = row.value;
+    }
+
+    res.json(logoSettings);
+  } catch (error) {
+    console.error('Error getting logo settings:', error);
+    res.status(500).json({ error: 'Failed to get logo settings' });
   }
 });
 

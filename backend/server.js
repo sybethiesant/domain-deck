@@ -117,6 +117,95 @@ app.use((req, res, next) => {
 // Apply general rate limiting
 app.use(rateLimit('general'));
 
+// ============ MAINTENANCE MODE ============
+
+// Cache maintenance status to avoid DB hits on every request
+let maintenanceCache = { enabled: false, message: '', lastCheck: 0 };
+const MAINTENANCE_CACHE_TTL = 5000; // 5 seconds
+
+async function checkMaintenanceMode(pool) {
+  const now = Date.now();
+  if (now - maintenanceCache.lastCheck < MAINTENANCE_CACHE_TTL) {
+    return maintenanceCache;
+  }
+
+  try {
+    const result = await pool.query(
+      "SELECT key, value FROM app_settings WHERE key IN ('maintenance_mode', 'maintenance_message')"
+    );
+    const settings = {};
+    for (const row of result.rows) {
+      settings[row.key] = row.value;
+    }
+    maintenanceCache = {
+      enabled: settings.maintenance_mode === 'true',
+      message: settings.maintenance_message || 'We are currently performing maintenance. Please check back soon.',
+      lastCheck: now
+    };
+  } catch (err) {
+    console.error('Error checking maintenance mode:', err);
+  }
+  return maintenanceCache;
+}
+
+// Maintenance mode middleware
+app.use(async (req, res, next) => {
+  // Skip maintenance check for certain paths
+  const skipPaths = [
+    '/api/health',
+    '/api/auth/login',
+    '/api/auth/me',
+    '/api/admin',
+    '/api/site-config',
+    '/api/uploads',
+    '/uploads'
+  ];
+
+  if (skipPaths.some(p => req.path.startsWith(p))) {
+    return next();
+  }
+
+  // Check if pool is available yet
+  if (!app.locals.pool) {
+    return next();
+  }
+
+  const maintenance = await checkMaintenanceMode(app.locals.pool);
+
+  if (!maintenance.enabled) {
+    return next();
+  }
+
+  // Check if user is admin by verifying their token
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    try {
+      const token = authHeader.split(' ')[1];
+      const jwt = require('jsonwebtoken');
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+      // Check if user is admin
+      const userResult = await app.locals.pool.query(
+        'SELECT is_admin, role_level FROM users WHERE id = $1',
+        [decoded.id]
+      );
+
+      if (userResult.rows.length > 0 && (userResult.rows[0].is_admin || userResult.rows[0].role_level >= 3)) {
+        return next(); // Allow admins through
+      }
+    } catch (err) {
+      // Token invalid or expired, continue to block
+    }
+  }
+
+  // Block non-admin users during maintenance
+  res.status(503).json({
+    error: 'Service Unavailable',
+    maintenance: true,
+    message: maintenance.message
+  });
+});
+
 // ============ DATABASE ============
 
 const pool = new Pool({
@@ -172,6 +261,20 @@ app.locals.rateLimitStore = rateLimitStore;
 
 // Connect email service to database for template fetching
 emailService.setPool(pool);
+
+// ============ STATIC FILES ============
+
+// Serve uploaded files (logos, etc.) with proper caching for images
+// Available at both /uploads and /api/uploads for flexibility with reverse proxies
+const uploadsStatic = express.static(path.join(__dirname, 'uploads'));
+const uploadsMiddleware = (req, res, next) => {
+  // Allow caching for uploaded images
+  res.setHeader('Cache-Control', 'public, max-age=3600'); // 1 hour cache
+  next();
+};
+
+app.use('/uploads', uploadsMiddleware, uploadsStatic);
+app.use('/api/uploads', uploadsMiddleware, uploadsStatic);
 
 // ============ ROUTES ============
 
@@ -248,6 +351,25 @@ app.post('/api/jobs/:name/trigger', require('./middleware/auth').authMiddleware,
     res.json({ success: true, message: `Job ${req.params.name} triggered` });
   } catch (error) {
     res.status(400).json({ error: error.message });
+  }
+});
+
+// ============ PUBLIC SITE CONFIG ============
+
+// Get public site configuration (logo, site name, etc.) - no auth required
+app.get('/api/site-config', async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT key, value FROM app_settings WHERE key IN ('site_name', 'site_tagline', 'logo_url', 'logo_width', 'logo_height')"
+    );
+    const config = {};
+    for (const row of result.rows) {
+      config[row.key] = row.value;
+    }
+    res.json(config);
+  } catch (error) {
+    console.error('Error fetching site config:', error);
+    res.status(500).json({ error: 'Failed to fetch site config' });
   }
 });
 

@@ -328,6 +328,10 @@ class EmailService {
     return this.sendTemplate('renewal_failed', to, { domain, error, expirationDate });
   }
 
+  async sendEmailVerification(to, { username, verificationUrl }) {
+    return this.sendTemplate('email_verification', to, { username, verificationUrl });
+  }
+
   // Admin notifications
   async sendAdminNewOrder(to, { orderNumber, customerEmail, total, itemCount }) {
     return this.sendTemplate('admin_new_order', to, { orderNumber, customerEmail, total: parseFloat(total).toFixed(2), itemCount });

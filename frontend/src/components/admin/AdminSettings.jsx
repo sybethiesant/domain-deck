@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Save, Loader2, RefreshCw, Globe, Mail, Bell, Server, ShoppingCart, Shield, AlertTriangle, Zap, CreditCard, Send, Eye, Edit2, X, Check } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Save, Loader2, RefreshCw, Globe, Mail, Bell, Server, ShoppingCart, Shield, AlertTriangle, Zap, CreditCard, Send, Eye, Edit2, X, Check, Upload, Trash2, Image } from 'lucide-react';
 import { useAuth } from '../../App';
 import { API_URL } from '../../config/api';
 import { toast } from 'react-hot-toast';
@@ -26,6 +26,12 @@ function AdminSettings() {
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [previewingTemplate, setPreviewingTemplate] = useState(null);
 
+  // Logo state
+  const [logoSettings, setLogoSettings] = useState({ logo_url: '', logo_width: '180', logo_height: '50' });
+  const [uploadingLogo, setUploadingLogo] = useState(false);
+  const [deletingLogo, setDeletingLogo] = useState(false);
+  const logoInputRef = useRef(null);
+
   const fetchSettings = useCallback(async () => {
     setLoading(true);
     try {
@@ -45,6 +51,103 @@ function AdminSettings() {
     }
     setLoading(false);
   }, [token]);
+
+  const fetchLogoSettings = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_URL}/admin/logo`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        setLogoSettings(await res.json());
+      }
+    } catch (err) {
+      console.error('Error fetching logo settings:', err);
+    }
+  }, [token]);
+
+  const handleLogoUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Validate file type
+    if (!file.type.match(/^image\/(jpeg|jpg|png|gif|svg\+xml|webp)$/)) {
+      toast.error('Please select a valid image file (JPG, PNG, GIF, SVG, or WebP)');
+      return;
+    }
+
+    // Validate file size (5MB max)
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error('File size must be less than 5MB');
+      return;
+    }
+
+    setUploadingLogo(true);
+    try {
+      const formData = new FormData();
+      formData.append('logo', file);
+      formData.append('width', logoSettings.logo_width);
+      formData.append('height', logoSettings.logo_height);
+
+      const res = await fetch(`${API_URL}/admin/logo`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+        body: formData
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setLogoSettings(data);
+        toast.success('Logo uploaded successfully');
+      } else {
+        const err = await res.json();
+        toast.error(err.error || 'Failed to upload logo');
+      }
+    } catch (err) {
+      console.error('Error uploading logo:', err);
+      toast.error('Failed to upload logo');
+    }
+    setUploadingLogo(false);
+    if (logoInputRef.current) logoInputRef.current.value = '';
+  };
+
+  const handleLogoDelete = async () => {
+    if (!window.confirm('Are you sure you want to delete the logo?')) return;
+
+    setDeletingLogo(true);
+    try {
+      const res = await fetch(`${API_URL}/admin/logo`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+
+      if (res.ok) {
+        setLogoSettings({ ...logoSettings, logo_url: '' });
+        toast.success('Logo deleted');
+      } else {
+        toast.error('Failed to delete logo');
+      }
+    } catch (err) {
+      toast.error('Failed to delete logo');
+    }
+    setDeletingLogo(false);
+  };
+
+  const updateLogoDimensions = async (width, height) => {
+    setLogoSettings(prev => ({ ...prev, logo_width: width, logo_height: height }));
+
+    try {
+      await fetch(`${API_URL}/admin/logo/dimensions`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ width, height })
+      });
+    } catch (err) {
+      console.error('Error updating logo dimensions:', err);
+    }
+  };
 
   const fetchApiModes = useCallback(async () => {
     setApiModesLoading(true);
@@ -204,7 +307,8 @@ function AdminSettings() {
     fetchApiModes();
     fetchEmailStatus();
     fetchEmailTemplates();
-  }, [fetchSettings, fetchApiModes, fetchEmailStatus, fetchEmailTemplates]);
+    fetchLogoSettings();
+  }, [fetchSettings, fetchApiModes, fetchEmailStatus, fetchEmailTemplates, fetchLogoSettings]);
 
   const handleChange = (key, value) => {
     setSettings(prev => ({ ...prev, [key]: value }));
@@ -361,6 +465,132 @@ function AdminSettings() {
               className="input w-full"
               placeholder="support@worxtech.biz"
             />
+          </div>
+        </div>
+
+        {/* Logo Settings */}
+        <div className="border-t border-slate-200 dark:border-slate-700 pt-6 mt-6">
+          <div className="flex items-center gap-3 mb-4">
+            <Image className="w-5 h-5 text-primary-600 dark:text-primary-400" />
+            <h4 className="font-medium text-slate-900 dark:text-slate-100">Site Logo</h4>
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-6">
+            {/* Logo Preview & Upload */}
+            <div>
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                Logo Image
+              </label>
+              <div className="border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-lg p-4 text-center">
+                {logoSettings.logo_url ? (
+                  <div className="space-y-3">
+                    <div className="flex justify-center p-4 bg-slate-100 dark:bg-slate-800 rounded-lg">
+                      <img
+                        src={`/api${logoSettings.logo_url}`}
+                        alt="Site Logo"
+                        style={{
+                          maxWidth: `${logoSettings.logo_width}px`,
+                          maxHeight: `${logoSettings.logo_height}px`,
+                          objectFit: 'contain'
+                        }}
+                        className="max-w-full"
+                        onError={(e) => {
+                          console.error('Logo load error, URL:', `/api${logoSettings.logo_url}`);
+                          e.target.style.display = 'none';
+                        }}
+                      />
+                    </div>
+                    <p className="text-xs text-slate-500 text-center break-all">
+                      Path: /api{logoSettings.logo_url}
+                    </p>
+                    <div className="flex gap-2 justify-center">
+                      <button
+                        onClick={() => logoInputRef.current?.click()}
+                        disabled={uploadingLogo}
+                        className="btn-secondary text-sm py-1.5"
+                      >
+                        {uploadingLogo ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                        <span className="ml-1">Replace</span>
+                      </button>
+                      <button
+                        onClick={handleLogoDelete}
+                        disabled={deletingLogo}
+                        className="btn-secondary text-sm py-1.5 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20"
+                      >
+                        {deletingLogo ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                        <span className="ml-1">Delete</span>
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="py-6">
+                    <Image className="w-12 h-12 mx-auto text-slate-400 mb-3" />
+                    <p className="text-sm text-slate-500 mb-3">No logo uploaded</p>
+                    <button
+                      onClick={() => logoInputRef.current?.click()}
+                      disabled={uploadingLogo}
+                      className="btn-primary text-sm"
+                    >
+                      {uploadingLogo ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
+                      Upload Logo
+                    </button>
+                  </div>
+                )}
+                <input
+                  ref={logoInputRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/gif,image/svg+xml,image/webp"
+                  onChange={handleLogoUpload}
+                  className="hidden"
+                />
+              </div>
+              <p className="text-xs text-slate-500 mt-2">
+                Supported: JPG, PNG, GIF, SVG, WebP (max 5MB). If no logo is set, the text logo will be displayed.
+              </p>
+            </div>
+
+            {/* Logo Dimensions */}
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                  Display Width: {logoSettings.logo_width}px
+                </label>
+                <input
+                  type="range"
+                  min="50"
+                  max="400"
+                  value={logoSettings.logo_width}
+                  onChange={(e) => updateLogoDimensions(e.target.value, logoSettings.logo_height)}
+                  className="w-full h-2 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary-600"
+                />
+                <div className="flex justify-between text-xs text-slate-400 mt-1">
+                  <span>50px</span>
+                  <span>400px</span>
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                  Display Height: {logoSettings.logo_height}px
+                </label>
+                <input
+                  type="range"
+                  min="20"
+                  max="150"
+                  value={logoSettings.logo_height}
+                  onChange={(e) => updateLogoDimensions(logoSettings.logo_width, e.target.value)}
+                  className="w-full h-2 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary-600"
+                />
+                <div className="flex justify-between text-xs text-slate-400 mt-1">
+                  <span>20px</span>
+                  <span>150px</span>
+                </div>
+              </div>
+              <div className="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-lg">
+                <p className="text-xs text-slate-500">
+                  <strong>Tip:</strong> For best results, upload a logo with transparent background. The dimensions control the maximum display size while maintaining aspect ratio.
+                </p>
+              </div>
+            </div>
           </div>
         </div>
       </div>

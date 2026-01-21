@@ -3,6 +3,7 @@ const router = express.Router();
 const { authMiddleware } = require('../middleware/auth');
 const enom = require('../services/enom');
 const stripeService = require('../services/stripe');
+const emailService = require('../services/email');
 
 // Get Stripe config
 router.get('/config', (req, res) => {
@@ -644,10 +645,81 @@ async function handlePaymentSuccess(pool, paymentIntent) {
   );
 
   console.log(`Order ${order.order_number} processed: ${finalStatus}`);
+
+  // Send email notifications
+  try {
+    // Get customer email
+    const userResult = await pool.query('SELECT email, username FROM users WHERE id = $1', [order.user_id]);
+    const customerEmail = userResult.rows[0]?.email;
+    const customerUsername = userResult.rows[0]?.username || 'Customer';
+
+    if (customerEmail) {
+      // Send order confirmation to customer
+      await emailService.sendOrderConfirmation(customerEmail, {
+        orderNumber: order.order_number,
+        items: itemsResult.rows,
+        total: order.total,
+        username: customerUsername
+      });
+      console.log(`Order confirmation email sent to ${customerEmail}`);
+
+      // Send domain registered emails for each successfully registered domain
+      for (const item of itemsResult.rows) {
+        if (item.item_type === 'register') {
+          const domainName = `${item.domain_name}.${item.tld}`;
+          const expDate = new Date(Date.now() + (item.years || 1) * 365 * 24 * 60 * 60 * 1000);
+          await emailService.sendDomainRegistered(customerEmail, {
+            domain: domainName,
+            expirationDate: expDate.toLocaleDateString(),
+            username: customerUsername
+          });
+        } else if (item.item_type === 'transfer') {
+          const domainName = `${item.domain_name}.${item.tld}`;
+          await emailService.sendTransferInitiated(customerEmail, {
+            domain: domainName,
+            authEmail: customerEmail,
+            username: customerUsername
+          });
+        }
+      }
+    }
+
+    // Send admin notification
+    const adminSettings = await pool.query(
+      "SELECT key, value FROM app_settings WHERE key IN ('admin_notification_email', 'admin_email_notifications', 'notify_on_new_order')"
+    );
+    const settings = {};
+    for (const row of adminSettings.rows) {
+      settings[row.key] = row.value;
+    }
+
+    if (settings.admin_email_notifications !== 'false' && settings.notify_on_new_order !== 'false') {
+      const adminEmail = settings.admin_notification_email || 'admin@worxtech.biz';
+      await emailService.sendAdminNewOrder(adminEmail, {
+        orderNumber: order.order_number,
+        customerEmail: customerEmail,
+        total: order.total,
+        itemCount: itemsResult.rows.length
+      });
+      console.log(`Admin notification sent to ${adminEmail}`);
+    }
+  } catch (emailError) {
+    // Don't fail the order if email fails
+    console.error('Error sending order emails:', emailError.message);
+  }
 }
 
 async function handlePaymentFailure(pool, paymentIntent) {
   const { id: paymentIntentId } = paymentIntent;
+
+  // Get order info before updating
+  const orderResult = await pool.query(
+    `SELECT o.*, u.email as customer_email, u.username
+     FROM orders o
+     LEFT JOIN users u ON o.user_id = u.id
+     WHERE o.stripe_payment_intent_id = $1`,
+    [paymentIntentId]
+  );
 
   await pool.query(
     `UPDATE orders
@@ -659,6 +731,50 @@ async function handlePaymentFailure(pool, paymentIntent) {
   );
 
   console.log('Payment failed for intent:', paymentIntentId);
+
+  // Send failure notification emails
+  if (orderResult.rows.length > 0) {
+    const order = orderResult.rows[0];
+
+    try {
+      // Get order items
+      const itemsResult = await pool.query(
+        'SELECT * FROM order_items WHERE order_id = $1',
+        [order.id]
+      );
+
+      // Send to customer
+      if (order.customer_email) {
+        await emailService.sendOrderFailed(order.customer_email, {
+          orderNumber: order.order_number,
+          items: itemsResult.rows,
+          error: 'Payment was declined',
+          username: order.username || 'Customer'
+        });
+      }
+
+      // Send admin notification
+      const adminSettings = await pool.query(
+        "SELECT key, value FROM app_settings WHERE key IN ('admin_notification_email', 'admin_email_notifications', 'notify_on_failed_order')"
+      );
+      const settings = {};
+      for (const row of adminSettings.rows) {
+        settings[row.key] = row.value;
+      }
+
+      if (settings.admin_email_notifications !== 'false' && settings.notify_on_failed_order !== 'false') {
+        const adminEmail = settings.admin_notification_email || 'admin@worxtech.biz';
+        await emailService.sendAdminOrderFailed(adminEmail, {
+          orderNumber: order.order_number,
+          customerEmail: order.customer_email,
+          error: 'Payment declined',
+          itemCount: itemsResult.rows.length
+        });
+      }
+    } catch (emailError) {
+      console.error('Error sending failure emails:', emailError.message);
+    }
+  }
 }
 
 async function handleRefund(pool, charge) {

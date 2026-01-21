@@ -48,3 +48,6 @@ backend/.credentials.enc
 backend/scripts/store-card.js
 *.enc
 *.key
+
+# Uploaded files (user content)
+backend/uploads/

@@ -15,6 +15,8 @@ import ContactsPage from './pages/Contacts';
 import TermsPage from './pages/Terms';
 import PrivacyPage from './pages/Privacy';
 import RefundPage from './pages/Refund';
+import VerifyEmailPage from './pages/VerifyEmail';
+import LoginPage from './pages/Login';
 import { API_URL } from './config/api';
 
 // Error Boundary for catching React rendering errors
@@ -96,9 +98,33 @@ function ProtectedRoute({ children, requireAdmin = false }) {
 }
 
 // Main App Content with Router
+// Maintenance Page Component
+function MaintenancePage({ message }) {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-100 to-slate-200 dark:from-slate-900 dark:to-slate-800">
+      <div className="max-w-lg mx-auto text-center p-8">
+        <div className="w-20 h-20 bg-amber-100 dark:bg-amber-900/30 rounded-full flex items-center justify-center mx-auto mb-6">
+          <svg className="w-10 h-10 text-amber-600 dark:text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+          </svg>
+        </div>
+        <h1 className="text-3xl font-bold text-slate-900 dark:text-slate-100 mb-4">Under Maintenance</h1>
+        <p className="text-lg text-slate-600 dark:text-slate-400 mb-6">{message}</p>
+        <p className="text-sm text-slate-500 dark:text-slate-500">
+          We apologize for the inconvenience. Please check back soon.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function AppContent() {
   const navigate = useNavigate();
   const location = useLocation();
+
+  // Maintenance mode state
+  const [maintenanceMode, setMaintenanceMode] = useState(false);
+  const [maintenanceMessage, setMaintenanceMessage] = useState('');
 
   // Theme state - default to light mode
   const [theme, setTheme] = useState(() => {
@@ -118,6 +144,23 @@ function AppContent() {
   // Cart state
   const [cart, setCart] = useState({ items: [], subtotal: 0 });
   const [showCart, setShowCart] = useState(false);
+
+  // Check for maintenance mode on API errors
+  useEffect(() => {
+    const originalFetch = window.fetch;
+    window.fetch = async (...args) => {
+      const response = await originalFetch(...args);
+      if (response.status === 503) {
+        const data = await response.clone().json().catch(() => ({}));
+        if (data.maintenance) {
+          setMaintenanceMode(true);
+          setMaintenanceMessage(data.message || 'We are currently performing maintenance.');
+        }
+      }
+      return response;
+    };
+    return () => { window.fetch = originalFetch; };
+  }, []);
 
   // Apply theme
   useEffect(() => {
@@ -283,6 +326,12 @@ function AppContent() {
     );
   }
 
+  // Show maintenance page if site is in maintenance mode (unless user is admin or on /login page)
+  const isLoginPage = location.pathname === '/login';
+  if (maintenanceMode && !isLoginPage && (!user || (!user.is_admin && user.role_level < 3))) {
+    return <MaintenancePage message={maintenanceMessage} />;
+  }
+
   return (
     <ThemeContext.Provider value={{ theme, setTheme: updateTheme }}>
       <AuthContext.Provider value={{ user, token, login, logout, openAuth, fetchUser }}>
@@ -344,6 +393,8 @@ function AppContent() {
                 <Route path="/terms" element={<TermsPage />} />
                 <Route path="/privacy" element={<PrivacyPage />} />
                 <Route path="/refund" element={<RefundPage />} />
+                <Route path="/verify-email" element={<VerifyEmailPage />} />
+                <Route path="/login" element={<LoginPage />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             </main>
