@@ -156,9 +156,9 @@ function AuthModal({ mode, onClose, onSwitchMode }) {
                 value={formData.password}
                 onChange={handleChange}
                 required
-                minLength={mode === 'register' ? 8 : 1}
+                minLength={mode === 'register' ? 12 : 1}
                 className="input pr-10"
-                placeholder={mode === 'register' ? 'At least 8 characters' : 'Your password'}
+                placeholder={mode === 'register' ? 'At least 12 characters' : 'Your password'}
               />
               <button
                 type="button"

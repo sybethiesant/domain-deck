@@ -2,26 +2,24 @@ const express = require('express');
 const router = express.Router();
 const { authMiddleware } = require('../middleware/auth');
 const enom = require('../services/enom');
-
-// Initialize Stripe (only if key is configured)
-let stripe = null;
-if (process.env.STRIPE_SECRET_KEY) {
-  stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-}
+const stripeService = require('../services/stripe');
 
 // Get Stripe config
 router.get('/config', (req, res) => {
+  const mode = stripeService.getMode();
   res.json({
-    publishableKey: process.env.STRIPE_PUBLISHABLE_KEY || null,
-    configured: !!stripe
+    publishableKey: mode.publishableKey,
+    configured: mode.configured,
+    mode: mode.mode
   });
 });
 
 // Create payment intent
 router.post('/create-payment-intent', authMiddleware, async (req, res) => {
-  if (!stripe) {
+  if (!stripeService.isConfigured()) {
     return res.status(503).json({ error: 'Payment processing not configured' });
   }
+  const stripe = stripeService.getInstance();
 
   const pool = req.app.locals.pool;
   const { billing_address } = req.body;
@@ -62,18 +60,19 @@ router.post('/create-payment-intent', authMiddleware, async (req, res) => {
       );
     }
 
-    // Create payment intent
+    // Create payment intent with setup_future_usage to save card for auto-renewal
+    // Only allow payment methods that support off-session charges (auto-renewal)
     const paymentIntent = await stripe.paymentIntents.create({
       amount: amountInCents,
       currency: 'usd',
       customer: customerId,
+      setup_future_usage: 'off_session', // Save payment method for future charges
       metadata: {
         userId: req.user.id.toString(),
         type: 'domain_purchase'
       },
-      automatic_payment_methods: {
-        enabled: true
-      }
+      // Payment methods that support off-session charges for auto-renewal
+      payment_method_types: ['card', 'link', 'cashapp', 'amazon_pay']
     });
 
     res.json({
@@ -89,32 +88,42 @@ router.post('/create-payment-intent', authMiddleware, async (req, res) => {
 
 // Create payment intent for WHOIS privacy purchase
 router.post('/privacy-purchase', authMiddleware, async (req, res) => {
-  if (!stripe) {
+  console.log('[privacy-purchase] Request received:', { domain_id: req.body.domain_id, user_id: req.user.id });
+
+  if (!stripeService.isConfigured()) {
+    console.log('[privacy-purchase] ERROR: Stripe not configured');
     return res.status(503).json({ error: 'Payment processing not configured' });
   }
+  const stripe = stripeService.getInstance();
 
   const pool = req.app.locals.pool;
   const { domain_id } = req.body;
 
   if (!domain_id) {
+    console.log('[privacy-purchase] ERROR: No domain_id provided');
     return res.status(400).json({ error: 'Domain ID is required' });
   }
 
   try {
     // Verify domain ownership
+    console.log('[privacy-purchase] Looking up domain:', domain_id, 'for user:', req.user.id);
     const domainResult = await pool.query(
       'SELECT * FROM domains WHERE id = $1 AND user_id = $2',
       [domain_id, req.user.id]
     );
 
     if (domainResult.rows.length === 0) {
+      console.log('[privacy-purchase] ERROR: Domain not found or not owned by user');
       return res.status(404).json({ error: 'Domain not found' });
     }
 
     const domain = domainResult.rows[0];
-    const parts = domain.domain_name.split('.');
-    const tld = parts.pop();
-    const sld = parts.join('.');
+    // Use the tld column directly - domain_name may or may not include the TLD
+    const tld = domain.tld;
+    // If domain_name includes TLD, strip it; otherwise use as-is
+    const sld = domain.domain_name.includes('.')
+      ? domain.domain_name.split('.').slice(0, -1).join('.')
+      : domain.domain_name;
 
     // Check if privacy is already purchased
     const privacyStatus = await enom.getPrivacyStatus(sld, tld);
@@ -177,23 +186,24 @@ router.post('/privacy-purchase', authMiddleware, async (req, res) => {
       clientSecret: paymentIntent.client_secret,
       paymentIntentId: paymentIntent.id,
       amount: privacyPrice,
-      domainName: domain.domain_name,
+      domainName: `${sld}.${tld}`,
       privacyStatus
     });
   } catch (error) {
-    console.error('Error creating privacy payment intent:', error);
-    res.status(500).json({ error: 'Failed to initialize payment' });
+    console.error('[privacy-purchase] ERROR:', error.message);
+    console.error('[privacy-purchase] Stack:', error.stack);
+    res.status(500).json({ error: 'Failed to initialize payment: ' + error.message });
   }
 });
 
 // Stripe webhook handler
 router.post('/webhook', async (req, res) => {
-  if (!stripe) {
+  if (!stripeService.isConfigured()) {
     return res.status(503).json({ error: 'Stripe not configured' });
   }
 
   const sig = req.headers['stripe-signature'];
-  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  const webhookSecret = stripeService.getWebhookSecret();
   const pool = req.app.locals.pool;
 
   let event;
@@ -201,13 +211,13 @@ router.post('/webhook', async (req, res) => {
   try {
     // SECURITY: Always require webhook signature verification
     if (!webhookSecret) {
-      console.error('CRITICAL: STRIPE_WEBHOOK_SECRET not configured');
+      console.error('CRITICAL: Stripe webhook secret not configured');
       return res.status(500).json({ error: 'Webhook not configured' });
     }
     if (!sig) {
       return res.status(400).json({ error: 'Missing stripe-signature header' });
     }
-    event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+    event = stripeService.constructWebhookEvent(req.body, sig);
   } catch (err) {
     console.error('Webhook signature verification failed:', err.message);
     return res.status(400).send(`Webhook Error: ${err.message}`);
@@ -239,12 +249,67 @@ router.post('/webhook', async (req, res) => {
 });
 
 /**
+ * Save payment method to database for future auto-renewals
+ */
+async function savePaymentMethodIfNew(pool, paymentIntent, userId) {
+  try {
+    const pmId = paymentIntent.payment_method;
+    if (!pmId) return;
+
+    // Check if already saved
+    const existing = await pool.query(
+      'SELECT id FROM saved_payment_methods WHERE stripe_payment_method_id = $1',
+      [pmId]
+    );
+    if (existing.rows.length > 0) return;
+
+    // Get payment method details from Stripe
+    const pm = await stripeService.retrievePaymentMethod(pmId);
+    if (pm.type !== 'card') return;
+
+    // Check if user has any saved methods
+    const methodCount = await pool.query(
+      'SELECT COUNT(*) as count FROM saved_payment_methods WHERE user_id = $1',
+      [userId]
+    );
+    const isFirst = parseInt(methodCount.rows[0].count) === 0;
+
+    // Save to database
+    await pool.query(
+      `INSERT INTO saved_payment_methods
+       (user_id, stripe_payment_method_id, card_brand, card_last4, card_exp_month, card_exp_year, is_default)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (stripe_payment_method_id) DO NOTHING`,
+      [userId, pmId, pm.card.brand, pm.card.last4, pm.card.exp_month, pm.card.exp_year, isFirst]
+    );
+
+    // If first card, also set as default on user
+    if (isFirst) {
+      await pool.query(
+        'UPDATE users SET default_payment_method_id = $1 WHERE id = $2',
+        [pmId, userId]
+      );
+    }
+
+    console.log(`Saved payment method ${pm.card.brand} *${pm.card.last4} for user ${userId}`);
+  } catch (error) {
+    console.error('Error saving payment method:', error.message);
+    // Don't throw - this is not critical to order processing
+  }
+}
+
+/**
  * Handle successful payment - process domain registrations/transfers/renewals
  */
 async function handlePaymentSuccess(pool, paymentIntent) {
   const { id: paymentIntentId, metadata } = paymentIntent;
 
   console.log('Processing payment success:', paymentIntentId, 'type:', metadata?.type);
+
+  // Save payment method for future use (auto-renewal)
+  if (metadata?.userId) {
+    await savePaymentMethodIfNew(pool, paymentIntent, parseInt(metadata.userId));
+  }
 
   // Handle privacy purchase separately
   if (metadata?.type === 'privacy_purchase') {
@@ -281,6 +346,9 @@ async function handlePaymentSuccess(pool, paymentIntent) {
   // Get registrant contact from order (stored during checkout)
   const storedContact = order.registrant_contact;
 
+  // Get extended attributes for ccTLDs (e.g., .in requires Aadhaar/PAN)
+  const storedExtendedAttributes = order.extended_attributes || {};
+
   // Validate that registrant contact was provided during checkout
   if (!storedContact || !storedContact.first_name || !storedContact.email || !storedContact.phone) {
     console.error('Order missing valid registrant contact:', order.order_number);
@@ -311,15 +379,34 @@ async function handlePaymentSuccess(pool, paymentIntent) {
       let result;
 
       if (item.item_type === 'register') {
+        // Extract extended attributes for this domain's TLD
+        // Frontend stores as: { "in_in_aadharnumber": "value", "uk_legal_type": "IND" }
+        // We need to extract attrs for this specific TLD: { "in_aadharnumber": "value" }
+        const domainExtendedAttrs = {};
+        const tldPrefix = `${item.tld.toLowerCase()}_`;
+        Object.entries(storedExtendedAttributes).forEach(([key, value]) => {
+          if (key.toLowerCase().startsWith(tldPrefix) && value) {
+            // Remove TLD prefix from key: "in_in_aadharnumber" -> "in_aadharnumber"
+            const attrName = key.substring(tldPrefix.length);
+            domainExtendedAttrs[attrName] = value;
+          }
+        });
+
+        if (Object.keys(domainExtendedAttrs).length > 0) {
+          console.log(`Extended attributes for ${item.domain_name}.${item.tld}:`, domainExtendedAttrs);
+        }
+
         // Register new domain with smart refill
         console.log(`Registering domain: ${item.domain_name}.${item.tld} (cost: $${item.total_price})`);
         const smartResult = await enom.smartPurchase({
           sld: item.domain_name,
           tld: item.tld,
           years: item.years || 1,
+          nameservers: ['ns1.worxtech.biz', 'ns2.worxtech.biz'],
           registrant: registrantContact,
           privacy: false,
-          cost: parseFloat(item.total_price)
+          cost: parseFloat(item.total_price),
+          extendedAttributes: domainExtendedAttrs
         });
         result = smartResult.purchaseResult || smartResult;
 
@@ -338,25 +425,34 @@ async function handlePaymentSuccess(pool, paymentIntent) {
 
         if (result.success) {
           // Create domain record in our database
+          // Save payment method for auto-renewal if user opted in
+          const autoRenew = order.auto_renew !== false; // Default to true if not set
+          const paymentMethodId = autoRenew ? paymentIntent.payment_method : null;
+
           await pool.query(
             `INSERT INTO domains (
               user_id, domain_name, tld, status, expiration_date,
-              auto_renew, enom_order_id, created_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
+              auto_renew, auto_renew_payment_method_id, enom_order_id, enom_mode, created_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)
             ON CONFLICT (domain_name, tld) DO UPDATE SET
               user_id = $1,
               status = $4,
               expiration_date = $5,
-              enom_order_id = $7,
+              auto_renew = $6,
+              auto_renew_payment_method_id = $7,
+              enom_order_id = $8,
+              enom_mode = $9,
               updated_at = CURRENT_TIMESTAMP`,
             [
               order.user_id,
               item.domain_name,
               item.tld,
               'active',
-              result.expirationDate || new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
-              true,
-              result.orderId
+              result.expirationDate || new Date(Date.now() + (item.years || 1) * 365 * 24 * 60 * 60 * 1000),
+              autoRenew,
+              paymentMethodId,
+              result.orderId,
+              enom.getMode().mode
             ]
           );
         }
@@ -389,21 +485,31 @@ async function handlePaymentSuccess(pool, paymentIntent) {
 
         if (result.success) {
           // Create domain record with pending status
+          // Save payment method for auto-renewal if user opted in
+          const autoRenew = order.auto_renew !== false;
+          const paymentMethodId = autoRenew ? paymentIntent.payment_method : null;
+
           await pool.query(
             `INSERT INTO domains (
-              user_id, domain_name, tld, status, enom_order_id, created_at
-            ) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
+              user_id, domain_name, tld, status, auto_renew, auto_renew_payment_method_id, enom_order_id, enom_mode, created_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP)
             ON CONFLICT (domain_name, tld) DO UPDATE SET
               user_id = $1,
               status = $4,
-              enom_order_id = $5,
+              auto_renew = $5,
+              auto_renew_payment_method_id = $6,
+              enom_order_id = $7,
+              enom_mode = $8,
               updated_at = CURRENT_TIMESTAMP`,
             [
               order.user_id,
               item.domain_name,
               item.tld,
               'transfer_pending',
-              result.transferOrderId
+              autoRenew,
+              paymentMethodId,
+              result.transferOrderId,
+              enom.getMode().mode
             ]
           );
         }
@@ -433,15 +539,44 @@ async function handlePaymentSuccess(pool, paymentIntent) {
         }
 
         if (result.success) {
-          // Update domain expiration
-          await pool.query(
-            `UPDATE domains SET
-              expiration_date = $1,
-              status = 'active',
-              updated_at = CURRENT_TIMESTAMP
-             WHERE domain_name = $2 AND tld = $3`,
-            [result.newExpiration, item.domain_name, item.tld]
-          );
+          // Get expiration date - from result or fetch from eNom if not returned
+          let newExpiration = result.newExpiration;
+          if (!newExpiration) {
+            console.log(`Expiration not in renewal response, fetching from eNom...`);
+            try {
+              const domainInfo = await enom.getDomainInfo(item.domain_name, item.tld);
+              newExpiration = domainInfo.expirationDate;
+            } catch (e) {
+              console.error('Failed to fetch expiration after renewal:', e.message);
+            }
+          }
+
+          // Update domain expiration and auto-renew settings
+          const autoRenew = order.auto_renew !== false;
+          const paymentMethodId = autoRenew ? paymentIntent.payment_method : null;
+
+          if (newExpiration) {
+            await pool.query(
+              `UPDATE domains SET
+                expiration_date = $1,
+                status = 'active',
+                auto_renew = $2,
+                auto_renew_payment_method_id = COALESCE($3, auto_renew_payment_method_id),
+                updated_at = CURRENT_TIMESTAMP
+               WHERE domain_name = $4 AND tld = $5`,
+              [newExpiration, autoRenew, paymentMethodId, item.domain_name, item.tld]
+            );
+          } else {
+            // Still update auto-renew settings even without new expiration
+            await pool.query(
+              `UPDATE domains SET
+                auto_renew = $1,
+                auto_renew_payment_method_id = COALESCE($2, auto_renew_payment_method_id),
+                updated_at = CURRENT_TIMESTAMP
+               WHERE domain_name = $3 AND tld = $4`,
+              [autoRenew, paymentMethodId, item.domain_name, item.tld]
+            );
+          }
         }
       }
 
@@ -552,8 +687,8 @@ async function handlePrivacyPurchaseSuccess(pool, paymentIntent) {
   const { domainId, domainName, sld, tld, userId } = metadata;
 
   try {
-    // Enable privacy via eNom
-    await enom.setWhoisPrivacy(sld, tld, true);
+    // Purchase privacy via eNom (this buys AND enables ID Protect)
+    await enom.purchasePrivacy(sld, tld, 1);
 
     // Update domain record
     await pool.query(
@@ -630,29 +765,23 @@ router.get('/payment-methods', authMiddleware, async (req, res) => {
   const pool = req.app.locals.pool;
 
   try {
-    const userResult = await pool.query(
-      'SELECT stripe_customer_id FROM users WHERE id = $1',
+    // Get from our database (includes is_default flag)
+    const methodsResult = await pool.query(
+      `SELECT stripe_payment_method_id, card_brand, card_last4, card_exp_month, card_exp_year, is_default
+       FROM saved_payment_methods
+       WHERE user_id = $1
+       ORDER BY is_default DESC, created_at DESC`,
       [req.user.id]
     );
 
-    const customerId = userResult.rows[0]?.stripe_customer_id;
-
-    if (!customerId) {
-      return res.json({ paymentMethods: [] });
-    }
-
-    const paymentMethods = await stripe.paymentMethods.list({
-      customer: customerId,
-      type: 'card'
-    });
-
     res.json({
-      paymentMethods: paymentMethods.data.map(pm => ({
-        id: pm.id,
-        brand: pm.card.brand,
-        last4: pm.card.last4,
-        expMonth: pm.card.exp_month,
-        expYear: pm.card.exp_year
+      paymentMethods: methodsResult.rows.map(pm => ({
+        id: pm.stripe_payment_method_id,
+        brand: pm.card_brand,
+        last4: pm.card_last4,
+        expMonth: pm.card_exp_month,
+        expYear: pm.card_exp_year,
+        isDefault: pm.is_default
       }))
     });
   } catch (error) {
@@ -660,6 +789,192 @@ router.get('/payment-methods', authMiddleware, async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch payment methods' });
   }
 });
+
+// Set default payment method
+router.put('/payment-methods/:pmId/default', authMiddleware, async (req, res) => {
+  if (!stripe) {
+    return res.status(503).json({ error: 'Stripe not configured' });
+  }
+
+  const pool = req.app.locals.pool;
+  const { pmId } = req.params;
+
+  try {
+    // Verify ownership
+    const ownerCheck = await pool.query(
+      'SELECT id FROM saved_payment_methods WHERE stripe_payment_method_id = $1 AND user_id = $2',
+      [pmId, req.user.id]
+    );
+
+    if (ownerCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Payment method not found' });
+    }
+
+    // Clear all defaults for this user
+    await pool.query(
+      'UPDATE saved_payment_methods SET is_default = false WHERE user_id = $1',
+      [req.user.id]
+    );
+
+    // Set new default
+    await pool.query(
+      'UPDATE saved_payment_methods SET is_default = true WHERE stripe_payment_method_id = $1',
+      [pmId]
+    );
+
+    // Update user's default payment method
+    await pool.query(
+      'UPDATE users SET default_payment_method_id = $1 WHERE id = $2',
+      [pmId, req.user.id]
+    );
+
+    // Also update on Stripe customer
+    const userResult = await pool.query(
+      'SELECT stripe_customer_id FROM users WHERE id = $1',
+      [req.user.id]
+    );
+
+    if (userResult.rows[0]?.stripe_customer_id) {
+      await stripeService.updateCustomer(userResult.rows[0].stripe_customer_id, {
+        invoice_settings: { default_payment_method: pmId }
+      });
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error setting default payment method:', error);
+    res.status(500).json({ error: 'Failed to set default payment method' });
+  }
+});
+
+// Delete payment method
+router.delete('/payment-methods/:pmId', authMiddleware, async (req, res) => {
+  if (!stripeService.isConfigured()) {
+    return res.status(503).json({ error: 'Stripe not configured' });
+  }
+
+  const pool = req.app.locals.pool;
+  const { pmId } = req.params;
+
+  try {
+    // Verify ownership
+    const ownerCheck = await pool.query(
+      'SELECT id, is_default FROM saved_payment_methods WHERE stripe_payment_method_id = $1 AND user_id = $2',
+      [pmId, req.user.id]
+    );
+
+    if (ownerCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Payment method not found' });
+    }
+
+    // Detach from Stripe customer
+    await stripeService.detachPaymentMethod(pmId);
+
+    // Delete from database
+    await pool.query(
+      'DELETE FROM saved_payment_methods WHERE stripe_payment_method_id = $1',
+      [pmId]
+    );
+
+    // If this was the default, clear user's default
+    if (ownerCheck.rows[0].is_default) {
+      await pool.query(
+        'UPDATE users SET default_payment_method_id = NULL WHERE id = $1',
+        [req.user.id]
+      );
+
+      // Set another card as default if available
+      const otherCard = await pool.query(
+        'SELECT stripe_payment_method_id FROM saved_payment_methods WHERE user_id = $1 ORDER BY created_at LIMIT 1',
+        [req.user.id]
+      );
+
+      if (otherCard.rows.length > 0) {
+        await pool.query(
+          'UPDATE saved_payment_methods SET is_default = true WHERE stripe_payment_method_id = $1',
+          [otherCard.rows[0].stripe_payment_method_id]
+        );
+        await pool.query(
+          'UPDATE users SET default_payment_method_id = $1 WHERE id = $2',
+          [otherCard.rows[0].stripe_payment_method_id, req.user.id]
+        );
+      }
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting payment method:', error);
+    res.status(500).json({ error: 'Failed to delete payment method' });
+  }
+});
+
+/**
+ * Charge a saved payment method for auto-renewal
+ * Called by the auto-renew background job
+ * @param {Pool} pool - Database pool
+ * @param {number} userId - User ID
+ * @param {number} amount - Amount in dollars
+ * @param {string} domainName - Domain being renewed
+ * @param {string} paymentMethodId - Optional specific payment method (uses default if not provided)
+ * @returns {Object} - { success, paymentIntentId, error }
+ */
+async function chargeForAutoRenewal(pool, userId, amount, domainName, paymentMethodId = null) {
+  if (!stripeService.isConfigured()) {
+    return { success: false, error: 'Stripe not configured' };
+  }
+
+  try {
+    // Get user's Stripe customer ID and default payment method
+    const userResult = await pool.query(
+      'SELECT stripe_customer_id, default_payment_method_id, email FROM users WHERE id = $1',
+      [userId]
+    );
+
+    const user = userResult.rows[0];
+    if (!user?.stripe_customer_id) {
+      return { success: false, error: 'No Stripe customer found for user' };
+    }
+
+    const pmToCharge = paymentMethodId || user.default_payment_method_id;
+    if (!pmToCharge) {
+      return { success: false, error: 'No payment method available for auto-renewal' };
+    }
+
+    // Create payment intent for off-session charge
+    const amountInCents = Math.round(amount * 100);
+    const paymentIntent = await stripeService.createPaymentIntent({
+      amount: amountInCents,
+      currency: 'usd',
+      customer: user.stripe_customer_id,
+      payment_method: pmToCharge,
+      off_session: true,
+      confirm: true,
+      metadata: {
+        userId: userId.toString(),
+        type: 'auto_renewal',
+        domainName: domainName
+      }
+    });
+
+    if (paymentIntent.status === 'succeeded') {
+      console.log(`Auto-renewal payment succeeded for ${domainName}: $${amount}`);
+      return { success: true, paymentIntentId: paymentIntent.id };
+    } else {
+      return { success: false, error: `Payment status: ${paymentIntent.status}` };
+    }
+  } catch (error) {
+    console.error(`Auto-renewal payment failed for ${domainName}:`, error.message);
+
+    // Handle specific Stripe errors
+    if (error.code === 'authentication_required') {
+      return { success: false, error: 'Card requires authentication - please update payment method', requiresAction: true };
+    } else if (error.code === 'card_declined') {
+      return { success: false, error: 'Card was declined - please update payment method', cardDeclined: true };
+    }
+
+    return { success: false, error: error.message };
+  }
+}
 
 // Manual trigger for testing (admin only)
 router.post('/process-order/:orderId', authMiddleware, async (req, res) => {
@@ -704,4 +1019,6 @@ router.post('/process-order/:orderId', authMiddleware, async (req, res) => {
   }
 });
 
+// Export router and utility functions
+router.chargeForAutoRenewal = chargeForAutoRenewal;
 module.exports = router;

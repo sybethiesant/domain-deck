@@ -12,6 +12,11 @@ export default function OrdersPage() {
 
   // Fetch orders fresh on mount
   const fetchOrders = useCallback(async () => {
+    if (!token) {
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     try {
       const res = await fetch(`${API_URL}/orders`, {
@@ -23,13 +28,17 @@ export default function OrdersPage() {
 
       if (res.ok) {
         const data = await res.json();
-        setOrders(data.orders || data);
+        setOrders(data.orders || data || []);
       } else {
-        toast.error('Failed to load orders');
+        const errorData = await res.json().catch(() => ({}));
+        console.error('Orders API error:', res.status, errorData);
+        if (res.status !== 401) {
+          toast.error('Failed to load orders');
+        }
       }
     } catch (error) {
       console.error('Error fetching orders:', error);
-      toast.error('Failed to load orders');
+      toast.error('Failed to load orders. Please refresh the page.');
     } finally {
       setLoading(false);
     }

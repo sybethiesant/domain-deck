@@ -6,6 +6,7 @@ const express = require('express');
 const router = express.Router();
 const { logAudit } = require('../../middleware/auth');
 const enom = require('../../services/enom');
+const stripeService = require('../../services/stripe');
 
 // List all orders
 router.get('/orders', async (req, res) => {
@@ -272,10 +273,10 @@ router.post('/orders/:orderId/items/:itemId/retry', async (req, res) => {
       // Create domain record
       if (result.success) {
         await pool.query(
-          `INSERT INTO domains (user_id, domain_name, tld, status, enom_order_id)
-           VALUES ($1, $2, $3, 'active', $4)
-           ON CONFLICT (domain_name) DO UPDATE SET status = 'active', enom_order_id = $4`,
-          [item.user_id, `${sld}.${tld}`, tld, result.orderId]
+          `INSERT INTO domains (user_id, domain_name, tld, status, enom_order_id, enom_mode)
+           VALUES ($1, $2, $3, 'active', $4, $5)
+           ON CONFLICT (domain_name) DO UPDATE SET status = 'active', enom_order_id = $4, enom_mode = $5`,
+          [item.user_id, `${sld}.${tld}`, tld, result.orderId, enom.getMode().mode]
         );
       }
     } else if (item.item_type === 'renew') {
@@ -363,15 +364,14 @@ router.post('/orders/:id/refund', async (req, res) => {
       return res.status(400).json({ error: 'No payment intent found for this order' });
     }
 
-    // Initialize Stripe
-    const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-    if (!stripe) {
+    // Check Stripe is configured
+    if (!stripeService.isConfigured()) {
       return res.status(503).json({ error: 'Stripe not configured' });
     }
 
     // Create refund
     const refundAmount = amount ? Math.round(amount * 100) : undefined;
-    const refund = await stripe.refunds.create({
+    const refund = await stripeService.createRefund({
       payment_intent: order.stripe_payment_intent_id,
       amount: refundAmount,
       reason: 'requested_by_customer'

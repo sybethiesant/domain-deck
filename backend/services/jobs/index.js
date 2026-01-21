@@ -3,12 +3,14 @@
  * Handles scheduled tasks like domain sync, expiration notifications, etc.
  */
 
+const cron = require('node-cron');
 const email = require('../email');
 const enom = require('../enom');
 
 class JobScheduler {
   constructor() {
     this.jobs = new Map();
+    this.cronJobs = new Map();
     this.running = false;
     this.pool = null;
   }
@@ -34,19 +36,22 @@ class JobScheduler {
     this.running = true;
     console.log('Starting job scheduler...');
 
-    // Domain sync - every 6 hours
-    this.schedule('domainSync', 6 * 60 * 60 * 1000, this.syncDomains.bind(this));
+    // Domain sync - every 6 hours (0:00, 6:00, 12:00, 18:00)
+    this.scheduleCron('domainSync', '0 0,6,12,18 * * *', this.syncDomains.bind(this));
 
     // Expiration notifications - daily at midnight
-    this.schedule('expirationNotifications', 24 * 60 * 60 * 1000, this.sendExpirationNotifications.bind(this));
+    this.scheduleCron('expirationNotifications', '0 0 * * *', this.sendExpirationNotifications.bind(this));
 
     // Clean expired cart items - every hour
-    this.schedule('cleanCart', 60 * 60 * 1000, this.cleanExpiredCartItems.bind(this));
+    this.scheduleCron('cleanCart', '0 * * * *', this.cleanExpiredCartItems.bind(this));
 
     // Sync pending transfers - every 2 hours
-    this.schedule('syncTransfers', 2 * 60 * 60 * 1000, this.syncPendingTransfers.bind(this));
+    this.scheduleCron('syncTransfers', '0 */2 * * *', this.syncPendingTransfers.bind(this));
 
-    console.log('Job scheduler started with', this.jobs.size, 'jobs');
+    // Auto-renew domains - daily at 3 AM
+    this.scheduleCron('autoRenew', '0 3 * * *', this.autoRenewDomains.bind(this));
+
+    console.log('Job scheduler started with', this.cronJobs.size, 'cron jobs');
   }
 
   /**
@@ -54,16 +59,52 @@ class JobScheduler {
    */
   stop() {
     this.running = false;
+    // Stop interval-based jobs
     for (const [name, job] of this.jobs) {
       clearInterval(job.intervalId);
-      console.log(`Stopped job: ${name}`);
+      console.log(`Stopped interval job: ${name}`);
     }
     this.jobs.clear();
+
+    // Stop cron-based jobs
+    for (const [name, cronJob] of this.cronJobs) {
+      cronJob.task.stop();
+      console.log(`Stopped cron job: ${name}`);
+    }
+    this.cronJobs.clear();
+
     console.log('Job scheduler stopped');
   }
 
   /**
-   * Schedule a recurring job
+   * Schedule a cron-based job
+   * @param {string} name - Job name
+   * @param {string} cronExpression - Cron expression (e.g., '0 3 * * *' for 3 AM daily)
+   * @param {Function} handler - Job handler function
+   */
+  scheduleCron(name, cronExpression, handler) {
+    const task = cron.schedule(cronExpression, async () => {
+      await this.runJob(name, handler);
+    }, {
+      scheduled: true,
+      timezone: 'America/New_York' // EST/EDT timezone
+    });
+
+    this.cronJobs.set(name, {
+      name,
+      cronExpression,
+      handler,
+      task,
+      lastRun: null,
+      runCount: 0,
+      errors: []
+    });
+
+    console.log(`Scheduled cron job: ${name} (${cronExpression}) - Timezone: America/New_York`);
+  }
+
+  /**
+   * Schedule a recurring interval job (legacy method)
    * @param {string} name - Job name
    * @param {number} intervalMs - Interval in milliseconds
    * @param {Function} handler - Job handler function
@@ -86,7 +127,7 @@ class JobScheduler {
       errors: []
     });
 
-    console.log(`Scheduled job: ${name} (every ${intervalMs / 1000}s)`);
+    console.log(`Scheduled interval job: ${name} (every ${intervalMs / 1000}s)`);
   }
 
   /**
@@ -95,7 +136,8 @@ class JobScheduler {
    * @param {Function} handler - Job handler
    */
   async runJob(name, handler) {
-    const job = this.jobs.get(name);
+    // Check both interval jobs and cron jobs
+    const job = this.jobs.get(name) || this.cronJobs.get(name);
     const startTime = Date.now();
 
     try {
@@ -131,9 +173,12 @@ class JobScheduler {
    */
   getStatus() {
     const status = [];
+
+    // Interval-based jobs
     for (const [name, job] of this.jobs) {
       status.push({
         name,
+        type: 'interval',
         intervalMs: job.intervalMs,
         lastRun: job.lastRun,
         lastDuration: job.lastDuration,
@@ -141,6 +186,20 @@ class JobScheduler {
         recentErrors: job.errors.slice(-3)
       });
     }
+
+    // Cron-based jobs
+    for (const [name, job] of this.cronJobs) {
+      status.push({
+        name,
+        type: 'cron',
+        cronExpression: job.cronExpression,
+        lastRun: job.lastRun,
+        lastDuration: job.lastDuration,
+        runCount: job.runCount,
+        recentErrors: job.errors.slice(-3)
+      });
+    }
+
     return status;
   }
 
@@ -149,7 +208,8 @@ class JobScheduler {
    * @param {string} name - Job name
    */
   async trigger(name) {
-    const job = this.jobs.get(name);
+    // Check both interval and cron jobs
+    const job = this.jobs.get(name) || this.cronJobs.get(name);
     if (!job) {
       throw new Error(`Job not found: ${name}`);
     }
@@ -160,18 +220,23 @@ class JobScheduler {
 
   /**
    * Sync domains with eNom - fetches all available data
+   * Only syncs domains that match the current eNom mode
    */
   async syncDomains() {
     if (!this.pool) return;
 
-    // Get domains that need syncing (not synced in 6 hours)
+    // Get current eNom mode
+    const currentMode = enom.getMode().mode;
+
+    // Get domains that need syncing (not synced in 6 hours) and match current mode
     const result = await this.pool.query(`
-      SELECT id, domain_name FROM domains
+      SELECT id, domain_name, tld, enom_mode FROM domains
       WHERE status IN ('active', 'pending')
+        AND (enom_mode = $1 OR enom_mode IS NULL)
         AND (last_synced_at IS NULL OR last_synced_at < NOW() - INTERVAL '6 hours')
       ORDER BY last_synced_at ASC NULLS FIRST
       LIMIT 50
-    `);
+    `, [currentMode]);
 
     console.log(`[domainSync] Found ${result.rows.length} domains to sync`);
 
@@ -179,13 +244,15 @@ class JobScheduler {
     let failed = 0;
 
     for (const domain of result.rows) {
+      // Declare outside try block so they're accessible in catch for error logging
+      const sld = domain.domain_name;
+      const tld = domain.tld;
+      const domainMode = domain.enom_mode || 'test';
+
       try {
-        const parts = domain.domain_name.split('.');
-        const tld = parts.pop();
-        const sld = parts.join('.');
 
         // Fetch comprehensive data from eNom (5 API calls in parallel)
-        const data = await enom.getFullDomainData(sld, tld);
+        const data = await enom.getFullDomainData(sld, tld, { mode: domainMode });
 
         // Parse expiration date (format: "8/18/2026 11:59:00 PM")
         let expDate = null;
@@ -204,21 +271,21 @@ class JobScheduler {
           status = 'expired';
         }
 
+        // Note: We preserve local auto_renew setting - it controls OUR renewal system,
+        // separate from eNom's auto-renew which is handled at the registrar level
         await this.pool.query(`
           UPDATE domains SET
             expiration_date = COALESCE($1, expiration_date),
-            auto_renew = $2,
-            privacy_enabled = $3,
-            lock_status = $4,
-            nameservers = $5,
-            enom_domain_id = $6,
-            status = $7,
+            privacy_enabled = $2,
+            lock_status = $3,
+            nameservers = $4,
+            enom_domain_id = $5,
+            status = $6,
             last_synced_at = CURRENT_TIMESTAMP,
             updated_at = CURRENT_TIMESTAMP
-          WHERE id = $8
+          WHERE id = $7
         `, [
           expDate,
-          data.autoRenew,
           data.privacyEnabled,
           data.lockStatus,
           JSON.stringify(data.nameservers),
@@ -228,10 +295,10 @@ class JobScheduler {
         ]);
 
         synced++;
-        console.log(`[domainSync] Synced: ${domain.domain_name}`);
+        console.log(`[domainSync] Synced: ${sld}.${tld}`);
       } catch (error) {
         failed++;
-        console.error(`[domainSync] Failed to sync ${domain.domain_name}:`, error.message);
+        console.error(`[domainSync] Failed to sync ${sld}.${tld}:`, error.message);
       }
 
       // Small delay between domains to avoid rate limiting
@@ -259,10 +326,10 @@ class JobScheduler {
       FROM domains d
       JOIN users u ON d.user_id = u.id
       WHERE d.status = 'active'
-        AND d.expiration_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '${daysThreshold} days'
+        AND d.expiration_date BETWEEN CURRENT_DATE AND CURRENT_DATE + ($1 || ' days')::interval
         AND d.auto_renew = false
       ORDER BY d.expiration_date ASC
-    `);
+    `, [daysThreshold]);
 
     let sent = 0;
 
@@ -371,6 +438,208 @@ class JobScheduler {
     }
 
     console.log(`[syncTransfers] Updated: ${updated} transfers`);
+  }
+
+  /**
+   * Auto-renew domains that are expiring soon and have auto_renew enabled
+   * Flow: 1) Charge customer via Stripe, 2) Renew at eNom, 3) Update database
+   * Only processes domains that match the current eNom mode
+   */
+  async autoRenewDomains() {
+    if (!this.pool) return;
+
+    // Get current eNom mode
+    const currentMode = enom.getMode().mode;
+    console.log(`[autoRenew] Running in ${currentMode} mode`);
+
+    // Import stripe charger function
+    const stripeRouter = require('../../routes/stripe');
+    const chargeForAutoRenewal = stripeRouter.chargeForAutoRenewal;
+
+    // Get domains expiring in the next 30 days with auto_renew enabled
+    // Also check that user has a payment method on file and matches current eNom mode
+    const result = await this.pool.query(`
+      SELECT d.*, u.email, u.username, u.id as user_id, u.default_payment_method_id,
+             d.auto_renew_payment_method_id
+      FROM domains d
+      JOIN users u ON d.user_id = u.id
+      WHERE d.status = 'active'
+        AND d.auto_renew = true
+        AND (d.enom_mode = $1 OR d.enom_mode IS NULL)
+        AND d.expiration_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'
+        AND (u.default_payment_method_id IS NOT NULL OR d.auto_renew_payment_method_id IS NOT NULL)
+      ORDER BY d.expiration_date ASC
+    `, [currentMode]);
+
+    console.log(`[autoRenew] Found ${result.rows.length} domains to auto-renew`);
+
+    let renewed = 0;
+    let failed = 0;
+    let noPaymentMethod = 0;
+
+    for (const domain of result.rows) {
+      const sld = domain.domain_name;
+      const tld = domain.tld;
+      const fullDomain = `${sld}.${tld}`;
+      const domainMode = domain.enom_mode || 'test';
+
+      try {
+        // Get renewal price from TLD pricing (customer sale price)
+        const pricingResult = await this.pool.query(
+          'SELECT price_renew, cost_renew FROM tld_pricing WHERE tld = $1',
+          [tld]
+        );
+        const customerPrice = parseFloat(pricingResult.rows[0]?.price_renew || 15);
+        const enomCost = parseFloat(pricingResult.rows[0]?.cost_renew || 10);
+
+        console.log(`[autoRenew] Processing ${fullDomain} - Customer: $${customerPrice}, eNom: $${enomCost}`);
+
+        // STEP 1: Charge customer's saved payment method
+        const paymentMethodId = domain.auto_renew_payment_method_id || domain.default_payment_method_id;
+        const chargeResult = await chargeForAutoRenewal(
+          this.pool,
+          domain.user_id,
+          customerPrice,
+          fullDomain,
+          paymentMethodId
+        );
+
+        if (!chargeResult.success) {
+          console.error(`[autoRenew] Payment failed for ${fullDomain}: ${chargeResult.error}`);
+
+          // Disable auto-renew if card declined or requires action
+          if (chargeResult.cardDeclined || chargeResult.requiresAction) {
+            await this.pool.query(`
+              UPDATE domains SET auto_renew = false, updated_at = CURRENT_TIMESTAMP
+              WHERE id = $1
+            `, [domain.id]);
+            console.log(`[autoRenew] Disabled auto-renew for ${fullDomain} due to payment failure`);
+          }
+
+          // Notify customer
+          await email.sendRenewalFailed(domain.email, {
+            domain: fullDomain,
+            error: chargeResult.error,
+            expirationDate: new Date(domain.expiration_date).toLocaleDateString()
+          });
+
+          failed++;
+          continue;
+        }
+
+        console.log(`[autoRenew] Payment succeeded for ${fullDomain}, proceeding with eNom renewal`);
+
+        // STEP 2: Renew at eNom using reseller balance (with auto-refill)
+        const renewResult = await enom.smartRenewal(sld, tld, 1, enomCost, { mode: domainMode });
+
+        if (!renewResult.success) {
+          // Payment succeeded but eNom failed - this needs manual resolution
+          console.error(`[autoRenew] eNom renewal failed for ${fullDomain} after payment succeeded!`);
+
+          // Log for manual resolution
+          await this.pool.query(`
+            INSERT INTO activity_logs (user_id, action, entity_type, entity_id, details)
+            VALUES ($1, $2, $3, $4, $5)
+          `, [
+            domain.user_id,
+            'auto_renewal_enom_failed',
+            'domain',
+            domain.id,
+            JSON.stringify({
+              domain: fullDomain,
+              stripePaymentIntent: chargeResult.paymentIntentId,
+              customerCharged: customerPrice,
+              error: renewResult.error || 'eNom renewal failed',
+              requiresManualResolution: true
+            })
+          ]);
+
+          failed++;
+          continue;
+        }
+
+        // STEP 3: Update database
+        const newExpDate = renewResult.renewResult?.newExpiration;
+        if (newExpDate) {
+          await this.pool.query(`
+            UPDATE domains SET
+              expiration_date = $1,
+              updated_at = CURRENT_TIMESTAMP
+            WHERE id = $2
+          `, [newExpDate, domain.id]);
+        }
+
+        // Log the transaction
+        await this.pool.query(`
+          INSERT INTO balance_transactions
+          (transaction_type, amount, domain_name, auto_refill, notes, stripe_payment_intent_id)
+          VALUES ($1, $2, $3, $4, $5, $6)
+        `, [
+          'renewal',
+          customerPrice,
+          fullDomain,
+          renewResult.refillResult ? true : false,
+          'Auto-renewal (customer charged via Stripe)',
+          chargeResult.paymentIntentId
+        ]);
+
+        // Send confirmation email (handled by eNom if configured)
+        // We can also send our own:
+        // await email.sendRenewalConfirmation(domain.email, { ... });
+
+        renewed++;
+        console.log(`[autoRenew] Successfully renewed ${fullDomain}`);
+
+      } catch (error) {
+        failed++;
+        console.error(`[autoRenew] Failed to renew ${fullDomain}:`, error.message);
+
+        // Send failure notification
+        try {
+          await email.sendRenewalFailed(domain.email, {
+            domain: fullDomain,
+            error: error.message,
+            expirationDate: new Date(domain.expiration_date).toLocaleDateString()
+          });
+        } catch (emailError) {
+          console.error(`[autoRenew] Failed to send failure email:`, emailError.message);
+        }
+      }
+
+      // Delay between renewals to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+
+    // Log domains that couldn't be auto-renewed due to no payment method
+    const noPaymentResult = await this.pool.query(`
+      SELECT d.domain_name, d.tld, d.expiration_date, u.email
+      FROM domains d
+      JOIN users u ON d.user_id = u.id
+      WHERE d.status = 'active'
+        AND d.auto_renew = true
+        AND d.expiration_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'
+        AND u.default_payment_method_id IS NULL
+        AND d.auto_renew_payment_method_id IS NULL
+    `);
+
+    if (noPaymentResult.rows.length > 0) {
+      console.log(`[autoRenew] ${noPaymentResult.rows.length} domains have auto-renew but no payment method`);
+      for (const d of noPaymentResult.rows) {
+        // Notify customer they need to add a payment method
+        try {
+          await email.sendRenewalFailed(d.email, {
+            domain: `${d.domain_name}.${d.tld}`,
+            error: 'No payment method on file. Please add a payment method to enable auto-renewal.',
+            expirationDate: new Date(d.expiration_date).toLocaleDateString()
+          });
+        } catch (e) {
+          console.error(`[autoRenew] Failed to send no-payment-method email:`, e.message);
+        }
+        noPaymentMethod++;
+      }
+    }
+
+    console.log(`[autoRenew] Complete - Renewed: ${renewed}, Failed: ${failed}, No Payment Method: ${noPaymentMethod}`);
   }
 }
 

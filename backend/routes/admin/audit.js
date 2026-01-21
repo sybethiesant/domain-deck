@@ -214,7 +214,7 @@ router.get('/activity', async (req, res) => {
 // Get activity summary for dashboard
 router.get('/activity/summary', async (req, res) => {
   const pool = req.app.locals.pool;
-  const { days = 7 } = req.query;
+  const days = Math.max(1, Math.min(parseInt(req.query.days) || 7, 365)); // Bounded 1-365
 
   try {
     const [byAction, byDay, topUsers] = await Promise.all([
@@ -222,30 +222,30 @@ router.get('/activity/summary', async (req, res) => {
       pool.query(`
         SELECT action, COUNT(*) as count
         FROM activity_logs
-        WHERE created_at >= CURRENT_DATE - INTERVAL '${parseInt(days)} days'
+        WHERE created_at >= CURRENT_DATE - INTERVAL '1 day' * $1
         GROUP BY action
         ORDER BY count DESC
         LIMIT 10
-      `),
+      `, [days]),
       // Activity by day
       pool.query(`
         SELECT DATE(created_at) as date, COUNT(*) as count
         FROM activity_logs
-        WHERE created_at >= CURRENT_DATE - INTERVAL '${parseInt(days)} days'
+        WHERE created_at >= CURRENT_DATE - INTERVAL '1 day' * $1
         GROUP BY DATE(created_at)
         ORDER BY date ASC
-      `),
+      `, [days]),
       // Most active users
       pool.query(`
         SELECT al.user_id, u.username, COUNT(*) as action_count
         FROM activity_logs al
         LEFT JOIN users u ON al.user_id = u.id
-        WHERE al.created_at >= CURRENT_DATE - INTERVAL '${parseInt(days)} days'
+        WHERE al.created_at >= CURRENT_DATE - INTERVAL '1 day' * $1
           AND al.user_id IS NOT NULL
         GROUP BY al.user_id, u.username
         ORDER BY action_count DESC
         LIMIT 10
-      `)
+      `, [days])
     ]);
 
     res.json({

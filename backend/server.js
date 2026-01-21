@@ -106,6 +106,14 @@ app.use('/api/stripe/webhook', express.raw({ type: 'application/json' }));
 
 app.use(express.json({ limit: '1mb' }));
 
+// Debug logging for requests
+app.use((req, res, next) => {
+  if (req.path.includes('/auth/')) {
+    console.log(`[REQ] ${req.method} ${req.path} Origin: ${req.headers.origin || 'none'}`);
+  }
+  next();
+});
+
 // Apply general rate limiting
 app.use(rateLimit('general'));
 
@@ -122,18 +130,48 @@ const pool = new Pool({
   connectionTimeoutMillis: 2000,
 });
 
-// Test database connection
-pool.query('SELECT NOW()', (err, res) => {
+// Test database connection and load saved API mode settings
+pool.query('SELECT NOW()', async (err, res) => {
   if (err) {
     console.error('Database connection error:', err);
   } else {
     console.log('Database connected successfully at', res.rows[0].now);
+
+    // Load saved API mode settings and apply them
+    try {
+      const enom = require('./services/enom');
+      const stripeService = require('./services/stripe');
+
+      const settingsResult = await pool.query(
+        "SELECT key, value FROM app_settings WHERE key IN ('enom_test_mode', 'stripe_test_mode')"
+      );
+
+      const settings = {};
+      for (const row of settingsResult.rows) {
+        settings[row.key] = row.value;
+      }
+
+      // Apply saved eNom mode (default to test if not set)
+      const enomTestMode = settings.enom_test_mode !== 'false';
+      enom.setMode(enomTestMode ? 'test' : 'production');
+
+      // Apply saved Stripe mode (default to test if not set)
+      const stripeTestMode = settings.stripe_test_mode !== 'false';
+      stripeService.setMode(stripeTestMode ? 'test' : 'production');
+
+      console.log('API modes loaded from database settings');
+    } catch (settingsErr) {
+      console.error('Error loading API mode settings:', settingsErr.message);
+    }
   }
 });
 
 // Make pool available to routes
 app.locals.pool = pool;
 app.locals.rateLimitStore = rateLimitStore;
+
+// Connect email service to database for template fetching
+emailService.setPool(pool);
 
 // ============ ROUTES ============
 
@@ -222,7 +260,9 @@ app.use((req, res) => {
 
 // Global error handler
 app.use((err, req, res, next) => {
-  console.error('Unhandled error:', err);
+  console.error('[GLOBAL ERROR]', req.method, req.path);
+  console.error('[GLOBAL ERROR] Message:', err.message);
+  console.error('[GLOBAL ERROR] Stack:', err.stack);
 
   res.status(500).json({
     error: 'Internal server error',

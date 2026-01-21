@@ -43,7 +43,7 @@ const ToggleSwitch = ({ enabled, onChange, disabled }) => (
 );
 
 // Domain detail/edit modal
-function DomainDetailModal({ domain, onClose, onSave, token }) {
+function DomainDetailModal({ domain, onClose, onSave, onRefresh, token }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -59,6 +59,7 @@ function DomainDetailModal({ domain, onClose, onSave, token }) {
 
   // Privacy toggle state
   const [togglingPrivacy, setTogglingPrivacy] = useState(false);
+  const [showPrivacyConfirm, setShowPrivacyConfirm] = useState(false);
 
   // Fetch domain details and users
   useEffect(() => {
@@ -141,6 +142,7 @@ function DomainDetailModal({ domain, onClose, onSave, token }) {
         const data = await res.json();
         setDetails(prev => ({ ...prev, ...data.domain }));
         toast.success('Domain synced from eNom');
+        if (onRefresh) onRefresh();
       } else {
         toast.error('Failed to sync');
       }
@@ -182,6 +184,7 @@ function DomainDetailModal({ domain, onClose, onSave, token }) {
       if (res.ok) {
         setDetails(prev => ({ ...prev, lock_status: lock }));
         toast.success(`Domain ${lock ? 'locked' : 'unlocked'}`);
+        if (onRefresh) onRefresh();
       } else {
         toast.error('Failed to update lock');
       }
@@ -225,7 +228,18 @@ function DomainDetailModal({ domain, onClose, onSave, token }) {
   };
 
   // Toggle privacy (admin endpoint - bypasses payment check)
+  // When enabling, show confirmation since it costs money but won't bill customer
   const handleTogglePrivacy = async (enable) => {
+    // If enabling and not already enabled, show confirmation first
+    if (enable && !details?.privacy_enabled) {
+      setShowPrivacyConfirm(true);
+      return;
+    }
+    await executePrivacyToggle(enable);
+  };
+
+  const executePrivacyToggle = async (enable) => {
+    setShowPrivacyConfirm(false);
     setTogglingPrivacy(true);
     try {
       const res = await fetch(`${API_URL}/admin/domains/${domain.id}/privacy`, {
@@ -234,13 +248,22 @@ function DomainDetailModal({ domain, onClose, onSave, token }) {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify({ enabled: enable })
+        body: JSON.stringify({ enabled: enable, adminOverride: true })
       });
 
       if (res.ok) {
+        const data = await res.json();
         setDetails(prev => ({ ...prev, privacy_enabled: enable }));
         setFormData(prev => ({ ...prev, privacy_enabled: enable }));
-        toast.success(`WHOIS Privacy ${enable ? 'enabled' : 'disabled'}`);
+        if (data.purchased) {
+          toast.success('ID Protect purchased and enabled - charged to reseller account');
+        } else if (data.costIncurred) {
+          toast.success('WHOIS Privacy enabled - charged to reseller account');
+        } else {
+          toast.success(`WHOIS Privacy ${enable ? 'enabled' : 'disabled'}`);
+        }
+        // Refresh the domain list in the background (without closing modal)
+        if (onRefresh) onRefresh();
       } else {
         const data = await res.json();
         toast.error(data.error || 'Failed to update privacy');
@@ -267,6 +290,7 @@ function DomainDetailModal({ domain, onClose, onSave, token }) {
         setDetails(prev => ({ ...prev, auto_renew: enable }));
         setFormData(prev => ({ ...prev, auto_renew: enable }));
         toast.success(`Auto-renew ${enable ? 'enabled' : 'disabled'}`);
+        if (onRefresh) onRefresh();
       } else {
         const data = await res.json();
         toast.error(data.error || 'Failed to update auto-renew');
@@ -288,8 +312,14 @@ function DomainDetailModal({ domain, onClose, onSave, token }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm overflow-y-auto">
-      <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm overflow-y-auto"
+      onClick={onClose}
+    >
+      <div
+        className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 dark:border-slate-700 bg-gradient-to-r from-indigo-600 to-purple-600">
           <div className="flex items-center gap-3">
@@ -561,16 +591,30 @@ function DomainDetailModal({ domain, onClose, onSave, token }) {
                 </div>
 
                 {/* Auto-Renew Toggle */}
-                <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
+                <div className={`flex items-center justify-between p-4 rounded-xl ${
+                  details?.auto_renew_payment_method_id
+                    ? 'bg-slate-50 dark:bg-slate-700/50'
+                    : 'bg-slate-100 dark:bg-slate-800/50'
+                }`}>
                   <div>
-                    <h4 className="font-medium text-slate-900 dark:text-slate-100">Auto-Renew</h4>
+                    <h4 className={`font-medium ${
+                      details?.auto_renew_payment_method_id
+                        ? 'text-slate-900 dark:text-slate-100'
+                        : 'text-slate-400 dark:text-slate-500'
+                    }`}>Auto-Renew</h4>
                     <p className="text-sm text-slate-500 dark:text-slate-400">
-                      Automatically renew domain before expiration (updates eNom)
+                      System will automatically charge and renew domain before expiration
                     </p>
+                    {!details?.auto_renew_payment_method_id && (
+                      <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                        No payment method saved for this domain
+                      </p>
+                    )}
                   </div>
                   <ToggleSwitch
                     enabled={details?.auto_renew}
                     onChange={handleToggleAutoRenew}
+                    disabled={!details?.auto_renew_payment_method_id}
                   />
                 </div>
 
@@ -579,11 +623,13 @@ function DomainDetailModal({ domain, onClose, onSave, token }) {
                   <div>
                     <h4 className="font-medium text-slate-900 dark:text-slate-100">WHOIS Privacy</h4>
                     <p className="text-sm text-slate-500 dark:text-slate-400">
-                      Hide registrant information in WHOIS lookup (updates eNom)
+                      Hide registrant information in WHOIS lookup
                     </p>
-                    <p className="text-xs text-indigo-600 dark:text-indigo-400 mt-1">
-                      Admin override: No payment required
-                    </p>
+                    {!details?.privacy_enabled && (
+                      <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                        Enabling will charge reseller account (not billed to customer)
+                      </p>
+                    )}
                   </div>
                   <ToggleSwitch
                     enabled={details?.privacy_enabled}
@@ -751,6 +797,50 @@ function DomainDetailModal({ domain, onClose, onSave, token }) {
           )}
         </div>
       </div>
+
+      {/* Privacy Enable Confirmation Dialog */}
+      {showPrivacyConfirm && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl max-w-md w-full p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="p-2 bg-amber-100 dark:bg-amber-900/30 rounded-full">
+                <AlertTriangle className="w-6 h-6 text-amber-600 dark:text-amber-400" />
+              </div>
+              <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+                Purchase & Enable WHOIS Privacy
+              </h3>
+            </div>
+            <p className="text-slate-600 dark:text-slate-400 mb-2">
+              This will purchase ID Protect from eNom and enable WHOIS privacy for this domain.
+            </p>
+            <div className="p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg mb-4">
+              <p className="text-sm text-amber-800 dark:text-amber-300">
+                <strong>Cost Notice:</strong> The ID Protect service fee will be charged to the reseller account at eNom.
+                The customer will not be invoiced for this purchase.
+              </p>
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowPrivacyConfirm(false)}
+                className="btn-secondary flex-1"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => executePrivacyToggle(true)}
+                disabled={togglingPrivacy}
+                className="btn-primary flex-1"
+              >
+                {togglingPrivacy ? (
+                  <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Purchasing...</>
+                ) : (
+                  'Purchase & Enable'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -807,14 +897,14 @@ export default function AdminDomains() {
   const handleSyncAll = async () => {
     setSyncing(true);
     try {
-      const res = await fetch(`${API_URL}/admin/sync-domains`, {
+      const res = await fetch(`${API_URL}/admin/sync-enom`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` }
       });
 
       if (res.ok) {
         const data = await res.json();
-        toast.success(`Synced ${data.synced} domains${data.failed > 0 ? `, ${data.failed} failed` : ''}`);
+        toast.success(`Synced ${data.imported || 0} domains from eNom${data.errors?.length > 0 ? `, ${data.errors.length} failed` : ''}`);
         fetchDomains();
       } else {
         toast.error('Sync failed');
@@ -969,7 +1059,16 @@ export default function AdminDomains() {
                         <p className="text-xs text-slate-500">{domain.email}</p>
                       </td>
                       <td className="px-4 py-3">
-                        <StatusBadge status={domain.status} />
+                        <div className="flex items-center gap-2">
+                          <StatusBadge status={domain.status} />
+                          <span className={`px-2 py-0.5 text-xs font-medium rounded ${
+                            domain.enom_mode === 'production'
+                              ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                              : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
+                          }`}>
+                            {domain.enom_mode === 'production' ? 'PROD' : 'TEST'}
+                          </span>
+                        </div>
                       </td>
                       <td className="px-4 py-3">
                         <p className={getExpiryClass(domain.expiration_date)}>
@@ -982,10 +1081,12 @@ export default function AdminDomains() {
                         )}
                       </td>
                       <td className="px-4 py-3 text-center">
-                        {domain.auto_renew ? (
-                          <Check className="w-5 h-5 text-green-500 mx-auto" />
+                        {domain.auto_renew && domain.auto_renew_payment_method_id ? (
+                          <Check className="w-5 h-5 text-green-500 mx-auto" title="Auto-renew enabled with payment method" />
+                        ) : domain.auto_renew && !domain.auto_renew_payment_method_id ? (
+                          <AlertTriangle className="w-5 h-5 text-amber-500 mx-auto" title="Auto-renew enabled but no payment method" />
                         ) : (
-                          <X className="w-5 h-5 text-slate-300 mx-auto" />
+                          <X className="w-5 h-5 text-slate-300 mx-auto" title="Auto-renew disabled" />
                         )}
                       </td>
                       <td className="px-4 py-3 text-center">
@@ -1050,6 +1151,7 @@ export default function AdminDomains() {
           domain={selectedDomain}
           onClose={() => setSelectedDomain(null)}
           onSave={() => { setSelectedDomain(null); fetchDomains(); }}
+          onRefresh={fetchDomains}
           token={token}
         />
       )}

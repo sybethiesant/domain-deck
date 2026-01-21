@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { authMiddleware, adminMiddleware, requireRole, logAudit, ROLE_LEVELS } = require('../middleware/auth');
 const enom = require('../services/enom');
+const emailService = require('../services/email');
 
 // All admin routes require auth and admin status
 router.use(authMiddleware);
@@ -186,8 +187,8 @@ router.put('/users/:id', async (req, res) => {
       return res.status(403).json({ error: 'Cannot assign role higher than your own' });
     }
 
-    // Only superadmins (role_level 5) can grant is_admin status
-    if (is_admin === true && req.user.role_level < 5) {
+    // Only superadmins (role_level 4+) can grant is_admin status
+    if (is_admin === true && req.user.role_level < ROLE_LEVELS.SUPERADMIN) {
       return res.status(403).json({ error: 'Only superadmins can grant admin status' });
     }
 
@@ -810,7 +811,7 @@ router.put('/domains/:id/nameservers', async (req, res) => {
     const sld = parts.join('.');
 
     // Update at eNom
-    await enom.setNameservers(sld, tld, nameservers);
+    await enom.updateNameservers(sld, tld, nameservers);
 
     // Update local database
     const result = await pool.query(
@@ -1107,6 +1108,10 @@ router.post('/sync-enom', async (req, res) => {
   const { user_id = 1 } = req.body; // Default to admin user
 
   try {
+    // Get current eNom mode for labeling domains
+    const currentEnomMode = enom.getMode().mode;
+    console.log('[Sync] Current eNom mode for labeling:', currentEnomMode);
+
     // Get all domains from main account
     const enomDomains = await enom.getAllDomains();
 
@@ -1133,15 +1138,16 @@ router.post('/sync-enom', async (req, res) => {
 
         // Upsert domain
         await pool.query(`
-          INSERT INTO domains (user_id, domain_name, tld, status, expiration_date, auto_renew, privacy_enabled, enom_order_id, enom_account)
-          VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, 'main')
+          INSERT INTO domains (user_id, domain_name, tld, status, expiration_date, auto_renew, privacy_enabled, enom_order_id, enom_account, enom_mode)
+          VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, 'main', $8)
           ON CONFLICT (domain_name) DO UPDATE SET
             expiration_date = EXCLUDED.expiration_date,
             auto_renew = EXCLUDED.auto_renew,
             privacy_enabled = EXCLUDED.privacy_enabled,
             enom_order_id = EXCLUDED.enom_order_id,
+            enom_mode = EXCLUDED.enom_mode,
             updated_at = CURRENT_TIMESTAMP
-        `, [user_id, domain.domain, domain.tld, expDate, domain.autoRenew, domain.privacyEnabled, domain.domainNameId]);
+        `, [user_id, domain.domain, domain.tld, expDate, domain.autoRenew, domain.privacyEnabled, domain.domainNameId, currentEnomMode]);
 
         imported.push({ domain: domain.domain, account: 'main' });
       } catch (err) {
@@ -1184,15 +1190,16 @@ router.post('/sync-enom', async (req, res) => {
               }
 
               await pool.query(`
-                INSERT INTO domains (user_id, domain_name, tld, status, expiration_date, auto_renew, privacy_enabled, enom_account)
-                VALUES ($1, $2, $3, 'active', $4, $5, $6, $7)
+                INSERT INTO domains (user_id, domain_name, tld, status, expiration_date, auto_renew, privacy_enabled, enom_account, enom_mode)
+                VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, $8)
                 ON CONFLICT (domain_name) DO UPDATE SET
                   expiration_date = EXCLUDED.expiration_date,
                   auto_renew = EXCLUDED.auto_renew,
                   privacy_enabled = EXCLUDED.privacy_enabled,
                   enom_account = EXCLUDED.enom_account,
+                  enom_mode = EXCLUDED.enom_mode,
                   updated_at = CURRENT_TIMESTAMP
-              `, [user_id, `${pd.sld}.${pd.tld}`, pd.tld, expDate, info.autoRenew || false, info.whoisPrivacy || false, subAccount.loginId]);
+              `, [user_id, `${pd.sld}.${pd.tld}`, pd.tld, expDate, info.autoRenew || false, info.whoisPrivacy || false, subAccount.loginId, currentEnomMode]);
 
               imported.push({ domain: `${pd.sld}.${pd.tld}`, account: subAccount.loginId });
             }
@@ -1380,16 +1387,17 @@ router.post('/enom/import-domain', async (req, res) => {
 
     // Upsert domain
     const result = await pool.query(`
-      INSERT INTO domains (user_id, domain_name, tld, status, registration_date, expiration_date, auto_renew, privacy_enabled, enom_account)
-      VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, $8)
+      INSERT INTO domains (user_id, domain_name, tld, status, registration_date, expiration_date, auto_renew, privacy_enabled, enom_account, enom_mode)
+      VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, $8, $9)
       ON CONFLICT (domain_name) DO UPDATE SET
         expiration_date = EXCLUDED.expiration_date,
         auto_renew = EXCLUDED.auto_renew,
         privacy_enabled = EXCLUDED.privacy_enabled,
         enom_account = EXCLUDED.enom_account,
+        enom_mode = EXCLUDED.enom_mode,
         updated_at = CURRENT_TIMESTAMP
       RETURNING *
-    `, [user_id, `${sld}.${tld}`, tld, regDate, expDate, info.autoRenew || false, info.whoisPrivacy || false, enom_account]);
+    `, [user_id, `${sld}.${tld}`, tld, regDate, expDate, info.autoRenew || false, info.whoisPrivacy || false, enom_account, enom.getMode().mode]);
 
     res.json({
       message: 'Domain imported successfully',
@@ -1490,6 +1498,158 @@ router.post('/sync-domains', async (req, res) => {
   } catch (error) {
     console.error('Error syncing domains:', error);
     res.status(500).json({ error: 'Failed to sync domains' });
+  }
+});
+
+// ========== EMAIL TEMPLATE MANAGEMENT ==========
+
+// List all email templates
+router.get('/email-templates', async (req, res) => {
+  const pool = req.app.locals.pool;
+
+  try {
+    const result = await pool.query(
+      'SELECT * FROM email_templates ORDER BY name'
+    );
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching email templates:', error);
+    res.status(500).json({ error: 'Failed to fetch email templates' });
+  }
+});
+
+// Get single email template
+router.get('/email-templates/:id', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const templateId = parseInt(req.params.id);
+
+  try {
+    const result = await pool.query(
+      'SELECT * FROM email_templates WHERE id = $1',
+      [templateId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Template not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error fetching email template:', error);
+    res.status(500).json({ error: 'Failed to fetch email template' });
+  }
+});
+
+// Update email template
+router.put('/email-templates/:id', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const templateId = parseInt(req.params.id);
+  const { name, description, subject, html_content, is_active } = req.body;
+
+  try {
+    const currentTemplate = await pool.query('SELECT * FROM email_templates WHERE id = $1', [templateId]);
+    if (currentTemplate.rows.length === 0) {
+      return res.status(404).json({ error: 'Template not found' });
+    }
+
+    const result = await pool.query(
+      `UPDATE email_templates SET
+        name = COALESCE($1, name),
+        description = COALESCE($2, description),
+        subject = COALESCE($3, subject),
+        html_content = COALESCE($4, html_content),
+        is_active = COALESCE($5, is_active),
+        updated_at = CURRENT_TIMESTAMP
+       WHERE id = $6
+       RETURNING *`,
+      [name, description, subject, html_content, is_active, templateId]
+    );
+
+    // Clear the email service cache so it picks up the new template
+    emailService.clearCache();
+
+    await logAudit(pool, req.user.id, 'update_email_template', 'email_template', templateId,
+      { subject: currentTemplate.rows[0].subject }, { subject: result.rows[0].subject }, req);
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error updating email template:', error);
+    res.status(500).json({ error: 'Failed to update email template' });
+  }
+});
+
+// Send test email
+router.post('/email/test', async (req, res) => {
+  const { to } = req.body;
+
+  if (!to) {
+    return res.status(400).json({ error: 'Recipient email required' });
+  }
+
+  try {
+    const result = await emailService.sendTestEmail(to);
+    res.json(result);
+  } catch (error) {
+    console.error('Error sending test email:', error);
+    res.status(500).json({ error: 'Failed to send test email' });
+  }
+});
+
+// Preview email template with sample data
+router.post('/email-templates/:id/preview', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const templateId = parseInt(req.params.id);
+  const { sample_data = {} } = req.body;
+
+  try {
+    const result = await pool.query(
+      'SELECT * FROM email_templates WHERE id = $1',
+      [templateId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Template not found' });
+    }
+
+    const template = result.rows[0];
+
+    // Replace variables with sample data or placeholders
+    const variables = template.variables || [];
+    const data = {};
+    for (const v of variables) {
+      data[v] = sample_data[v] || `{{${v}}}`;
+    }
+
+    const subject = emailService.replaceVariables(template.subject, data);
+    const html = emailService.getBaseWrapper(emailService.replaceVariables(template.html_content, data));
+
+    res.json({
+      subject,
+      html,
+      variables: template.variables
+    });
+  } catch (error) {
+    console.error('Error previewing email template:', error);
+    res.status(500).json({ error: 'Failed to preview email template' });
+  }
+});
+
+// Get email service status
+router.get('/email/status', async (req, res) => {
+  try {
+    const hasTransporter = !!emailService.transporter;
+    const config = {
+      host: process.env.SMTP_HOST || 'smtp.gmail.com',
+      port: process.env.SMTP_PORT || '587',
+      user: process.env.SMTP_USER || 'support@worxtech.biz',
+      from: emailService.from,
+      fromName: emailService.fromName,
+      connected: hasTransporter
+    };
+    res.json(config);
+  } catch (error) {
+    console.error('Error getting email status:', error);
+    res.status(500).json({ error: 'Failed to get email status' });
   }
 });
 

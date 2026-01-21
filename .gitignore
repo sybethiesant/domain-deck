@@ -41,4 +41,10 @@ Thumbs.db
 # Credentials
 CREDENTIALS.md
 CLAUDE.md
-CLAUDE.md
+
+# Encrypted sensitive data - NEVER commit
+backend/.credentials
+backend/.credentials.enc
+backend/scripts/store-card.js
+*.enc
+*.key

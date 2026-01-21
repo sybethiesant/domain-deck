@@ -7,6 +7,16 @@ const router = express.Router();
 const { logAudit } = require('../../middleware/auth');
 const enom = require('../../services/enom');
 
+/**
+ * Get the eNom mode for a domain
+ * Operations will use the domain's recorded mode, not the global mode
+ * @param {object} domain - Domain object with enom_mode property
+ * @returns {string} The domain's eNom mode ('test' or 'production')
+ */
+function getDomainEnomMode(domain) {
+  return domain.enom_mode || 'test';
+}
+
 // List all domains
 router.get('/domains', async (req, res) => {
   const pool = req.app.locals.pool;
@@ -148,6 +158,12 @@ router.get('/domains/:id', async (req, res) => {
   }
 });
 
+// Helper to get app setting
+async function getSetting(pool, key, defaultValue) {
+  const result = await pool.query('SELECT value FROM app_settings WHERE key = $1', [key]);
+  return result.rows.length > 0 ? result.rows[0].value : defaultValue;
+}
+
 // Update domain (transfer between users, update settings)
 router.put('/domains/:id', async (req, res) => {
   const pool = req.app.locals.pool;
@@ -167,24 +183,54 @@ router.put('/domains/:id', async (req, res) => {
       privacy_enabled: currentDomain.rows[0].privacy_enabled
     };
 
-    // If changing auto_renew or privacy, sync with eNom
     const domain = currentDomain.rows[0];
-    const parts = domain.domain_name.split('.');
-    const tld = parts.pop();
-    const sld = parts.join('.');
+    const sld = domain.domain_name;
+    const tld = domain.tld;
+    const domainMode = getDomainEnomMode(domain);
 
-    if (auto_renew !== undefined && auto_renew !== domain.auto_renew) {
+    // Handle suspension/unsuspension nameserver changes
+    let nameserversUpdate = null;
+    let suspendedOriginalNs = domain.suspended_original_ns;
+
+    if (status === 'suspended' && domain.status !== 'suspended') {
+      // Suspending: Save current nameservers and replace with suspended ones
+      const suspendedNsSetting = await getSetting(pool, 'suspended_nameservers', 'ns1.suspended.worxtech.biz,ns2.suspended.worxtech.biz');
+      const suspendedNs = suspendedNsSetting.split(',').map(ns => ns.trim());
+
+      // Save current nameservers (stringify for JSONB storage)
+      suspendedOriginalNs = JSON.stringify(domain.nameservers);
+
+      // Update nameservers at eNom
       try {
-        await enom.setAutoRenew(sld, tld, auto_renew);
+        await enom.updateNameservers(sld, tld, suspendedNs, { mode: domainMode });
+        nameserversUpdate = JSON.stringify(suspendedNs);
+        console.log(`[Admin] Domain ${sld}.${tld} suspended - nameservers changed to suspended defaults`);
       } catch (enomError) {
-        console.error('eNom auto-renew sync failed:', enomError.message);
-        // Continue anyway, update local DB
+        console.error('Failed to update nameservers for suspension:', enomError.message);
+        // Continue with status change even if NS update fails
+      }
+    } else if (status && status !== 'suspended' && domain.status === 'suspended' && domain.suspended_original_ns) {
+      // Unsuspending: Restore original nameservers
+      try {
+        const originalNs = typeof domain.suspended_original_ns === 'string'
+          ? JSON.parse(domain.suspended_original_ns)
+          : domain.suspended_original_ns;
+
+        if (Array.isArray(originalNs) && originalNs.length >= 2) {
+          await enom.updateNameservers(sld, tld, originalNs, { mode: domainMode });
+          nameserversUpdate = JSON.stringify(originalNs);
+          suspendedOriginalNs = null; // Clear saved NS
+          console.log(`[Admin] Domain ${sld}.${tld} unsuspended - nameservers restored`);
+        }
+      } catch (enomError) {
+        console.error('Failed to restore nameservers after unsuspension:', enomError.message);
       }
     }
 
+    // If changing privacy, sync with eNom
     if (privacy_enabled !== undefined && privacy_enabled !== domain.privacy_enabled) {
       try {
-        await enom.setWhoisPrivacy(sld, tld, privacy_enabled);
+        await enom.setWhoisPrivacy(sld, tld, privacy_enabled, { mode: domainMode });
       } catch (enomError) {
         console.error('eNom privacy sync failed:', enomError.message);
       }
@@ -196,10 +242,12 @@ router.put('/domains/:id', async (req, res) => {
         status = COALESCE($2, status),
         auto_renew = COALESCE($3, auto_renew),
         privacy_enabled = COALESCE($4, privacy_enabled),
+        nameservers = COALESCE($6, nameservers),
+        suspended_original_ns = $7,
         updated_at = CURRENT_TIMESTAMP
        WHERE id = $5
        RETURNING *`,
-      [user_id, status, auto_renew, privacy_enabled, domainId]
+      [user_id, status, auto_renew, privacy_enabled, domainId, nameserversUpdate, suspendedOriginalNs]
     );
 
     await logAudit(pool, req.user.id, 'update_domain', 'domain', domainId, oldValues, { user_id, status, auto_renew, privacy_enabled }, req);
@@ -223,15 +271,14 @@ router.post('/domains/:id/sync', async (req, res) => {
     }
 
     const domain = domainResult.rows[0];
-    const parts = domain.domain_name.split('.');
-    const tld = parts.pop();
-    const sld = parts.join('.');
+    const domainMode = getDomainEnomMode(domain);
 
-    // Get info from eNom
-    const [info, nameservers] = await Promise.all([
-      enom.getDomainInfo(sld, tld),
-      enom.getNameservers(sld, tld)
-    ]);
+    const sld = domain.domain_name;
+    const tld = domain.tld;
+
+    // Get comprehensive info from eNom (using domain's recorded mode)
+    const info = await enom.getFullDomainData(sld, tld, { mode: domainMode });
+    const nameservers = info.nameservers;
 
     // Parse expiration date (format: MM/DD/YYYY or MM/DD/YYYY HH:MM:SS AM/PM)
     let expDate = null;
@@ -259,8 +306,8 @@ router.post('/domains/:id/sync', async (req, res) => {
       [
         expDate,
         info.autoRenew,
-        info.whoisPrivacy,
-        info.lockStatus === 'locked',
+        info.privacyEnabled,
+        info.lockStatus,
         JSON.stringify(nameservers),
         JSON.stringify(info),
         domainId
@@ -287,7 +334,7 @@ router.post('/domains/sync-all', async (req, res) => {
   try {
     // Get domains that need syncing (oldest sync first)
     const domainsResult = await pool.query(
-      `SELECT id, domain_name FROM domains
+      `SELECT id, domain_name, tld, enom_mode FROM domains
        WHERE status = 'active'
        ORDER BY last_synced_at ASC NULLS FIRST
        LIMIT $1`,
@@ -298,12 +345,12 @@ router.post('/domains/sync-all', async (req, res) => {
 
     for (const domain of domainsResult.rows) {
       try {
-        const parts = domain.domain_name.split('.');
-        const tld = parts.pop();
-        const sld = parts.join('.');
+        const sld = domain.domain_name;
+        const tld = domain.tld;
+        const domainMode = domain.enom_mode || 'test';
 
-        const info = await enom.getDomainInfo(sld, tld);
-        const nameservers = await enom.getNameservers(sld, tld);
+        const info = await enom.getFullDomainData(sld, tld, { mode: domainMode });
+        const nameservers = info.nameservers;
 
         let expDate = null;
         if (info.expirationDate) {
@@ -322,7 +369,7 @@ router.post('/domains/sync-all', async (req, res) => {
             last_synced_at = CURRENT_TIMESTAMP,
             status = CASE WHEN $1 < CURRENT_DATE THEN 'expired' ELSE status END
            WHERE id = $5`,
-          [expDate, info.autoRenew, info.whoisPrivacy, JSON.stringify(nameservers), domain.id]
+          [expDate, info.autoRenew, info.privacyEnabled, JSON.stringify(nameservers), domain.id]
         );
 
         results.synced++;
@@ -355,11 +402,12 @@ router.post('/domains/:id/auth-code', async (req, res) => {
     }
 
     const domain = domainResult.rows[0];
-    const parts = domain.domain_name.split('.');
-    const tld = parts.pop();
-    const sld = parts.join('.');
+    const domainMode = getDomainEnomMode(domain);
 
-    const result = await enom.getAuthCode(sld, tld);
+    const sld = domain.domain_name;
+    const tld = domain.tld;
+
+    const result = await enom.getAuthCode(sld, tld, { mode: domainMode });
 
     await logAudit(pool, req.user.id, 'get_auth_code', 'domain', domainId, null, null, req);
 
@@ -367,6 +415,199 @@ router.post('/domains/:id/auth-code', async (req, res) => {
   } catch (error) {
     console.error('Error getting auth code:', error);
     res.status(500).json({ error: 'Failed to get auth code' });
+  }
+});
+
+// Toggle auto-renew (dedicated endpoint for admin UI)
+// Note: Auto-renewal is handled by our system's background jobs, NOT eNom's auto-renew.
+// This flag controls whether our job scheduler will automatically renew expiring domains.
+router.put('/domains/:id/autorenew', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+  const { auto_renew } = req.body;
+
+  try {
+    const domainResult = await pool.query('SELECT * FROM domains WHERE id = $1', [domainId]);
+    if (domainResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Domain not found' });
+    }
+
+    const domain = domainResult.rows[0];
+
+    // Update database only - our system handles renewals, not eNom's auto-renew
+    // Auto-renew flag is managed locally; actual renewals use domain's recorded mode
+    await pool.query(
+      'UPDATE domains SET auto_renew = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      [auto_renew, domainId]
+    );
+
+    await logAudit(pool, req.user.id, auto_renew ? 'enable_autorenew' : 'disable_autorenew', 'domain', domainId,
+      { auto_renew: domain.auto_renew }, { auto_renew }, req);
+
+    res.json({ success: true, auto_renew });
+  } catch (error) {
+    console.error('Error setting auto-renew:', error);
+    res.status(500).json({ error: 'Failed to set auto-renew' });
+  }
+});
+
+// Toggle WHOIS privacy (dedicated endpoint for admin UI - bypasses payment check)
+// Admin override: Can enable privacy without customer payment, but costs reseller money
+router.put('/domains/:id/privacy', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+  const { enabled, adminOverride } = req.body;
+
+  try {
+    const domainResult = await pool.query('SELECT * FROM domains WHERE id = $1', [domainId]);
+    if (domainResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Domain not found' });
+    }
+
+    const domain = domainResult.rows[0];
+    const domainMode = getDomainEnomMode(domain);
+
+    const sld = domain.domain_name;
+    const tld = domain.tld;
+
+    // Check current privacy status at eNom first (using domain's recorded mode)
+    let privacyStatus = { purchased: false, enabled: false };
+    try {
+      privacyStatus = await enom.getPrivacyStatus(sld, tld, { mode: domainMode });
+    } catch (err) {
+      console.log('Could not fetch privacy status, will attempt purchase if enabling');
+    }
+
+    let costIncurred = false;
+
+    if (enabled) {
+      // If privacy not purchased, we need to purchase it first
+      if (!privacyStatus.purchased) {
+        try {
+          console.log(`[Admin] Purchasing ID Protect for ${sld}.${tld}`);
+          await enom.purchasePrivacy(sld, tld, 1, { mode: domainMode });
+          costIncurred = true;
+          console.log(`[Admin] ID Protect purchased successfully for ${sld}.${tld}`);
+
+          // Purchase typically auto-enables, verify status
+          try {
+            const newStatus = await enom.getPrivacyStatus(sld, tld, { mode: domainMode });
+            if (newStatus.enabled) {
+              console.log(`[Admin] Privacy already enabled after purchase for ${sld}.${tld}`);
+              // Skip the enable call since it's already active
+            } else {
+              // Not auto-enabled, try to enable
+              await enom.setWhoisPrivacy(sld, tld, true, { mode: domainMode });
+            }
+          } catch (statusErr) {
+            // If we can't check status, try enabling anyway but don't fail if it errors
+            try {
+              await enom.setWhoisPrivacy(sld, tld, true, { mode: domainMode });
+            } catch (enableErr) {
+              console.log(`[Admin] Enable after purchase failed (may already be active): ${enableErr.message}`);
+            }
+          }
+        } catch (purchaseError) {
+          console.error('eNom privacy purchase failed:', purchaseError.message);
+          return res.status(500).json({
+            error: 'Failed to purchase privacy at eNom: ' + purchaseError.message,
+            hint: 'ID Protect must be purchased before it can be enabled'
+          });
+        }
+      } else if (!privacyStatus.enabled) {
+        // Already purchased but not enabled - just enable it
+        try {
+          await enom.setWhoisPrivacy(sld, tld, true, { mode: domainMode });
+        } catch (enomError) {
+          console.error('eNom privacy enable failed:', enomError.message);
+          return res.status(500).json({ error: 'Failed to enable privacy at eNom: ' + enomError.message });
+        }
+      }
+      // If already purchased and enabled, nothing to do
+    } else {
+      // Disabling privacy - just turn it off (doesn't cost anything)
+      try {
+        await enom.setWhoisPrivacy(sld, tld, false, { mode: domainMode });
+      } catch (enomError) {
+        console.error('eNom privacy disable failed:', enomError.message);
+        return res.status(500).json({ error: 'Failed to disable privacy at eNom: ' + enomError.message });
+      }
+    }
+
+    // Update database
+    await pool.query(
+      'UPDATE domains SET privacy_enabled = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      [enabled, domainId]
+    );
+
+    await logAudit(pool, req.user.id, enabled ? 'enable_privacy_admin' : 'disable_privacy_admin', 'domain', domainId,
+      { privacy_enabled: domain.privacy_enabled, adminOverride: !!adminOverride, purchased: costIncurred },
+      { privacy_enabled: enabled }, req);
+
+    res.json({
+      success: true,
+      privacy_enabled: enabled,
+      costIncurred,
+      purchased: costIncurred,
+      message: costIncurred ? 'ID Protect purchased and enabled - charged to reseller account' : undefined
+    });
+  } catch (error) {
+    console.error('Error setting privacy:', error);
+    res.status(500).json({ error: 'Failed to set privacy' });
+  }
+});
+
+// Update nameservers (dedicated endpoint for admin UI)
+router.put('/domains/:id/nameservers', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+  const { nameservers } = req.body;
+
+  try {
+    if (!nameservers || !Array.isArray(nameservers) || nameservers.length < 2) {
+      return res.status(400).json({ error: 'At least 2 nameservers are required' });
+    }
+
+    // Validate nameserver format
+    const nsPattern = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i;
+    for (const ns of nameservers) {
+      if (!nsPattern.test(ns)) {
+        return res.status(400).json({ error: `Invalid nameserver format: ${ns}` });
+      }
+    }
+
+    const domainResult = await pool.query('SELECT * FROM domains WHERE id = $1', [domainId]);
+    if (domainResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Domain not found' });
+    }
+
+    const domain = domainResult.rows[0];
+    const domainMode = getDomainEnomMode(domain);
+
+    const sld = domain.domain_name;
+    const tld = domain.tld;
+
+    // Update at eNom (using domain's recorded mode)
+    try {
+      await enom.updateNameservers(sld, tld, nameservers, { mode: domainMode });
+    } catch (enomError) {
+      console.error('eNom nameserver update failed:', enomError.message);
+      return res.status(500).json({ error: 'Failed to update nameservers at eNom: ' + enomError.message });
+    }
+
+    // Update database
+    await pool.query(
+      'UPDATE domains SET nameservers = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      [JSON.stringify(nameservers), domainId]
+    );
+
+    await logAudit(pool, req.user.id, 'update_nameservers', 'domain', domainId,
+      { nameservers: domain.nameservers }, { nameservers: JSON.stringify(nameservers) }, req);
+
+    res.json({ success: true, nameservers });
+  } catch (error) {
+    console.error('Error updating nameservers:', error);
+    res.status(500).json({ error: 'Failed to update nameservers' });
   }
 });
 
@@ -383,11 +624,12 @@ router.post('/domains/:id/lock', async (req, res) => {
     }
 
     const domain = domainResult.rows[0];
-    const parts = domain.domain_name.split('.');
-    const tld = parts.pop();
-    const sld = parts.join('.');
+    const domainMode = getDomainEnomMode(domain);
 
-    await enom.setDomainLock(sld, tld, lock);
+    const sld = domain.domain_name;
+    const tld = domain.tld;
+
+    await enom.setDomainLock(sld, tld, lock, { mode: domainMode });
 
     await pool.query(
       'UPDATE domains SET lock_status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',

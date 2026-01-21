@@ -98,12 +98,10 @@ router.put('/:noteId', async (req, res) => {
   const { note, is_pinned } = req.body;
 
   try {
-    // Check if note exists and belongs to this staff member (or they're admin)
+    // Check if note exists
     const existing = await pool.query(
-      `SELECT sn.*, u.role_level FROM staff_notes sn
-       LEFT JOIN users u ON u.id = $2
-       WHERE sn.id = $1`,
-      [noteId, req.user.id]
+      `SELECT * FROM staff_notes WHERE id = $1`,
+      [noteId]
     );
 
     if (!existing.rows[0]) {

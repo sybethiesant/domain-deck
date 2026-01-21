@@ -110,6 +110,7 @@ router.post('/register', async (req, res) => {
 
 // Login user
 router.post('/login', async (req, res) => {
+  console.log('[LOGIN] Attempt for:', req.body?.email);
   const { email, password } = req.body;
   const pool = req.app.locals.pool;
 
@@ -202,7 +203,8 @@ router.post('/login', async (req, res) => {
       token
     });
   } catch (error) {
-    console.error('Login error:', error);
+    console.error('[LOGIN] Error:', error.message);
+    console.error('[LOGIN] Stack:', error.stack);
     res.status(500).json({ error: 'Server error during login' });
   }
 });

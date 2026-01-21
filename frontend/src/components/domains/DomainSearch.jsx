@@ -9,6 +9,7 @@ function DomainSearch({ onAddToCart }) {
   const [suggestions, setSuggestions] = useState([]);
   const [pricing, setPricing] = useState([]);
   const [error, setError] = useState(null);
+  const [selectedYears, setSelectedYears] = useState({}); // Track years per domain
 
   useEffect(() => {
     fetchPricing();
@@ -63,14 +64,39 @@ function DomainSearch({ onAddToCart }) {
     setSearching(false);
   };
 
+  const getYearsForDomain = (domain) => selectedYears[domain] || 1;
+
   const handleAddToCart = (domain, tld, price) => {
+    const years = getYearsForDomain(domain);
     onAddToCart({
       item_type: 'register',
       domain_name: domain.split('.')[0],
       tld: tld,
-      years: 1,
+      years: years,
       options: {}
     });
+  };
+
+  const YearSelector = ({ domain, price }) => {
+    const years = getYearsForDomain(domain);
+    return (
+      <div className="flex items-center gap-2">
+        <select
+          value={years}
+          onChange={(e) => setSelectedYears(prev => ({ ...prev, [domain]: parseInt(e.target.value) }))}
+          className="bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-2 text-sm font-medium text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+        >
+          {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(y => (
+            <option key={y} value={y}>{y} year{y > 1 ? 's' : ''}</option>
+          ))}
+        </select>
+        <div className="text-right min-w-[80px]">
+          <p className="text-lg font-bold text-slate-900 dark:text-slate-100">
+            ${(price * years).toFixed(2)}
+          </p>
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -211,13 +237,8 @@ function DomainSearch({ onAddToCart }) {
                     </div>
 
                     {results.available && (
-                      <div className="flex items-center gap-6">
-                        <div className="text-right">
-                          <p className="text-3xl font-bold text-slate-900 dark:text-slate-100">
-                            ${results.pricing.register.toFixed(2)}
-                          </p>
-                          <p className="text-sm text-slate-500">per year</p>
-                        </div>
+                      <div className="flex items-center gap-4">
+                        <YearSelector domain={results.domain} price={results.pricing.register} />
                         <button
                           onClick={() => handleAddToCart(results.domain, results.tld, results.pricing.register)}
                           className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-3 px-6 rounded-xl transition-colors flex items-center gap-2"
@@ -261,10 +282,8 @@ function DomainSearch({ onAddToCart }) {
                           </div>
 
                           {s.available && (
-                            <div className="flex items-center gap-4 sm:ml-auto">
-                              <span className="text-lg font-bold text-slate-900 dark:text-slate-100">
-                                ${s.price.toFixed(2)}/yr
-                              </span>
+                            <div className="flex items-center gap-3 sm:ml-auto">
+                              <YearSelector domain={s.domain} price={s.price} />
                               <button
                                 onClick={() => handleAddToCart(s.domain, s.tld, s.price)}
                                 className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"

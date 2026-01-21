@@ -9,6 +9,65 @@ import toast from 'react-hot-toast';
 // Stripe promise will be initialized when we get the publishable key
 let stripePromise = null;
 
+// User-friendly labels for ccTLD extended attributes
+// These replace cryptic eNom attribute names with plain English
+// Note: Backend now provides descriptions, but we can override/enhance them here
+const FRIENDLY_LABELS = {
+  // .US domain requirements
+  us_nexus: {
+    label: 'US Connection',
+    placeholder: 'Select how you are connected to the US...'
+  },
+  us_purpose: {
+    label: 'Domain Purpose',
+    placeholder: 'Select what this domain will be used for...'
+  },
+  // .UK domain requirements
+  uk_legal_type: {
+    label: 'Registrant Type',
+    placeholder: 'Select your registrant type...'
+  },
+  // .EU domain requirements
+  eu_country: {
+    label: 'EU Country',
+    placeholder: 'Select your EU country...'
+  },
+  // .CA domain requirements
+  ca_legal_type: {
+    label: 'Canadian Entity Type',
+    placeholder: 'Select your entity type...'
+  },
+  // .AU domain requirements
+  au_registrant_id_type: {
+    label: 'Australian ID Type',
+    placeholder: 'Select your ID type...'
+  },
+  au_registrant_id: {
+    label: 'ID Number',
+    placeholder: 'Enter your ABN, ACN, or TM number'
+  },
+  // .IN domain requirements (India)
+  in_aadharnumber: {
+    label: 'Aadhaar Number',
+    placeholder: 'Enter 12-digit Aadhaar number (optional)'
+  },
+  in_panumber: {
+    label: 'PAN Number',
+    placeholder: 'Enter PAN (e.g., ABCDE1234F) (optional)'
+  },
+  // Generic fallback formatter
+  _formatName: (name) => {
+    // Remove TLD prefix (e.g., "us_", "uk_") and format nicely
+    const withoutPrefix = name.replace(/^[a-z]{2,3}_/, '');
+    return withoutPrefix
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, c => c.toUpperCase())
+      .replace(/\bId\b/g, 'ID')
+      .replace(/\bAadharnumber\b/g, 'Aadhaar Number')
+      .replace(/\bPanumber\b/g, 'PAN Number');
+  }
+};
+
 // Payment form component (must be inside Elements provider)
 function PaymentForm({ clientSecret, onSuccess, billingAddress }) {
   const stripe = useStripe();
@@ -113,6 +172,14 @@ function Checkout({ onComplete }) {
   const [contactMode, setContactMode] = useState('select'); // 'select' or 'new'
   const [selectedContactId, setSelectedContactId] = useState(null);
 
+  // Auto-renew toggle (default ON)
+  const [autoRenew, setAutoRenew] = useState(true);
+
+  // TLD requirements state (for ccTLDs like .in, .uk, .eu)
+  const [tldRequirements, setTldRequirements] = useState({});
+  const [extendedAttributes, setExtendedAttributes] = useState({});
+  const [loadingRequirements, setLoadingRequirements] = useState(false);
+
   // Contact form state (for new contact entry)
   const [contactInfo, setContactInfo] = useState({
     first_name: user?.full_name?.split(' ')[0] || '',
@@ -137,15 +204,15 @@ function Checkout({ onComplete }) {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         if (res.ok) {
-          const data = await res.json();
-          setSavedContacts(data.contacts || []);
+          const contacts = await res.json();
+          setSavedContacts(contacts || []);
           // Auto-select default contact if available
-          const defaultContact = data.contacts?.find(c => c.is_default);
+          const defaultContact = contacts?.find(c => c.is_default);
           if (defaultContact) {
             setSelectedContactId(defaultContact.id);
             setContactMode('select');
-          } else if (data.contacts?.length > 0) {
-            setSelectedContactId(data.contacts[0].id);
+          } else if (contacts?.length > 0) {
+            setSelectedContactId(contacts[0].id);
             setContactMode('select');
           } else {
             setContactMode('new'); // No saved contacts, force new entry
@@ -159,6 +226,48 @@ function Checkout({ onComplete }) {
     }
     fetchContacts();
   }, [token]);
+
+  // Fetch TLD requirements when cart changes
+  useEffect(() => {
+    async function fetchTldRequirements() {
+      if (!cart?.items?.length) return;
+
+      // Get unique TLDs from cart
+      const tlds = [...new Set(cart.items.map(item => item.tld))];
+      if (tlds.length === 0) return;
+
+      setLoadingRequirements(true);
+      try {
+        const res = await fetch(`${API_URL}/domains/tld-requirements`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tlds })
+        });
+
+        if (res.ok) {
+          const requirements = await res.json();
+          setTldRequirements(requirements);
+
+          // Initialize extended attributes state for each required field
+          const attrs = {};
+          Object.entries(requirements).forEach(([tld, req]) => {
+            if (req.hasRequirements) {
+              req.attributes.forEach(attr => {
+                if (!attrs[`${tld}_${attr.name}`]) {
+                  attrs[`${tld}_${attr.name}`] = '';
+                }
+              });
+            }
+          });
+          setExtendedAttributes(prev => ({ ...prev, ...attrs }));
+        }
+      } catch (err) {
+        console.error('Failed to fetch TLD requirements:', err);
+      }
+      setLoadingRequirements(false);
+    }
+    fetchTldRequirements();
+  }, [cart?.items]);
 
   // Initialize Stripe and get config
   useEffect(() => {
@@ -183,8 +292,107 @@ function Checkout({ onComplete }) {
     initStripe();
   }, []);
 
+  // Handle redirect callback from payment methods like Amazon Pay, etc.
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const paymentIntentId = urlParams.get('payment_intent');
+    const redirectStatus = urlParams.get('redirect_status');
+
+    if (paymentIntentId && redirectStatus) {
+      // Clear URL params
+      window.history.replaceState({}, '', window.location.pathname);
+
+      if (redirectStatus === 'succeeded') {
+        // Payment succeeded via redirect - complete the order
+        handleRedirectPaymentSuccess(paymentIntentId);
+      } else {
+        setError(`Payment ${redirectStatus}. Please try again.`);
+      }
+    }
+  }, [token]);
+
+  // Handle payment success from redirect-based methods
+  const handleRedirectPaymentSuccess = async (paymentIntentId) => {
+    setLoading(true);
+
+    try {
+      // Get contact, auto_renew, and extended attributes from localStorage (stored before redirect)
+      const storedContact = localStorage.getItem('checkout_registrant_contact');
+      const storedAutoRenew = localStorage.getItem('checkout_auto_renew');
+      const storedExtAttrs = localStorage.getItem('checkout_extended_attributes');
+      if (!storedContact) {
+        throw new Error('Contact information not found. Please try checkout again.');
+      }
+
+      const registrantContact = JSON.parse(storedContact);
+      const savedAutoRenew = storedAutoRenew ? JSON.parse(storedAutoRenew) : true;
+      const savedExtAttrs = storedExtAttrs ? JSON.parse(storedExtAttrs) : {};
+
+      // Clear stored data
+      localStorage.removeItem('checkout_registrant_contact');
+      localStorage.removeItem('checkout_auto_renew');
+      localStorage.removeItem('checkout_extended_attributes');
+
+      // Create order with the payment intent and extended attributes
+      const res = await fetch(`${API_URL}/orders/checkout`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          payment_intent_id: paymentIntentId,
+          billing_address: registrantContact,
+          registrant_contact: registrantContact,
+          auto_renew: savedAutoRenew,
+          extended_attributes: savedExtAttrs
+        })
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to create order');
+      }
+
+      setOrderNumber(data.order.order_number);
+      setStep('complete');
+      await fetchCart();
+      toast.success('Order placed successfully!');
+    } catch (err) {
+      setError(err.message);
+      toast.error(err.message);
+    }
+
+    setLoading(false);
+  };
+
   const handleContactChange = (e) => {
     setContactInfo({ ...contactInfo, [e.target.name]: e.target.value });
+  };
+
+  const handleExtendedAttributeChange = (key, value) => {
+    setExtendedAttributes(prev => ({ ...prev, [key]: value }));
+  };
+
+  // Check if any TLDs in cart have special requirements
+  const hasSpecialRequirements = () => {
+    return Object.values(tldRequirements).some(req => req?.hasRequirements);
+  };
+
+  // Get required extended attributes that are missing
+  const getMissingExtendedAttributes = () => {
+    const missing = [];
+    Object.entries(tldRequirements).forEach(([tld, req]) => {
+      if (req?.hasRequirements) {
+        req.attributes.forEach(attr => {
+          if (attr.required && !extendedAttributes[`${tld}_${attr.name}`]?.trim()) {
+            missing.push({ tld, attr });
+          }
+        });
+      }
+    });
+    return missing;
   };
 
   // Get the registrant contact (selected or entered)
@@ -209,6 +417,12 @@ function Checkout({ onComplete }) {
     return true;
   };
 
+  // Validate extended attributes for ccTLDs
+  const validateExtendedAttributes = () => {
+    const missing = getMissingExtendedAttributes();
+    return missing.length === 0;
+  };
+
   // Proceed to payment
   const handleProceedToPayment = async () => {
     if (!validateContactInfo()) {
@@ -216,10 +430,25 @@ function Checkout({ onComplete }) {
       return;
     }
 
+    // Validate extended attributes for ccTLDs
+    if (!validateExtendedAttributes()) {
+      const missing = getMissingExtendedAttributes();
+      const missingNames = missing.map(m => `${m.attr.name} for .${m.tld}`).join(', ');
+      setError(`Please fill in required fields: ${missingNames}`);
+      return;
+    }
+
     setLoading(true);
     setError(null);
 
     try {
+      const registrantContact = getRegistrantContact();
+
+      // Store contact, auto_renew, and extended attributes for redirect-based payment methods
+      localStorage.setItem('checkout_registrant_contact', JSON.stringify(registrantContact));
+      localStorage.setItem('checkout_auto_renew', JSON.stringify(autoRenew));
+      localStorage.setItem('checkout_extended_attributes', JSON.stringify(extendedAttributes));
+
       // Create payment intent
       const res = await fetch(`${API_URL}/stripe/create-payment-intent`, {
         method: 'POST',
@@ -228,7 +457,7 @@ function Checkout({ onComplete }) {
           'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
-          billing_address: contactInfo
+          billing_address: registrantContact
         })
       });
 
@@ -256,7 +485,7 @@ function Checkout({ onComplete }) {
     try {
       const registrantContact = getRegistrantContact();
 
-      // Create order with registrant contact
+      // Create order with registrant contact and extended attributes
       const res = await fetch(`${API_URL}/orders/checkout`, {
         method: 'POST',
         headers: {
@@ -266,7 +495,9 @@ function Checkout({ onComplete }) {
         body: JSON.stringify({
           payment_intent_id: paymentIntent.id,
           billing_address: registrantContact,
-          registrant_contact: registrantContact
+          registrant_contact: registrantContact,
+          auto_renew: autoRenew,
+          extended_attributes: extendedAttributes
         })
       });
 
@@ -309,7 +540,8 @@ function Checkout({ onComplete }) {
         },
         body: JSON.stringify({
           billing_address: registrantContact,
-          registrant_contact: registrantContact
+          registrant_contact: registrantContact,
+          auto_renew: autoRenew
         })
       });
 
@@ -697,6 +929,101 @@ function Checkout({ onComplete }) {
             )}
           </div>
 
+          {/* Extended Attributes for ccTLDs (like .in, .uk, .eu) */}
+          {hasSpecialRequirements() && (
+            <div className="card p-6">
+              <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100 mb-2">
+                Additional Registration Requirements
+              </h2>
+              <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">
+                Some domain extensions require additional information for registration compliance.
+              </p>
+
+              {loadingRequirements ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="w-6 h-6 animate-spin text-indigo-600" />
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  {Object.entries(tldRequirements).map(([tld, req]) => {
+                    if (!req?.hasRequirements) return null;
+
+                    // Get the domains in cart using this TLD
+                    const domainsWithTld = cart.items
+                      .filter(item => item.tld === tld)
+                      .map(item => `${item.domain_name}.${item.tld}`);
+
+                    return (
+                      <div key={tld} className="border-l-4 border-indigo-500 pl-4">
+                        <h3 className="font-medium text-slate-900 dark:text-slate-100 mb-1">
+                          .{tld.toUpperCase()} Requirements
+                        </h3>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
+                          For: {domainsWithTld.join(', ')}
+                        </p>
+
+                        <div className="space-y-4">
+                          {req.attributes.map(attr => {
+                            const attrKey = `${tld}_${attr.name}`;
+                            const hasOptions = attr.options && attr.options.length > 0;
+
+                            // Get user-friendly label and description
+                            const friendly = FRIENDLY_LABELS[attr.name] || {};
+                            const displayLabel = friendly.label || FRIENDLY_LABELS._formatName(attr.name);
+                            const displayDescription = friendly.description || attr.description;
+                            const displayPlaceholder = friendly.placeholder || (hasOptions ? 'Select an option...' : `Enter ${displayLabel.toLowerCase()}`);
+
+                            return (
+                              <div key={attrKey}>
+                                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                                  {displayLabel}
+                                  {attr.required && <span className="text-red-500 ml-1">*</span>}
+                                </label>
+                                {displayDescription && (
+                                  <p className="text-xs text-slate-500 dark:text-slate-400 mb-2">
+                                    {displayDescription}
+                                  </p>
+                                )}
+
+                                {hasOptions ? (
+                                  <div className="relative">
+                                    <select
+                                      value={extendedAttributes[attrKey] || ''}
+                                      onChange={(e) => handleExtendedAttributeChange(attrKey, e.target.value)}
+                                      className="input appearance-none pr-10"
+                                      required={attr.required}
+                                    >
+                                      <option value="">{displayPlaceholder}</option>
+                                      {attr.options.map(opt => (
+                                        <option key={opt.value} value={opt.value}>
+                                          {opt.title || opt.value}
+                                        </option>
+                                      ))}
+                                    </select>
+                                    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+                                  </div>
+                                ) : (
+                                  <input
+                                    type="text"
+                                    value={extendedAttributes[attrKey] || ''}
+                                    onChange={(e) => handleExtendedAttributeChange(attrKey, e.target.value)}
+                                    placeholder={displayPlaceholder}
+                                    className="input"
+                                    required={attr.required}
+                                  />
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Payment Preview */}
           <div className="card p-6">
             <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100 mb-4">
@@ -725,21 +1052,51 @@ function Checkout({ onComplete }) {
 
             <div className="space-y-3 mb-4">
               {cart.items.map((item) => (
-                <div key={item.id} className="flex justify-between text-sm">
-                  <div>
-                    <span className="text-slate-900 dark:text-slate-100 font-mono">
+                <div key={item.id} className="flex justify-between gap-2 text-sm">
+                  <div className="min-w-0 flex-1">
+                    <span className="text-slate-900 dark:text-slate-100 font-mono break-all">
                       {item.domain_name}.{item.tld}
                     </span>
                     <span className="text-slate-500 dark:text-slate-400 text-xs ml-2">
                       ({item.item_type})
                     </span>
                   </div>
-                  <span className="text-slate-900 dark:text-slate-100">
+                  <span className="text-slate-900 dark:text-slate-100 whitespace-nowrap">
                     ${parseFloat(item.price).toFixed(2)}
                   </span>
                 </div>
               ))}
             </div>
+
+            {/* Auto-Renew Toggle - only show for registrations */}
+            {cart.items.some(item => item.item_type === 'register') && (
+              <div className="border-t border-slate-200 dark:border-slate-700 pt-4 mb-4">
+                <label className="flex items-center justify-between cursor-pointer">
+                  <div>
+                    <span className="text-sm font-medium text-slate-900 dark:text-slate-100">
+                      Auto-Renew
+                    </span>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      Automatically renew before expiration
+                    </p>
+                  </div>
+                  <div className="relative">
+                    <input
+                      type="checkbox"
+                      checked={autoRenew}
+                      onChange={(e) => setAutoRenew(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 dark:peer-focus:ring-indigo-800 rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-slate-600 peer-checked:bg-indigo-600"></div>
+                  </div>
+                </label>
+                {autoRenew && (
+                  <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-2">
+                    Your payment method will be saved for automatic renewals
+                  </p>
+                )}
+              </div>
+            )}
 
             <div className="border-t border-slate-200 dark:border-slate-700 pt-4 mb-6">
               <div className="flex justify-between text-lg font-semibold">

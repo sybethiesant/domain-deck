@@ -7,14 +7,82 @@ const MIN_REFILL = 25.00;     // Minimum refill amount allowed by eNom
 
 class EnomAPI {
   constructor() {
-    this.uid = process.env.ENOM_UID;
-    this.pw = process.env.ENOM_PW;
-    this.env = process.env.ENOM_ENV || 'test';
+    // Store all credentials for dynamic switching
+    this.credentials = {
+      production: {
+        uid: process.env.ENOM_UID,
+        pw: process.env.ENOM_PW,
+        baseUrl: 'reseller.enom.com'
+      },
+      test: {
+        uid: process.env.ENOM_TEST_UID || process.env.ENOM_UID,
+        pw: process.env.ENOM_TEST_PW || process.env.ENOM_PW,
+        baseUrl: 'resellertest.enom.com'
+      }
+    };
 
-    // Set API endpoint based on environment
-    this.baseUrl = this.env === 'production'
-      ? 'reseller.enom.com'
-      : 'resellertest.enom.com';
+    // Initialize with env var setting
+    this.setMode(process.env.ENOM_ENV || 'test');
+  }
+
+  /**
+   * Switch between test and production mode
+   * @param {string} mode - 'test' or 'production'
+   */
+  setMode(mode) {
+    const validMode = mode === 'production' ? 'production' : 'test';
+    this.env = validMode;
+
+    const creds = this.credentials[validMode];
+    this.uid = creds.uid;
+    this.pw = creds.pw;
+    this.baseUrl = creds.baseUrl;
+
+    // Validate credentials are configured
+    if (!this.uid || !this.pw) {
+      console.error(`[eNom] WARNING: ${validMode} credentials not configured. API calls will fail.`);
+    }
+
+    console.log(`[eNom] Mode set to ${validMode} -> ${this.baseUrl}`);
+    return { mode: validMode, endpoint: this.baseUrl };
+  }
+
+  /**
+   * Get current mode
+   * @returns {object} Current mode info
+   */
+  getMode() {
+    return {
+      mode: this.env,
+      endpoint: this.baseUrl,
+      hasCredentials: !!(this.uid && this.pw)
+    };
+  }
+
+  /**
+   * Validate domain name parts to prevent injection attacks
+   * @param {string} sld - Second level domain
+   * @param {string} tld - Top level domain
+   * @throws {Error} If validation fails
+   */
+  validateDomainParts(sld, tld) {
+    // SLD must be alphanumeric with hyphens, 1-63 chars
+    const sldRegex = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/;
+    // TLD must be alphanumeric, 2-63 chars
+    const tldRegex = /^[a-zA-Z]{2,63}$/;
+
+    if (!sld || typeof sld !== 'string') {
+      throw new Error('Invalid SLD: must be a non-empty string');
+    }
+    if (!tld || typeof tld !== 'string') {
+      throw new Error('Invalid TLD: must be a non-empty string');
+    }
+    if (!sldRegex.test(sld)) {
+      throw new Error('Invalid SLD: must be alphanumeric with optional hyphens, 1-63 characters');
+    }
+    if (!tldRegex.test(tld)) {
+      throw new Error('Invalid TLD: must be alphabetic, 2-63 characters');
+    }
   }
 
 
@@ -32,13 +100,27 @@ class EnomAPI {
    * Make an API request to eNom
    * @param {string} command - The eNom command to execute
    * @param {object} params - Additional parameters for the command
+   * @param {object} options - Request options
+   * @param {string} options.mode - Override mode for this request ('test' or 'production')
    * @returns {Promise<object>} - Parsed response
    */
-  async request(command, params = {}) {
+  async request(command, params = {}, options = {}) {
+    // Allow per-request mode override for managing domains registered in different modes
+    const requestMode = options.mode || this.env;
+    const creds = this.credentials[requestMode];
+    const useUid = creds?.uid || this.uid;
+    const usePw = creds?.pw || this.pw;
+    const useBaseUrl = creds?.baseUrl || this.baseUrl;
+
+    if (options.mode && options.mode !== this.env) {
+      console.log(`[eNom API] Using ${requestMode} mode for this request (global: ${this.env})`);
+    }
+    console.log(`[eNom API] Command: ${command}, Params:`, JSON.stringify(params));
+
     const queryParams = {
       command,
-      uid: this.uid,
-      pw: this.pw,
+      uid: useUid,
+      pw: usePw,
       // Use text format - JSON is broken on eNom's side
       ...params
     };
@@ -47,8 +129,8 @@ class EnomAPI {
     const url = `/interface.asp?${queryString}`;
 
     return new Promise((resolve, reject) => {
-      const options = {
-        hostname: this.baseUrl,
+      const reqOptions = {
+        hostname: useBaseUrl,
         port: 443,
         path: url,
         method: 'GET',
@@ -57,7 +139,7 @@ class EnomAPI {
         }
       };
 
-      const req = https.request(options, (res) => {
+      const req = https.request(reqOptions, (res) => {
         let data = '';
 
         res.on('data', (chunk) => {
@@ -141,6 +223,7 @@ class EnomAPI {
    */
   async checkDomain(sld, tld) {
     try {
+      this.validateDomainParts(sld, tld);
       const response = await this.request('Check', { sld, tld });
 
       // eNom returns RRPCode: 210 for available, 211 for not available
@@ -317,14 +400,20 @@ class EnomAPI {
       admin,
       tech,
       billing,
-      privacy = false
+      privacy = false,
+      extendedAttributes = {}  // ccTLD-specific attributes (e.g., .in requires Aadhaar/PAN)
     } = params;
+
+    // Validate domain parts
+    this.validateDomainParts(sld, tld);
 
     const requestParams = {
       sld,
       tld,
       NumYears: years,
-      UseDNS: nameservers.length > 0 ? 'default' : 'default'
+      UseDNS: nameservers.length > 0 ? 'default' : '',
+      // Disable auto-renew on eNom side - our system handles renewals
+      RenewName: '0'
     };
 
     // Add nameservers
@@ -360,6 +449,16 @@ class EnomAPI {
       requestParams.WPPSEmail = registrant.email;
     }
 
+    // Add extended attributes for ccTLDs (e.g., .in requires Aadhaar/PAN)
+    // extendedAttributes should be an object like: { in_aadharnumber: '123456789012', in_panumber: 'ABCDE1234F' }
+    if (extendedAttributes && typeof extendedAttributes === 'object') {
+      Object.entries(extendedAttributes).forEach(([key, value]) => {
+        if (value) {
+          requestParams[key] = value;
+        }
+      });
+    }
+
     try {
       const response = await this.request('Purchase', requestParams);
 
@@ -371,6 +470,25 @@ class EnomAPI {
         expirationDate: response.ExpirationDate
       };
     } catch (error) {
+      // Check if domain was actually registered despite the error
+      // (eNom sometimes returns errors for successful registrations)
+      try {
+        const info = await this.getDomainInfo(sld, tld);
+        if (info && info.status === 'Registered') {
+          console.log(`Domain ${sld}.${tld} registered successfully despite error: ${error.message}`);
+          return {
+            success: true,
+            orderId: null,
+            domainName: `${sld}.${tld}`,
+            status: 'registered',
+            expirationDate: info.expirationDate,
+            note: 'Registered (verified after initial error)'
+          };
+        }
+      } catch (verifyError) {
+        // Domain not found, original error stands
+      }
+
       console.error(`eNom registration error for ${sld}.${tld}:`, error.message);
       throw error;
     }
@@ -383,19 +501,32 @@ class EnomAPI {
    * @param {number} years - Number of years to renew
    * @returns {Promise<object>} - Renewal result
    */
-  async renewDomain(sld, tld, years = 1) {
+  async renewDomain(sld, tld, years = 1, options = {}) {
     try {
+      this.validateDomainParts(sld, tld);
       const response = await this.request('Extend', {
         sld,
         tld,
         NumYears: years
-      });
+      }, { mode: options.mode });
+
+      console.log(`[eNom] Extend response for ${sld}.${tld}:`, JSON.stringify(response));
+
+      // eNom may return expiration in different fields
+      let newExpiration = response.ExpirationDate || response['expiration-date'] || response.DomainExpDate || response.RegistryExpDate;
+
+      // Parse date if it includes time (e.g., "2028-01-15 01:18:01.107" -> "2028-01-15")
+      if (newExpiration && newExpiration.includes(' ')) {
+        newExpiration = newExpiration.split(' ')[0];
+      }
+
+      console.log(`[eNom] Renewal new expiration for ${sld}.${tld}: ${newExpiration}`);
 
       return {
         success: true,
         orderId: response.OrderID,
         domainName: `${sld}.${tld}`,
-        newExpiration: response.ExpirationDate
+        newExpiration
       };
     } catch (error) {
       console.error(`eNom renewal error for ${sld}.${tld}:`, error.message);
@@ -410,7 +541,8 @@ class EnomAPI {
    * @param {Array<string>} nameservers - Array of nameserver hostnames
    * @returns {Promise<object>} - Update result
    */
-  async updateNameservers(sld, tld, nameservers) {
+  async updateNameservers(sld, tld, nameservers, options = {}) {
+    this.validateDomainParts(sld, tld);
     const params = { sld, tld };
 
     nameservers.forEach((ns, index) => {
@@ -418,7 +550,7 @@ class EnomAPI {
     });
 
     try {
-      const response = await this.request('ModifyNS', params);
+      const response = await this.request('ModifyNS', params, { mode: options.mode });
 
       return {
         success: true,
@@ -437,9 +569,10 @@ class EnomAPI {
    * @param {string} tld - Top level domain
    * @returns {Promise<Array>} - Array of nameservers
    */
-  async getNameservers(sld, tld) {
+  async getNameservers(sld, tld, options = {}) {
     try {
-      const response = await this.request('GetDNS', { sld, tld });
+      this.validateDomainParts(sld, tld);
+      const response = await this.request('GetDNS', { sld, tld }, { mode: options.mode });
 
       const nameservers = [];
       for (let i = 1; i <= 13; i++) {
@@ -461,9 +594,10 @@ class EnomAPI {
    * @param {string} tld - Top level domain
    * @returns {Promise<object>} - Domain information
    */
-  async getDomainInfo(sld, tld) {
+  async getDomainInfo(sld, tld, options = {}) {
     try {
-      const response = await this.request('GetDomainInfo', { sld, tld });
+      this.validateDomainParts(sld, tld);
+      const response = await this.request('GetDomainInfo', { sld, tld }, { mode: options.mode });
 
       return {
         domainName: `${sld}.${tld}`,
@@ -484,7 +618,8 @@ class EnomAPI {
    * @param {string} tld - Top level domain
    * @returns {Promise<object>} - Complete domain data
    */
-  async getFullDomainData(sld, tld) {
+  async getFullDomainData(sld, tld, options = {}) {
+    this.validateDomainParts(sld, tld);
     const result = {
       domainName: `${sld}.${tld}`,
       sld,
@@ -497,13 +632,15 @@ class EnomAPI {
       nameservers: []
     };
 
+    const reqOpts = { mode: options.mode };
+
     // Fetch all data in parallel for speed
     const [infoResult, nsResult, lockResult, renewResult, privacyResult] = await Promise.allSettled([
-      this.request('GetDomainInfo', { sld, tld }),
-      this.request('GetDNS', { sld, tld }),
-      this.request('GetRegLock', { sld, tld }),
-      this.request('GetRenew', { sld, tld }),
-      this.request('GetWPPSInfo', { sld, tld })
+      this.request('GetDomainInfo', { sld, tld }, reqOpts),
+      this.request('GetDNS', { sld, tld }, reqOpts),
+      this.request('GetRegLock', { sld, tld }, reqOpts),
+      this.request('GetRenew', { sld, tld }, reqOpts),
+      this.request('GetWPPSInfo', { sld, tld }, reqOpts)
     ]);
 
     // Parse domain info
@@ -553,14 +690,15 @@ class EnomAPI {
    * @param {boolean} enable - Enable or disable privacy
    * @returns {Promise<object>} - Result
    */
-  async setWhoisPrivacy(sld, tld, enable) {
+  async setWhoisPrivacy(sld, tld, enable, options = {}) {
     try {
+      this.validateDomainParts(sld, tld);
       const command = enable ? 'EnableServices' : 'DisableServices';
       const response = await this.request(command, {
         sld,
         tld,
         Service: 'WPPS'
-      });
+      }, { mode: options.mode });
 
       return {
         success: true,
@@ -574,14 +712,48 @@ class EnomAPI {
   }
 
   /**
+   * Purchase WHOIS privacy (ID Protect) for a domain
+   * @param {string} sld - Second level domain
+   * @param {string} tld - Top level domain
+   * @param {number} years - Number of years (default 1)
+   * @returns {Promise<object>} - Result
+   */
+  async purchasePrivacy(sld, tld, years = 1, options = {}) {
+    try {
+      this.validateDomainParts(sld, tld);
+
+      // Use PurchaseServices to buy ID Protect (WPPS)
+      const response = await this.request('PurchaseServices', {
+        sld,
+        tld,
+        Service: 'WPPS',
+        NumYears: years
+      }, { mode: options.mode });
+
+      console.log(`[eNom] Privacy purchased for ${sld}.${tld}:`, response);
+
+      return {
+        success: true,
+        domainName: `${sld}.${tld}`,
+        years,
+        privacyEnabled: true
+      };
+    } catch (error) {
+      console.error(`eNom purchase privacy error for ${sld}.${tld}:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
    * Get WHOIS privacy service status
    * @param {string} sld - Second level domain
    * @param {string} tld - Top level domain
    * @returns {Promise<object>} - Privacy status including expiration
    */
-  async getPrivacyStatus(sld, tld) {
+  async getPrivacyStatus(sld, tld, options = {}) {
     try {
-      const response = await this.request('GetWPPSInfo', { sld, tld });
+      this.validateDomainParts(sld, tld);
+      const response = await this.request('GetWPPSInfo', { sld, tld }, { mode: options.mode });
 
       const expDate = response.WPPSExpDate || response['wpps-exp-date'] || null;
       const isEnabled = response.WPPSEnabled === '1';
@@ -609,9 +781,10 @@ class EnomAPI {
    * @param {string} tld - Top level domain
    * @returns {Promise<object>} - Contact information
    */
-  async getWhoisContacts(sld, tld) {
+  async getWhoisContacts(sld, tld, options = {}) {
     try {
-      const response = await this.request('GetContacts', { sld, tld });
+      this.validateDomainParts(sld, tld);
+      const response = await this.request('GetContacts', { sld, tld }, { mode: options.mode });
 
       return {
         registrant: this.parseContact(response, 'Registrant'),
@@ -634,20 +807,22 @@ class EnomAPI {
       const response = await this.request('GetDomains', {});
 
       const domains = [];
-      const domainList = response['GetDomains']?.['domain-list']?.domain || response.DomainList?.domain || [];
+      const count = parseInt(response.DomainCount || response.count || 0);
 
-      const domainArray = Array.isArray(domainList) ? domainList : [domainList];
+      // Parse numbered key-value pairs (sld1, tld1, sld2, tld2, etc.)
+      for (let i = 1; i <= count; i++) {
+        const sld = response[`sld${i}`];
+        const tld = response[`tld${i}`];
 
-      for (const d of domainArray) {
-        if (d && d.sld && d.tld) {
+        if (sld && tld) {
           domains.push({
-            domainNameId: d.DomainNameID,
-            sld: d.sld,
-            tld: d.tld,
-            domain: `${d.sld}.${d.tld}`,
-            expirationDate: d['expiration-date'],
-            autoRenew: d['auto-renew'] === 'Yes',
-            privacyEnabled: d.wppsstatus !== 'disabled' && d.wppsstatus !== 'n/a'
+            domainNameId: response[`DomainNameID${i}`],
+            sld: sld,
+            tld: tld,
+            domain: `${sld}.${tld}`,
+            expirationDate: response[`expiration-date${i}`],
+            autoRenew: response[`auto-renew${i}`] === 'Yes',
+            privacyEnabled: response[`wppsstatus${i}`] !== 'disabled' && response[`wppsstatus${i}`] !== 'n/a'
           });
         }
       }
@@ -701,8 +876,11 @@ class EnomAPI {
     try {
       const response = await this.request('GetBalance');
 
+      // eNom returns balance with commas (e.g., "50,000.00") - remove them before parsing
+      const balanceStr = (response.Balance || '0').replace(/,/g, '');
+
       return {
-        balance: parseFloat(response.Balance || 0),
+        balance: parseFloat(balanceStr),
         currency: 'USD'
       };
     } catch (error) {
@@ -889,14 +1067,18 @@ class EnomAPI {
    * @param {boolean} lock - Lock or unlock
    * @returns {Promise<object>} - Result
    */
-  async setDomainLock(sld, tld, lock) {
+  async setDomainLock(sld, tld, lock, options = {}) {
     try {
-      const command = lock ? 'SetRegLock' : 'UnsetRegLock';
-      const response = await this.request(command, {
+      this.validateDomainParts(sld, tld);
+      // eNom uses SetRegLock for both lock and unlock
+      // UnlockRegistrar=0 means lock, UnlockRegistrar=1 means unlock
+      console.log(`[eNom] Setting lock for ${sld}.${tld} to ${lock ? 'LOCKED' : 'UNLOCKED'}`);
+      const response = await this.request('SetRegLock', {
         sld,
         tld,
         UnlockRegistrar: lock ? '0' : '1'
-      });
+      }, { mode: options.mode });
+      console.log(`[eNom] Lock response:`, response);
 
       return {
         success: true,
@@ -915,17 +1097,23 @@ class EnomAPI {
    * @param {string} tld - Top level domain
    * @returns {Promise<object>} - Auth code
    */
-  async getAuthCode(sld, tld) {
+  async getAuthCode(sld, tld, options = {}) {
     try {
-      // First unlock the domain
-      await this.setDomainLock(sld, tld, false);
+      this.validateDomainParts(sld, tld);
+      // Try to unlock the domain (required by eNom to retrieve auth code)
+      // If already unlocked, this may fail - that's OK, continue anyway
+      try {
+        await this.setDomainLock(sld, tld, false, options);
+      } catch (unlockError) {
+        console.log(`[eNom] Domain ${sld}.${tld} unlock skipped (may already be unlocked):`, unlockError.message);
+      }
 
       const response = await this.request('SynchAuthInfo', {
         sld,
         tld,
         EmailEPP: 'False',
         RunSynchAutoInfo: 'True'
-      });
+      }, { mode: options.mode });
 
       return {
         success: true,
@@ -945,7 +1133,8 @@ class EnomAPI {
    * @param {object} contacts - Contact objects for each type
    * @returns {Promise<object>} - Result
    */
-  async updateContacts(sld, tld, contacts) {
+  async updateContacts(sld, tld, contacts, options = {}) {
+    this.validateDomainParts(sld, tld);
     const { registrant, admin, tech, billing } = contacts;
 
     const requestParams = { sld, tld };
@@ -964,7 +1153,7 @@ class EnomAPI {
     }
 
     try {
-      const response = await this.request('Contacts', requestParams);
+      const response = await this.request('Contacts', requestParams, { mode: options.mode });
 
       return {
         success: true,
@@ -984,13 +1173,14 @@ class EnomAPI {
    * @param {boolean} autoRenew - Enable or disable auto-renew
    * @returns {Promise<object>} - Result
    */
-  async setAutoRenew(sld, tld, autoRenew) {
+  async setAutoRenew(sld, tld, autoRenew, options = {}) {
     try {
+      this.validateDomainParts(sld, tld);
       const response = await this.request('SetRenew', {
         sld,
         tld,
         RenewFlag: autoRenew ? '1' : '0'
-      });
+      }, { mode: options.mode });
 
       return {
         success: true,
@@ -1060,9 +1250,13 @@ class EnomAPI {
   async getDetailedBalance() {
     try {
       const response = await this.request('GetBalance');
-      
+
+      // eNom returns balance with commas (e.g., "50,000.00") - remove them before parsing
+      const balanceStr = (response.AvailableBalance || response.Balance || '0').replace(/,/g, '');
+      const balance = parseFloat(balanceStr);
+
       return {
-        availableBalance: parseFloat(response.Balance || 0),
+        availableBalance: balance,
         currency: 'USD',
         timestamp: new Date().toISOString(),
         raw: response
@@ -1074,7 +1268,7 @@ class EnomAPI {
   }
 
   /**
-   * Refill account balance using credit card on file
+   * Refill account balance using securely stored credit card
    * @param {number} amount - Amount to refill in USD (minimum $25)
    * @returns {Promise<object>} - Refill result
    */
@@ -1083,13 +1277,61 @@ class EnomAPI {
       throw new Error('Minimum refill amount is $' + MIN_REFILL);
     }
 
+    // Load encrypted card details
+    const { loadCredentials, credentialsExist } = require('./crypto');
+    const encryptionKey = process.env.ENOM_CC_KEY;
+
+    if (!encryptionKey) {
+      throw new Error('ENOM_CC_KEY not configured. Cannot process refill.');
+    }
+
+    if (!credentialsExist()) {
+      throw new Error(
+        'Credit card not configured. Run: node backend/scripts/store-card.js'
+      );
+    }
+
+    let cardDetails;
     try {
+      cardDetails = loadCredentials(encryptionKey);
+    } catch (error) {
+      throw new Error('Failed to decrypt card details: ' + error.message);
+    }
+
+    if (!cardDetails || !cardDetails.CCNumber) {
+      throw new Error('Invalid card details stored. Re-run store-card.js');
+    }
+
+    try {
+      // Call eNom with full card details (HTTPS required - already using HTTPS)
       const response = await this.request('RefillAccount', {
-        Amount: amount.toFixed(2)
+        CCAmount: amount.toFixed(2),
+        debit: 'true',
+        CCType: cardDetails.CCType,
+        CCName: cardDetails.CCName,
+        CCNumber: cardDetails.CCNumber,
+        CCMonth: cardDetails.CCMonth,
+        CCYear: cardDetails.CCYear,
+        cvv2: cardDetails.cvv2,
+        ccaddress: cardDetails.ccaddress,
+        CCCity: cardDetails.CCCity,
+        CCStateProvince: cardDetails.CCStateProvince,
+        cczip: cardDetails.cczip,
+        CCCountry: cardDetails.CCCountry,
+        CCPhone: cardDetails.CCPhone
       });
+
+      // Check for errors
+      if (parseInt(response.ErrCount) > 0) {
+        const errMsg = response.Err1 || response.Error || 'Refill failed';
+        throw new Error(errMsg);
+      }
 
       const feeAmount = amount * CC_FEE_PERCENT;
       const netAmount = amount - feeAmount;
+
+      // Log success (never log card details)
+      console.log(`eNom refill: Charged $${amount} (CC fee $${feeAmount.toFixed(2)})`);
 
       return {
         success: true,
@@ -1098,10 +1340,10 @@ class EnomAPI {
         feeAmount: parseFloat(feeAmount.toFixed(2)),
         netAmount: parseFloat(netAmount.toFixed(2)),
         transactionId: response.TransactionID || response.OrderID,
-        message: 'Account refilled successfully',
-        raw: response
+        message: 'Account refilled successfully'
       };
     } catch (error) {
+      // Never log card details in errors
       console.error('eNom refill error:', error.message);
       throw error;
     }
@@ -1187,7 +1429,7 @@ class EnomAPI {
       // Step 4: Refill if needed
       if (refillCalc.needsRefill) {
         if (!autoRefill) {
-          throw new Error('Insufficient balance. Need $' + domainCost + ', have $' + balanceInfo.availableBalance);
+          throw new Error(`Insufficient balance. Need $${domainCost}, have $${balanceInfo.availableBalance}`);
         }
 
         if (!dryRun) {
@@ -1195,6 +1437,17 @@ class EnomAPI {
           const refillResult = await this.refillAccount(refillCalc.refillAmount);
           result.refillResult = refillResult;
           result.steps[result.steps.length - 1].status = 'completed';
+
+          // Verify balance actually increased
+          const verifyBalance = await this.getDetailedBalance();
+          result.balanceAfterRefill = verifyBalance.availableBalance;
+
+          if (verifyBalance.availableBalance < domainCost) {
+            throw new Error(
+              `Refill processed but balance insufficient: $${verifyBalance.availableBalance}. ` +
+              `Required: $${domainCost}. Please check your card or try again.`
+            );
+          }
         }
       }
 
@@ -1227,7 +1480,7 @@ class EnomAPI {
    * Smart domain renewal with automatic balance management
    */
   async smartRenewal(sld, tld, years, cost, options = {}) {
-    const { autoRefill = true, dryRun = false } = options;
+    const { autoRefill = true, dryRun = false, mode } = options;
     const result = { steps: [], success: false };
 
     try {
@@ -1239,14 +1492,20 @@ class EnomAPI {
 
       if (refillCalc.needsRefill && !dryRun) {
         if (!autoRefill) {
-          throw new Error('Insufficient balance for renewal');
+          throw new Error(`Insufficient balance for renewal. Need $${cost}, have $${balanceInfo.availableBalance}`);
         }
         const refillResult = await this.refillAccount(refillCalc.refillAmount);
         result.refillResult = refillResult;
+
+        // Verify balance increased
+        const verifyBalance = await this.getDetailedBalance();
+        if (verifyBalance.availableBalance < cost) {
+          throw new Error(`Refill processed but balance insufficient for renewal`);
+        }
       }
 
       if (!dryRun) {
-        const renewResult = await this.renewDomain(sld, tld, years);
+        const renewResult = await this.renewDomain(sld, tld, years, { mode });
         result.renewResult = renewResult;
         result.success = true;
         const finalBalance = await this.getDetailedBalance();
@@ -1290,7 +1549,7 @@ class EnomAPI {
       // Step 4: Refill if needed
       if (refillCalc.needsRefill) {
         if (!autoRefill) {
-          throw new Error('Insufficient balance. Need $' + transferCost + ', have $' + balanceInfo.availableBalance);
+          throw new Error(`Insufficient balance for transfer. Need $${transferCost}, have $${balanceInfo.availableBalance}`);
         }
 
         if (!dryRun) {
@@ -1298,6 +1557,12 @@ class EnomAPI {
           const refillResult = await this.refillAccount(refillCalc.refillAmount);
           result.refillResult = refillResult;
           result.steps[result.steps.length - 1].status = 'completed';
+
+          // Verify balance increased
+          const verifyBalance = await this.getDetailedBalance();
+          if (verifyBalance.availableBalance < transferCost) {
+            throw new Error(`Refill processed but balance insufficient for transfer`);
+          }
         }
       }
 
@@ -1324,6 +1589,355 @@ class EnomAPI {
       result.error = error.message;
       throw error;
     }
+  }
+
+  /**
+   * Get extended attributes required for a TLD
+   * Returns user-friendly attribute definitions for ccTLDs
+   * @param {string} tld - Top level domain
+   * @returns {Promise<object>} - Extended attributes info
+   */
+  async getExtendedAttributes(tld) {
+    // Hardcoded friendly definitions for common ccTLDs
+    // This avoids complex XML parsing and gives us control over UX
+    const ccTldRequirements = {
+      us: {
+        hasRequirements: true,
+        attributes: [
+          {
+            name: 'us_nexus',
+            required: true,
+            description: 'How are you connected to the United States?',
+            options: [
+              { value: 'C11', title: 'US Citizen' },
+              { value: 'C12', title: 'Permanent Resident' },
+              { value: 'C21', title: 'US Business or Organization' },
+              { value: 'C31', title: 'Foreign Business with US Activities' },
+              { value: 'C32', title: 'Foreign Organization with US Office' }
+            ]
+          },
+          {
+            name: 'us_purpose',
+            required: true,
+            description: 'What will this domain be used for?',
+            options: [
+              { value: 'P1', title: 'Business (For Profit)' },
+              { value: 'P2', title: 'Non-Profit Organization' },
+              { value: 'P3', title: 'Personal Use' },
+              { value: 'P4', title: 'Educational' },
+              { value: 'P5', title: 'Government' }
+            ]
+          }
+        ]
+      },
+      in: {
+        hasRequirements: true,
+        attributes: [
+          {
+            name: 'in_aadharnumber',
+            required: false,
+            description: 'Your 12-digit Indian Aadhaar identification number (optional)',
+            options: []
+          },
+          {
+            name: 'in_panumber',
+            required: false,
+            description: 'Your 10-character Indian PAN card number (optional)',
+            options: []
+          }
+        ]
+      },
+      uk: {
+        hasRequirements: true,
+        attributes: [
+          {
+            name: 'uk_legal_type',
+            required: true,
+            description: 'What type of registrant are you?',
+            options: [
+              { value: 'IND', title: 'Individual (UK Resident)' },
+              { value: 'FIND', title: 'Individual (Non-UK Resident)' },
+              { value: 'LTD', title: 'UK Limited Company' },
+              { value: 'PLC', title: 'UK Public Limited Company' },
+              { value: 'PTNR', title: 'UK Partnership' },
+              { value: 'STRA', title: 'UK Sole Trader' },
+              { value: 'LLP', title: 'UK Limited Liability Partnership' },
+              { value: 'RCHAR', title: 'UK Registered Charity' },
+              { value: 'FCORP', title: 'Foreign Company' },
+              { value: 'OTHER', title: 'Other UK Entity' },
+              { value: 'FOTHER', title: 'Other Non-UK Entity' }
+            ]
+          }
+        ]
+      },
+      ca: {
+        hasRequirements: true,
+        attributes: [
+          {
+            name: 'ca_legal_type',
+            required: true,
+            description: 'What type of Canadian entity are you?',
+            options: [
+              { value: 'CCT', title: 'Canadian Citizen' },
+              { value: 'RES', title: 'Permanent Resident of Canada' },
+              { value: 'CCO', title: 'Canadian Corporation' },
+              { value: 'GOV', title: 'Government Entity' },
+              { value: 'EDU', title: 'Canadian Educational Institution' },
+              { value: 'ASS', title: 'Canadian Unincorporated Association' },
+              { value: 'HOP', title: 'Canadian Hospital' },
+              { value: 'PRT', title: 'Partnership in Canada' },
+              { value: 'TDM', title: 'Trademark Owner (Canada)' },
+              { value: 'TRD', title: 'Trade Union in Canada' },
+              { value: 'PLT', title: 'Canadian Political Party' },
+              { value: 'LAM', title: 'Canadian Library, Archive, or Museum' },
+              { value: 'INB', title: 'Indian Band in Canada' },
+              { value: 'ABO', title: 'Aboriginal Peoples in Canada' },
+              { value: 'LGR', title: 'Legal Representative' },
+              { value: 'OMK', title: 'Official Mark Registrant' },
+              { value: 'MAJ', title: 'Her Majesty the Queen' }
+            ]
+          }
+        ]
+      },
+      eu: {
+        hasRequirements: true,
+        attributes: [
+          {
+            name: 'eu_country',
+            required: true,
+            description: 'Your country of residence within the European Union',
+            options: [
+              { value: 'AT', title: 'Austria' },
+              { value: 'BE', title: 'Belgium' },
+              { value: 'BG', title: 'Bulgaria' },
+              { value: 'HR', title: 'Croatia' },
+              { value: 'CY', title: 'Cyprus' },
+              { value: 'CZ', title: 'Czech Republic' },
+              { value: 'DK', title: 'Denmark' },
+              { value: 'EE', title: 'Estonia' },
+              { value: 'FI', title: 'Finland' },
+              { value: 'FR', title: 'France' },
+              { value: 'DE', title: 'Germany' },
+              { value: 'GR', title: 'Greece' },
+              { value: 'HU', title: 'Hungary' },
+              { value: 'IE', title: 'Ireland' },
+              { value: 'IT', title: 'Italy' },
+              { value: 'LV', title: 'Latvia' },
+              { value: 'LT', title: 'Lithuania' },
+              { value: 'LU', title: 'Luxembourg' },
+              { value: 'MT', title: 'Malta' },
+              { value: 'NL', title: 'Netherlands' },
+              { value: 'PL', title: 'Poland' },
+              { value: 'PT', title: 'Portugal' },
+              { value: 'RO', title: 'Romania' },
+              { value: 'SK', title: 'Slovakia' },
+              { value: 'SI', title: 'Slovenia' },
+              { value: 'ES', title: 'Spain' },
+              { value: 'SE', title: 'Sweden' }
+            ]
+          }
+        ]
+      },
+      au: {
+        hasRequirements: true,
+        attributes: [
+          {
+            name: 'au_registrant_id_type',
+            required: true,
+            description: 'What type of Australian ID do you have?',
+            options: [
+              { value: 'ABN', title: 'Australian Business Number (ABN)' },
+              { value: 'ACN', title: 'Australian Company Number (ACN)' },
+              { value: 'TM', title: 'Trademark Number' }
+            ]
+          },
+          {
+            name: 'au_registrant_id',
+            required: true,
+            description: 'Enter your ABN, ACN, or Trademark number',
+            options: []
+          }
+        ]
+      }
+    };
+
+    const tldLower = tld.toLowerCase();
+
+    // Return hardcoded requirements if available
+    if (ccTldRequirements[tldLower]) {
+      return {
+        tld: tldLower,
+        ...ccTldRequirements[tldLower],
+        requiredCount: ccTldRequirements[tldLower].attributes.filter(a => a.required).length
+      };
+    }
+
+    // For TLDs without special requirements, return empty
+    // Common TLDs that don't need special attributes
+    const noRequirementsTlds = ['com', 'net', 'org', 'info', 'biz', 'co', 'io', 'me', 'tv', 'cc', 'ws'];
+    if (noRequirementsTlds.includes(tldLower)) {
+      return { tld: tldLower, hasRequirements: false, attributes: [], requiredCount: 0 };
+    }
+
+    // For unknown TLDs, try to fetch from eNom (fallback)
+    const params = {
+      tld: tld.toLowerCase(),
+      responsetype: 'xml'
+    };
+
+    return new Promise((resolve, reject) => {
+      const queryParams = {
+        command: 'GetExtAttributes',
+        uid: this.uid,
+        pw: this.pw,
+        ...params
+      };
+
+      const queryString = querystring.stringify(queryParams);
+      const url = `/interface.asp?${queryString}`;
+
+      const req = https.request({
+        hostname: this.baseUrl,
+        port: 443,
+        path: url,
+        method: 'GET'
+      }, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+          try {
+            // Parse XML response to extract attributes
+            const attributes = [];
+            const seenNames = new Set();
+
+            // Get the Attributes section
+            const attrsSection = data.match(/<Attributes>([\s\S]*)<\/Attributes>/);
+            if (!attrsSection) {
+              resolve({ tld, hasRequirements: false, attributes: [], requiredCount: 0 });
+              return;
+            }
+
+            const content = attrsSection[1];
+
+            // Find all top-level attribute start positions
+            // Top-level attrs have the pattern: <Attribute>\s*<ID>
+            const startPattern = /<Attribute>\s*<ID>(\d+)<\/ID>/g;
+            const attrStarts = [];
+            let startMatch;
+            while ((startMatch = startPattern.exec(content)) !== null) {
+              attrStarts.push({ pos: startMatch.index, id: startMatch[1] });
+            }
+
+            // For each start, find the matching </Attribute> by counting open/close tags
+            for (let i = 0; i < attrStarts.length; i++) {
+              const startPos = attrStarts[i].pos;
+              const endPos = i + 1 < attrStarts.length ? attrStarts[i + 1].pos : content.length;
+
+              // Get the block for this attribute (up to next attribute or end)
+              let block = content.substring(startPos, endPos);
+
+              // Find proper closing tag by counting
+              let depth = 0;
+              let closePos = -1;
+              let searchPos = 0;
+              while (searchPos < block.length) {
+                const openTag = block.indexOf('<Attribute>', searchPos);
+                const closeTag = block.indexOf('</Attribute>', searchPos);
+
+                if (openTag !== -1 && (closeTag === -1 || openTag < closeTag)) {
+                  depth++;
+                  searchPos = openTag + 11;
+                } else if (closeTag !== -1) {
+                  depth--;
+                  if (depth === 0) {
+                    closePos = closeTag + 12;
+                    break;
+                  }
+                  searchPos = closeTag + 12;
+                } else {
+                  break;
+                }
+              }
+
+              if (closePos > 0) {
+                block = block.substring(0, closePos);
+              }
+
+              // Extract fields
+              const nameMatch = block.match(/<Name>([^<]+)<\/Name>/);
+              const requiredMatch = block.match(/<Required>(\d)<\/Required>/);
+              const descMatch = block.match(/<Description>([^<]*)<\/Description>/);
+              const isChildMatch = block.match(/<IsChild>(\d)<\/IsChild>/);
+
+              if (!nameMatch) continue;
+
+              const name = nameMatch[1];
+              const required = requiredMatch ? requiredMatch[1] : '0';
+              const description = descMatch ? descMatch[1] : '';
+              const isChild = isChildMatch ? isChildMatch[1] : '0';
+
+              // Skip child attributes and duplicates
+              if (isChild === '1' || seenNames.has(name)) continue;
+              seenNames.add(name);
+
+              const attr = {
+                id: attrStarts[i].id,
+                name,
+                required: required === '1',
+                description,
+                options: []
+              };
+
+              // Parse options
+              const optionsMatch = block.match(/<Options>([\s\S]*)<\/Options>/);
+              if (optionsMatch) {
+                // Extract Value/Title pairs from Option blocks
+                const optPattern = /<Option>[\s\S]*?<Value>([^<]+)<\/Value>[\s\S]*?<Title>([^<]+)<\/Title>/g;
+                let optMatch;
+                while ((optMatch = optPattern.exec(optionsMatch[1])) !== null) {
+                  attr.options.push({ value: optMatch[1], title: optMatch[2] });
+                }
+
+                // Sort country lists to put United States first
+                if (name.includes('cc') || name.includes('country')) {
+                  attr.options.sort((a, b) => {
+                    if (a.value === 'US') return -1;
+                    if (b.value === 'US') return 1;
+                    return a.title.localeCompare(b.title);
+                  });
+                }
+              }
+
+              attributes.push(attr);
+            }
+
+            resolve({
+              tld,
+              hasRequirements: attributes.some(a => a.required),
+              attributes,
+              requiredCount: attributes.filter(a => a.required).length
+            });
+          } catch (error) {
+            reject(error);
+          }
+        });
+      });
+
+      req.on('error', reject);
+      req.setTimeout(10000, () => {
+        req.destroy();
+        reject(new Error('Request timeout'));
+      });
+      req.end();
+    });
+  }
+
+  /**
+   * Helper to extract value from XML tag
+   */
+  extractXmlValue(xml, tag) {
+    const match = xml.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`));
+    return match ? match[1].trim() : '';
   }
 }
 

@@ -30,4 +30,5 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at);
 
 -- Update existing admin users to have appropriate role_level
-UPDATE users SET role_level = 5, role_name = 'superadmin' WHERE is_admin = true AND role_level = 0;
+-- Note: SUPERADMIN is level 4 per ROLE_LEVELS constant in auth.js
+UPDATE users SET role_level = 4, role_name = 'superadmin' WHERE is_admin = true AND role_level = 0;

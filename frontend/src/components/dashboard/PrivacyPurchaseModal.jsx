@@ -79,7 +79,7 @@ function PrivacyPaymentForm({ clientSecret, onSuccess, onCancel, domainName, amo
           ) : (
             <>
               <Lock className="w-4 h-4" />
-              Pay ${amount.toFixed(2)}
+              Pay ${(parseFloat(amount) || 0).toFixed(2)}
             </>
           )}
         </button>
@@ -103,14 +103,15 @@ export default function PrivacyPurchaseModal({ domain, onClose, onSuccess }) {
         // Get Stripe config
         const configRes = await fetch(`${API_URL}/stripe/config`);
         const config = await configRes.json();
+        console.log('[PrivacyPurchase] Stripe config:', config);
 
         if (!config.publishableKey) {
           throw new Error('Payment processing is not configured');
         }
 
-        if (!stripePromise) {
-          stripePromise = loadStripe(config.publishableKey);
-        }
+        // Always create fresh stripePromise to avoid stale key issues
+        console.log('[PrivacyPurchase] Loading Stripe with key:', config.publishableKey.substring(0, 20) + '...');
+        stripePromise = loadStripe(config.publishableKey);
 
         // Create privacy purchase payment intent
         const res = await fetch(`${API_URL}/stripe/privacy-purchase`, {
@@ -123,6 +124,12 @@ export default function PrivacyPurchaseModal({ domain, onClose, onSuccess }) {
         });
 
         const data = await res.json();
+        console.log('[PrivacyPurchase] API response:', {
+          ok: res.ok,
+          clientSecret: data.clientSecret ? data.clientSecret.substring(0, 30) + '...' : null,
+          amount: data.amount,
+          error: data.error
+        });
 
         if (!res.ok) {
           throw new Error(data.error || 'Failed to initialize payment');
@@ -132,7 +139,7 @@ export default function PrivacyPurchaseModal({ domain, onClose, onSuccess }) {
         setAmount(data.amount);
         setPrivacyStatus(data.privacyStatus);
       } catch (err) {
-        console.error('Error initializing privacy purchase:', err);
+        console.error('[PrivacyPurchase] Error initializing:', err);
         setError(err.message);
       } finally {
         setLoading(false);
@@ -268,7 +275,7 @@ export default function PrivacyPurchaseModal({ domain, onClose, onSuccess }) {
                   </div>
                   <div className="text-right">
                     <p className="text-2xl font-bold text-indigo-600 dark:text-indigo-400">
-                      ${amount.toFixed(2)}
+                      ${(parseFloat(amount) || 0).toFixed(2)}
                     </p>
                     <p className="text-xs text-slate-500 dark:text-slate-500">/year</p>
                   </div>
@@ -292,7 +299,12 @@ export default function PrivacyPurchaseModal({ domain, onClose, onSuccess }) {
                         variables: {
                           colorPrimary: '#4f46e5'
                         }
-                      }
+                      },
+                      loader: 'auto'
+                    }}
+                    onLoadError={(error) => {
+                      console.error('Stripe Elements load error:', error);
+                      setError(`Stripe error: ${error.message || 'Failed to load payment form'}`);
                     }}
                   >
                     <PrivacyPaymentForm

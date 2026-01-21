@@ -1,11 +1,12 @@
 const express = require('express');
+const crypto = require('crypto');
 const router = express.Router();
 const { authMiddleware } = require('../middleware/auth');
 
 // Generate order number
 function generateOrderNumber() {
   const timestamp = Date.now().toString(36).toUpperCase();
-  const random = crypto.randomBytes(3).toString(hex).toUpperCase();
+  const random = crypto.randomBytes(3).toString('hex').toUpperCase();
   return `WX-${timestamp}-${random}`;
 }
 
@@ -81,7 +82,7 @@ router.get('/:id', authMiddleware, async (req, res) => {
 // Create order from cart (checkout)
 router.post('/checkout', authMiddleware, async (req, res) => {
   const pool = req.app.locals.pool;
-  const { payment_intent_id, billing_address, registrant_contact } = req.body;
+  const { payment_intent_id, billing_address, registrant_contact, auto_renew = true, extended_attributes = {} } = req.body;
 
   try {
     // Validate registrant_contact for domain registrations
@@ -114,12 +115,12 @@ router.post('/checkout', authMiddleware, async (req, res) => {
     const tax = 0; // TODO: Calculate tax if applicable
     const total = subtotal + tax;
 
-    // Create order with registrant_contact
+    // Create order with registrant_contact, auto_renew preference, and extended attributes for ccTLDs
     const orderResult = await pool.query(
       `INSERT INTO orders (
         user_id, order_number, status, subtotal, tax, total,
-        stripe_payment_intent_id, payment_status, billing_address, registrant_contact
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        stripe_payment_intent_id, payment_status, billing_address, registrant_contact, auto_renew, extended_attributes
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
       RETURNING *`,
       [
         req.user.id,
@@ -131,7 +132,9 @@ router.post('/checkout', authMiddleware, async (req, res) => {
         payment_intent_id,
         'pending',
         JSON.stringify(billing_address || {}),
-        JSON.stringify(registrant_contact)
+        JSON.stringify(registrant_contact),
+        auto_renew,
+        JSON.stringify(extended_attributes || {})
       ]
     );
 

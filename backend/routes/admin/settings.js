@@ -5,6 +5,9 @@
 const express = require('express');
 const router = express.Router();
 const { logAudit, ROLE_LEVELS } = require('../../middleware/auth');
+const enom = require('../../services/enom');
+const stripeService = require('../../services/stripe');
+const emailService = require('../../services/email');
 
 // Default settings schema
 const DEFAULT_SETTINGS = {
@@ -17,8 +20,13 @@ const DEFAULT_SETTINGS = {
   registration_enabled: 'true',
   email_verification_required: 'false',
 
+  // API Mode settings
+  enom_test_mode: 'true',
+  stripe_test_mode: 'true',
+
   // Domain settings
   default_nameservers: 'ns1.worxtech.biz,ns2.worxtech.biz',
+  suspended_nameservers: 'ns1.suspended.worxtech.biz,ns2.suspended.worxtech.biz',
   auto_sync_enabled: 'true',
   sync_interval_hours: '24',
 
@@ -255,6 +263,252 @@ router.post('/maintenance', async (req, res) => {
   } catch (error) {
     console.error('Error toggling maintenance mode:', error);
     res.status(500).json({ error: 'Failed to toggle maintenance mode' });
+  }
+});
+
+// Get API modes (eNom and Stripe test/production status)
+router.get('/api-modes', async (req, res) => {
+  const pool = req.app.locals.pool;
+
+  try {
+    // Get current settings from database
+    const result = await pool.query(
+      "SELECT key, value FROM app_settings WHERE key IN ('enom_test_mode', 'stripe_test_mode')"
+    );
+
+    const settings = {};
+    for (const row of result.rows) {
+      settings[row.key] = row.value;
+    }
+
+    // Get actual service states
+    const enomMode = enom.getMode();
+    const stripeMode = stripeService.getMode();
+
+    res.json({
+      enom: {
+        testMode: settings.enom_test_mode !== 'false',
+        currentMode: enomMode.mode,
+        endpoint: enomMode.endpoint,
+        hasCredentials: enomMode.hasCredentials
+      },
+      stripe: {
+        testMode: settings.stripe_test_mode !== 'false',
+        currentMode: stripeMode.mode,
+        configured: stripeMode.configured
+      }
+    });
+  } catch (error) {
+    console.error('Error getting API modes:', error);
+    res.status(500).json({ error: 'Failed to get API modes' });
+  }
+});
+
+// Set API mode (eNom or Stripe)
+router.put('/api-modes', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const { enom_test_mode, stripe_test_mode } = req.body;
+
+  // Require super admin for API mode changes
+  if (req.user.role_level < ROLE_LEVELS.SUPERADMIN && !req.user.is_admin) {
+    return res.status(403).json({ error: 'Super admin access required' });
+  }
+
+  try {
+    const updates = [];
+
+    // Update eNom mode
+    if (enom_test_mode !== undefined) {
+      const enomTestMode = enom_test_mode === true || enom_test_mode === 'true';
+      await pool.query(
+        `INSERT INTO app_settings (key, value, updated_at)
+         VALUES ('enom_test_mode', $1, CURRENT_TIMESTAMP)
+         ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = CURRENT_TIMESTAMP`,
+        [enomTestMode ? 'true' : 'false']
+      );
+
+      // Update the actual service
+      const newMode = enom.setMode(enomTestMode ? 'test' : 'production');
+      updates.push({ service: 'enom', mode: newMode.mode, endpoint: newMode.endpoint });
+    }
+
+    // Update Stripe mode
+    if (stripe_test_mode !== undefined) {
+      const stripeTestMode = stripe_test_mode === true || stripe_test_mode === 'true';
+      await pool.query(
+        `INSERT INTO app_settings (key, value, updated_at)
+         VALUES ('stripe_test_mode', $1, CURRENT_TIMESTAMP)
+         ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = CURRENT_TIMESTAMP`,
+        [stripeTestMode ? 'true' : 'false']
+      );
+
+      // Update the actual service
+      const newMode = stripeService.setMode(stripeTestMode ? 'test' : 'production');
+      updates.push({ service: 'stripe', mode: newMode.mode, configured: newMode.configured });
+    }
+
+    await logAudit(pool, req.user.id, 'update_api_modes', 'system', null, null, { enom_test_mode, stripe_test_mode }, req);
+
+    res.json({
+      success: true,
+      updates,
+      warning: 'API mode changes take effect immediately. Domains registered in one mode cannot be managed in the other mode.'
+    });
+  } catch (error) {
+    console.error('Error updating API modes:', error);
+    res.status(500).json({ error: 'Failed to update API modes' });
+  }
+});
+
+// ========== EMAIL TEMPLATE MANAGEMENT ==========
+
+// List all email templates
+router.get('/email-templates', async (req, res) => {
+  const pool = req.app.locals.pool;
+
+  try {
+    const result = await pool.query(
+      'SELECT * FROM email_templates ORDER BY name'
+    );
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching email templates:', error);
+    res.status(500).json({ error: 'Failed to fetch email templates' });
+  }
+});
+
+// Get single email template
+router.get('/email-templates/:id', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const templateId = parseInt(req.params.id);
+
+  try {
+    const result = await pool.query(
+      'SELECT * FROM email_templates WHERE id = $1',
+      [templateId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Template not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error fetching email template:', error);
+    res.status(500).json({ error: 'Failed to fetch email template' });
+  }
+});
+
+// Update email template
+router.put('/email-templates/:id', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const templateId = parseInt(req.params.id);
+  const { name, description, subject, html_content, is_active } = req.body;
+
+  try {
+    const currentTemplate = await pool.query('SELECT * FROM email_templates WHERE id = $1', [templateId]);
+    if (currentTemplate.rows.length === 0) {
+      return res.status(404).json({ error: 'Template not found' });
+    }
+
+    const result = await pool.query(
+      `UPDATE email_templates SET
+        name = COALESCE($1, name),
+        description = COALESCE($2, description),
+        subject = COALESCE($3, subject),
+        html_content = COALESCE($4, html_content),
+        is_active = COALESCE($5, is_active),
+        updated_at = CURRENT_TIMESTAMP
+       WHERE id = $6
+       RETURNING *`,
+      [name, description, subject, html_content, is_active, templateId]
+    );
+
+    // Clear the email service cache so it picks up the new template
+    emailService.clearCache();
+
+    await logAudit(pool, req.user.id, 'update_email_template', 'email_template', templateId,
+      { subject: currentTemplate.rows[0].subject }, { subject: result.rows[0].subject }, req);
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error updating email template:', error);
+    res.status(500).json({ error: 'Failed to update email template' });
+  }
+});
+
+// Send test email
+router.post('/email/test', async (req, res) => {
+  const { to } = req.body;
+
+  if (!to) {
+    return res.status(400).json({ error: 'Recipient email required' });
+  }
+
+  try {
+    const result = await emailService.sendTestEmail(to);
+    res.json(result);
+  } catch (error) {
+    console.error('Error sending test email:', error);
+    res.status(500).json({ error: 'Failed to send test email' });
+  }
+});
+
+// Preview email template with sample data
+router.post('/email-templates/:id/preview', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const templateId = parseInt(req.params.id);
+  const { sample_data = {} } = req.body;
+
+  try {
+    const result = await pool.query(
+      'SELECT * FROM email_templates WHERE id = $1',
+      [templateId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Template not found' });
+    }
+
+    const template = result.rows[0];
+
+    // Replace variables with sample data or placeholders
+    const variables = template.variables || [];
+    const data = {};
+    for (const v of variables) {
+      data[v] = sample_data[v] || `{{${v}}}`;
+    }
+
+    const subject = emailService.replaceVariables(template.subject, data);
+    const html = emailService.getBaseWrapper(emailService.replaceVariables(template.html_content, data));
+
+    res.json({
+      subject,
+      html,
+      variables: template.variables
+    });
+  } catch (error) {
+    console.error('Error previewing email template:', error);
+    res.status(500).json({ error: 'Failed to preview email template' });
+  }
+});
+
+// Get email service status
+router.get('/email/status', async (req, res) => {
+  try {
+    const hasTransporter = !!emailService.transporter;
+    const config = {
+      host: process.env.SMTP_HOST || 'smtp.gmail.com',
+      port: process.env.SMTP_PORT || '587',
+      user: process.env.SMTP_USER || 'support@worxtech.biz',
+      from: emailService.from,
+      fromName: emailService.fromName,
+      connected: hasTransporter
+    };
+    res.json(config);
+  } catch (error) {
+    console.error('Error getting email status:', error);
+    res.status(500).json({ error: 'Failed to get email status' });
   }
 });
 

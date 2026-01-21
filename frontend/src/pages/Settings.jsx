@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, Lock, Bell, Palette, Save, Loader2 } from 'lucide-react';
+import { User, Lock, Bell, Palette, Save, Loader2, CreditCard, Trash2, Star } from 'lucide-react';
 import { useAuth, useTheme } from '../App';
 import { API_URL } from '../config/api';
 import toast from 'react-hot-toast';
@@ -32,6 +32,29 @@ export default function SettingsPage() {
     confirm_password: ''
   });
 
+  // Payment methods state
+  const [paymentMethods, setPaymentMethods] = useState([]);
+  const [loadingPaymentMethods, setLoadingPaymentMethods] = useState(false);
+
+  // Fetch payment methods
+  const fetchPaymentMethods = async () => {
+    if (!token) return;
+    setLoadingPaymentMethods(true);
+    try {
+      const res = await fetch(`${API_URL}/stripe/payment-methods`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setPaymentMethods(data.paymentMethods || []);
+      }
+    } catch (error) {
+      console.error('Failed to fetch payment methods:', error);
+    } finally {
+      setLoadingPaymentMethods(false);
+    }
+  };
+
   // Load profile data fresh on mount
   useEffect(() => {
     if (user) {
@@ -49,6 +72,13 @@ export default function SettingsPage() {
       });
     }
   }, [user]);
+
+  // Load payment methods when tab changes to billing
+  useEffect(() => {
+    if (activeTab === 'billing' && token) {
+      fetchPaymentMethods();
+    }
+  }, [activeTab, token]);
 
   const handleProfileSave = async (e) => {
     e.preventDefault();
@@ -138,9 +168,64 @@ export default function SettingsPage() {
     }
   };
 
+  // Set payment method as default
+  const handleSetDefaultPaymentMethod = async (pmId) => {
+    try {
+      const res = await fetch(`${API_URL}/stripe/payment-methods/${pmId}/default`, {
+        method: 'PUT',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        toast.success('Default payment method updated');
+        fetchPaymentMethods();
+      } else {
+        const error = await res.json();
+        toast.error(error.error || 'Failed to update default payment method');
+      }
+    } catch (error) {
+      toast.error('Failed to update default payment method');
+    }
+  };
+
+  // Delete payment method
+  const handleDeletePaymentMethod = async (pmId) => {
+    if (!window.confirm('Are you sure you want to remove this payment method?')) return;
+
+    try {
+      const res = await fetch(`${API_URL}/stripe/payment-methods/${pmId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        toast.success('Payment method removed');
+        fetchPaymentMethods();
+      } else {
+        const error = await res.json();
+        toast.error(error.error || 'Failed to remove payment method');
+      }
+    } catch (error) {
+      toast.error('Failed to remove payment method');
+    }
+  };
+
+  // Get card brand icon/display
+  const getCardBrandDisplay = (brand) => {
+    const brands = {
+      visa: 'Visa',
+      mastercard: 'Mastercard',
+      amex: 'American Express',
+      discover: 'Discover',
+      diners: 'Diners Club',
+      jcb: 'JCB',
+      unionpay: 'UnionPay'
+    };
+    return brands[brand?.toLowerCase()] || brand || 'Card';
+  };
+
   const tabs = [
     { id: 'profile', label: 'Profile', icon: User },
     { id: 'security', label: 'Security', icon: Lock },
+    { id: 'billing', label: 'Billing', icon: CreditCard },
     { id: 'appearance', label: 'Appearance', icon: Palette }
   ];
 
@@ -364,6 +449,92 @@ export default function SettingsPage() {
                 </button>
               </div>
             </form>
+          )}
+
+          {/* Billing Tab */}
+          {activeTab === 'billing' && (
+            <div className="space-y-6">
+              <div>
+                <h3 className="text-lg font-medium text-slate-900 dark:text-white mb-2">Saved Payment Methods</h3>
+                <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">
+                  Your saved payment methods are used for domain renewals when auto-renew is enabled.
+                </p>
+
+                {loadingPaymentMethods ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="w-6 h-6 animate-spin text-indigo-500" />
+                  </div>
+                ) : paymentMethods.length === 0 ? (
+                  <div className="bg-slate-50 dark:bg-slate-700/50 rounded-lg p-6 text-center">
+                    <CreditCard className="w-12 h-12 text-slate-400 mx-auto mb-3" />
+                    <h4 className="text-lg font-medium text-slate-900 dark:text-white mb-2">No Payment Methods</h4>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">
+                      Your payment method will be saved automatically when you make a purchase.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {paymentMethods.map((pm) => (
+                      <div
+                        key={pm.id}
+                        className={`flex items-center justify-between p-4 rounded-lg border ${
+                          pm.isDefault
+                            ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20'
+                            : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800'
+                        }`}
+                      >
+                        <div className="flex items-center gap-4">
+                          <div className="w-12 h-8 bg-slate-200 dark:bg-slate-600 rounded flex items-center justify-center">
+                            <CreditCard className="w-5 h-5 text-slate-600 dark:text-slate-300" />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium text-slate-900 dark:text-white">
+                                {getCardBrandDisplay(pm.brand)} ending in {pm.last4}
+                              </span>
+                              {pm.isDefault && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 text-xs font-medium rounded-full">
+                                  <Star className="w-3 h-3" />
+                                  Default
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-sm text-slate-500 dark:text-slate-400">
+                              Expires {pm.expMonth}/{pm.expYear}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {!pm.isDefault && (
+                            <button
+                              onClick={() => handleSetDefaultPaymentMethod(pm.id)}
+                              className="text-sm text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300"
+                            >
+                              Set as default
+                            </button>
+                          )}
+                          <button
+                            onClick={() => handleDeletePaymentMethod(pm.id)}
+                            className="p-2 text-slate-400 hover:text-red-500 dark:hover:text-red-400 transition-colors"
+                            title="Remove payment method"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="mt-6 p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
+                  <h4 className="font-medium text-amber-800 dark:text-amber-200 mb-1">About Auto-Renewal</h4>
+                  <p className="text-sm text-amber-700 dark:text-amber-300">
+                    When auto-renew is enabled for a domain, we'll automatically charge your default payment method
+                    30 days before the domain expires. You'll receive an email notification before the charge.
+                  </p>
+                </div>
+              </div>
+            </div>
           )}
 
           {/* Appearance Tab */}

@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Globe, RefreshCw, Settings, AlertTriangle, Check, Clock, Loader2, X, Server, Shield, Lock, Unlock, Key, ShoppingCart, Users, Search, ChevronLeft, ChevronRight, Eye } from 'lucide-react';
+import { Globe, RefreshCw, Settings, AlertTriangle, Check, Clock, Loader2, X, Server, Shield, Lock, Unlock, Key, ShoppingCart, Users, Search, ChevronLeft, ChevronRight, Eye, CreditCard, Trash2, Plus } from 'lucide-react';
 import { useAuth, useCart } from '../../App';
 import { API_URL } from '../../config/api';
 import toast from 'react-hot-toast';
 import DomainContactsPanel from './DomainContactsPanel';
 import PrivacyPurchaseModal from './PrivacyPurchaseModal';
+import AutoRenewSetupModal from './AutoRenewSetupModal';
 
 function Dashboard() {
   const { token } = useAuth();
@@ -36,6 +37,8 @@ function Dashboard() {
   const [togglingLock, setTogglingLock] = useState(false);
   const [showContacts, setShowContacts] = useState(false);
   const [privacyPurchaseDomain, setPrivacyPurchaseDomain] = useState(null);
+  const [autoRenewSetupDomain, setAutoRenewSetupDomain] = useState(null);
+  const [renewalYears, setRenewalYears] = useState(1);
 
   const fetchDomains = useCallback(async () => {
     setLoading(true);
@@ -159,9 +162,17 @@ function Dashboard() {
 
   const handleToggleAutoRenew = async () => {
     if (!selectedDomain || togglingAutoRenew) return;
+
+    const newValue = !selectedDomain.auto_renew;
+
+    // If turning ON, show setup modal to collect payment method
+    if (newValue && !selectedDomain.auto_renew_payment_method_id) {
+      setAutoRenewSetupDomain(selectedDomain);
+      return;
+    }
+
     setTogglingAutoRenew(true);
     try {
-      const newValue = !selectedDomain.auto_renew;
       const res = await fetch(`${API_URL}/domains/${selectedDomain.id}/autorenew`, {
         method: 'PUT',
         headers: {
@@ -179,13 +190,36 @@ function Dashboard() {
         ));
       } else {
         const data = await res.json();
-        toast.error(data.error || 'Failed to update');
+        // If payment method required, show the setup modal
+        if (res.status === 402 && data.code === 'PAYMENT_METHOD_REQUIRED') {
+          setAutoRenewSetupDomain(selectedDomain);
+        } else {
+          toast.error(data.error || 'Failed to update');
+        }
       }
     } catch (err) {
       toast.error("Connection error");
     } finally {
       setTogglingAutoRenew(false);
     }
+  };
+
+  const handleAutoRenewSetupSuccess = (data) => {
+    if (autoRenewSetupDomain) {
+      // Update local state
+      setSelectedDomain(prev =>
+        prev?.id === autoRenewSetupDomain.id
+          ? { ...prev, auto_renew: true, auto_renew_payment_method_id: data.paymentMethod?.id }
+          : prev
+      );
+      setDomains(prev => prev.map(d =>
+        d.id === autoRenewSetupDomain.id
+          ? { ...d, auto_renew: true, auto_renew_payment_method_id: data.paymentMethod?.id }
+          : d
+      ));
+      toast.success(`Auto-renew enabled for ${autoRenewSetupDomain.domain_name}.${autoRenewSetupDomain.tld}`);
+    }
+    setAutoRenewSetupDomain(null);
   };
 
   const handleTogglePrivacy = async () => {
@@ -246,14 +280,17 @@ function Dashboard() {
     }
   };
 
-  const handlePrivacyPurchaseSuccess = () => {
+  const handlePrivacyPurchaseSuccess = async () => {
     if (privacyPurchaseDomain) {
+      // Update local state immediately for responsiveness
       setSelectedDomain(prev =>
         prev?.id === privacyPurchaseDomain.id ? { ...prev, privacy_enabled: true } : prev
       );
       setDomains(prev => prev.map(d =>
         d.id === privacyPurchaseDomain.id ? { ...d, privacy_enabled: true } : d
       ));
+      // Refresh domain details from server to get accurate status
+      await fetchDomainDetails(privacyPurchaseDomain);
     }
     setPrivacyPurchaseDomain(null);
   };
@@ -319,17 +356,15 @@ function Dashboard() {
 
   const handleAddRenewalToCart = () => {
     if (!selectedDomain) return;
-    const parts = selectedDomain.domain_name.split('.');
-    const tld = parts.pop();
-    const sld = parts.join('.');
+    // domain_name is just the SLD, tld is in separate column
     addToCart({
       item_type: 'renew',
-      domain_name: sld,
-      tld: tld,
-      years: 1,
+      domain_name: selectedDomain.domain_name,
+      tld: selectedDomain.tld,
+      years: renewalYears,
       options: {}
     });
-    toast.success('Renewal added to cart');
+    setRenewalYears(1); // Reset after adding
   };
 
   const StatusBadge = ({ status }) => {
@@ -528,7 +563,7 @@ function Dashboard() {
                               <Globe className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
                             </div>
                             <span className="font-mono font-medium text-slate-900 dark:text-slate-100">
-                              {domain.domain_name}
+                              {domain.domain_name}.{domain.tld}
                             </span>
                           </div>
                         </td>
@@ -603,7 +638,7 @@ function Dashboard() {
                 </div>
                 <div>
                   <h2 className="text-lg font-semibold text-white font-mono">
-                    {selectedDomain.domain_name}
+                    {selectedDomain.domain_name}.{selectedDomain.tld}
                   </h2>
                   <p className="text-sm text-white/80">
                     Domain Management
@@ -720,13 +755,24 @@ function Dashboard() {
                   </div>
 
                   {/* Renew Button */}
-                  <button
-                    onClick={handleAddRenewalToCart}
-                    className="w-full flex items-center justify-center gap-2 p-4 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-400 rounded-xl border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 dark:hover:bg-indigo-900/30 transition-colors"
-                  >
-                    <ShoppingCart className="w-5 h-5" />
-                    <span className="font-medium">Add Renewal to Cart</span>
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <select
+                      value={renewalYears}
+                      onChange={(e) => setRenewalYears(parseInt(e.target.value))}
+                      className="bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-3 text-sm font-medium text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500"
+                    >
+                      {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(y => (
+                        <option key={y} value={y}>{y} year{y > 1 ? 's' : ''}</option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={handleAddRenewalToCart}
+                      className="flex-1 flex items-center justify-center gap-2 p-3 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-400 rounded-xl border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 dark:hover:bg-indigo-900/30 transition-colors"
+                    >
+                      <ShoppingCart className="w-5 h-5" />
+                      <span className="font-medium">Add Renewal to Cart</span>
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -736,30 +782,56 @@ function Dashboard() {
                   <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-200 dark:border-blue-800">
                     <p className="text-sm text-blue-700 dark:text-blue-400">
                       <strong>Note:</strong> Changes to nameservers may take up to 48 hours to propagate globally.
-                      At least 2 nameservers are required.
+                      At least 2 nameservers are required, up to 13 allowed.
                     </p>
                   </div>
 
                   <div className="space-y-3">
                     {nsInputs.map((ns, idx) => (
-                      <div key={idx}>
-                        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-                          Nameserver {idx + 1} {idx < 2 && <span className="text-red-500">*</span>}
-                        </label>
-                        <input
-                          type="text"
-                          value={ns}
-                          onChange={(e) => {
-                            const newNs = [...nsInputs];
-                            newNs[idx] = e.target.value;
-                            setNsInputs(newNs);
-                          }}
-                          placeholder={`ns${idx + 1}.example.com`}
-                          className="input w-full font-mono"
-                        />
+                      <div key={idx} className="flex gap-2 items-end">
+                        <div className="flex-1">
+                          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                            Nameserver {idx + 1} {idx < 2 && <span className="text-red-500">*</span>}
+                          </label>
+                          <input
+                            type="text"
+                            value={ns}
+                            onChange={(e) => {
+                              const newNs = [...nsInputs];
+                              newNs[idx] = e.target.value;
+                              setNsInputs(newNs);
+                            }}
+                            placeholder={`ns${idx + 1}.example.com`}
+                            className="input w-full font-mono"
+                          />
+                        </div>
+                        {idx >= 2 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const newNs = nsInputs.filter((_, i) => i !== idx);
+                              setNsInputs(newNs);
+                            }}
+                            className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors mb-0.5"
+                            title="Remove nameserver"
+                          >
+                            <Trash2 className="w-5 h-5" />
+                          </button>
+                        )}
                       </div>
                     ))}
                   </div>
+
+                  {nsInputs.length < 13 && (
+                    <button
+                      type="button"
+                      onClick={() => setNsInputs([...nsInputs, ''])}
+                      className="flex items-center gap-2 text-sm text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 transition-colors"
+                    >
+                      <Plus className="w-4 h-4" />
+                      Add Nameserver
+                    </button>
+                  )}
 
                   <button
                     onClick={handleSaveNameservers}
@@ -782,21 +854,52 @@ function Dashboard() {
               {activeTab === 'settings' && (
                 <div className="space-y-4">
                   {/* Auto-Renew */}
-                  <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <RefreshCw className="w-4 h-4 text-slate-500" />
-                        <span className="font-medium text-slate-900 dark:text-slate-100">Auto-Renew</span>
+                  <div className="p-4 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <RefreshCw className="w-4 h-4 text-slate-500" />
+                          <span className="font-medium text-slate-900 dark:text-slate-100">Auto-Renew</span>
+                        </div>
+                        <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+                          Automatically renew this domain before expiration
+                        </p>
                       </div>
-                      <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-                        Automatically renew this domain before expiration
-                      </p>
+                      <ToggleSwitch
+                        enabled={selectedDomain.auto_renew}
+                        onChange={handleToggleAutoRenew}
+                        loading={togglingAutoRenew}
+                      />
                     </div>
-                    <ToggleSwitch
-                      enabled={selectedDomain.auto_renew}
-                      onChange={handleToggleAutoRenew}
-                      loading={togglingAutoRenew}
-                    />
+                    {/* Show payment method info if auto-renew enabled */}
+                    {selectedDomain.auto_renew && selectedDomain.auto_renew_payment_method_id && (
+                      <div className="mt-3 pt-3 border-t border-slate-200 dark:border-slate-600">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+                            <CreditCard className="w-4 h-4" />
+                            <span>Payment method saved for renewal</span>
+                          </div>
+                          <button
+                            onClick={() => setAutoRenewSetupDomain(selectedDomain)}
+                            className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline"
+                          >
+                            Update card
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    {/* Prompt to set up payment if auto-renew but no payment method */}
+                    {selectedDomain.auto_renew && !selectedDomain.auto_renew_payment_method_id && (
+                      <div className="mt-3 pt-3 border-t border-slate-200 dark:border-slate-600">
+                        <button
+                          onClick={() => setAutoRenewSetupDomain(selectedDomain)}
+                          className="flex items-center gap-2 text-sm text-amber-600 dark:text-amber-400 hover:underline"
+                        >
+                          <AlertTriangle className="w-4 h-4" />
+                          Add payment method for auto-renewal
+                        </button>
+                      </div>
+                    )}
                   </div>
 
                   {/* WHOIS Privacy */}
@@ -912,6 +1015,14 @@ function Dashboard() {
           onSuccess={handlePrivacyPurchaseSuccess}
         />
       )}
+
+      {/* Auto-Renew Setup Modal */}
+      <AutoRenewSetupModal
+        isOpen={!!autoRenewSetupDomain}
+        onClose={() => setAutoRenewSetupDomain(null)}
+        domain={autoRenewSetupDomain}
+        onSuccess={handleAutoRenewSetupSuccess}
+      />
     </div>
   );
 }

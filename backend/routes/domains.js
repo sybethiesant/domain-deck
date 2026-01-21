@@ -1,13 +1,37 @@
 const express = require('express');
 const router = express.Router();
-const { authMiddleware } = require('../middleware/auth');
+const { authMiddleware, adminMiddleware } = require('../middleware/auth');
 const enom = require('../services/enom');
+const stripeService = require('../services/stripe');
 // Nameserver validation - security fix
 function isValidNameserver(ns) {
   if (!ns || typeof ns !== 'string') return false;
   // Must be valid hostname format (RFC 1123)
   const nsRegex = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
   return nsRegex.test(ns) && ns.length <= 253 && ns.includes('.');
+}
+
+// Helper to check domain ownership, suspension status, and eNom mode
+async function checkDomainAccess(pool, domainId, userId, options = {}) {
+  const { allowSuspended = false } = options;
+
+  const result = await pool.query('SELECT * FROM domains WHERE id = $1', [domainId]);
+  if (result.rows.length === 0) {
+    return { error: 'Domain not found', status: 404 };
+  }
+  const domain = result.rows[0];
+  if (domain.user_id !== userId) {
+    return { error: 'Domain not found', status: 404 };
+  }
+  if (!allowSuspended && domain.status === 'suspended') {
+    return { error: 'This domain is suspended. Please contact support for assistance.', status: 403 };
+  }
+
+  // Return the domain's eNom mode so it can be passed to API calls
+  // Operations will use the domain's mode, not the global mode
+  domain.enomMode = domain.enom_mode || 'test';
+
+  return { domain };
 }
 
 
@@ -29,6 +53,44 @@ router.get('/pricing', async (req, res) => {
   } catch (error) {
     console.error('Error fetching pricing:', error);
     res.status(500).json({ error: 'Failed to fetch pricing' });
+  }
+});
+
+// Get extended attributes/requirements for a TLD
+// Some TLDs (especially ccTLDs) require additional information
+router.get('/tld-requirements/:tld', async (req, res) => {
+  const { tld } = req.params;
+
+  try {
+    const requirements = await enom.getExtendedAttributes(tld);
+    res.json(requirements);
+  } catch (error) {
+    console.error('Error fetching TLD requirements:', error);
+    res.status(500).json({ error: 'Failed to fetch TLD requirements' });
+  }
+});
+
+// Get requirements for multiple TLDs at once (for cart)
+router.post('/tld-requirements', async (req, res) => {
+  const { tlds } = req.body;
+
+  if (!Array.isArray(tlds) || tlds.length === 0) {
+    return res.status(400).json({ error: 'tlds array required' });
+  }
+
+  try {
+    const results = {};
+    for (const tld of [...new Set(tlds)]) { // Dedupe
+      try {
+        results[tld] = await enom.getExtendedAttributes(tld);
+      } catch (e) {
+        results[tld] = { tld, hasRequirements: false, attributes: [], error: e.message };
+      }
+    }
+    res.json(results);
+  } catch (error) {
+    console.error('Error fetching TLD requirements:', error);
+    res.status(500).json({ error: 'Failed to fetch TLD requirements' });
   }
 });
 
@@ -220,7 +282,7 @@ router.get('/', authMiddleware, async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT id, domain_name, tld, status, registration_date, expiration_date,
-              auto_renew, privacy_enabled, lock_status, nameservers
+              auto_renew, privacy_enabled, lock_status, nameservers, enom_mode
        FROM domains
        WHERE user_id = $1
        ORDER BY expiration_date ASC`,
@@ -256,9 +318,8 @@ router.get('/:id', authMiddleware, async (req, res) => {
 
     // Get live data from eNom
     const domain = result.rows[0];
-    const parts = domain.domain_name.split('.');
-    const tld = parts.pop();
-    const sld = parts.join('.');
+    const sld = domain.domain_name;
+    const tld = domain.tld;
 
     try {
       const enomInfo = await enom.getDomainInfo(sld, tld);
@@ -322,23 +383,18 @@ router.put('/:id/nameservers', authMiddleware, async (req, res) => {
   }
 
   try {
-    // Verify ownership
-    const domainResult = await pool.query(
-      'SELECT * FROM domains WHERE id = $1 AND user_id = $2',
-      [domainId, req.user.id]
-    );
-
-    if (domainResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Domain not found' });
+    // Verify ownership and check if suspended
+    const access = await checkDomainAccess(pool, domainId, req.user.id);
+    if (access.error) {
+      return res.status(access.status).json({ error: access.error });
     }
 
-    const domain = domainResult.rows[0];
-    const parts = domain.domain_name.split('.');
-    const tld = parts.pop();
-    const sld = parts.join('.');
+    const domain = access.domain;
+    const sld = domain.domain_name;
+    const tld = domain.tld;
 
-    // Call eNom API to update nameservers
-    await enom.updateNameservers(sld, tld, nameservers);
+    // Call eNom API to update nameservers (use domain's mode)
+    await enom.updateNameservers(sld, tld, nameservers, { mode: domain.enomMode });
 
     // Update local database
     await pool.query(
@@ -353,16 +409,240 @@ router.put('/:id/nameservers', authMiddleware, async (req, res) => {
   }
 });
 
-// Toggle auto-renew
+// Toggle auto-renew (simple toggle - use setup-auto-renew for payment method setup)
 router.put('/:id/autorenew', authMiddleware, async (req, res) => {
   const pool = req.app.locals.pool;
   const domainId = parseInt(req.params.id);
   const { auto_renew } = req.body;
 
   try {
-    // Verify ownership and get domain
+    // Verify ownership and check if suspended
+    const access = await checkDomainAccess(pool, domainId, req.user.id);
+    if (access.error) {
+      return res.status(access.status).json({ error: access.error });
+    }
+
+    const domain = access.domain;
+    const sld = domain.domain_name;
+    const tld = domain.tld;
+
+    // If turning OFF auto-renew, just update the database (no payment method needed)
+    if (!auto_renew) {
+      // Call eNom API to update auto-renew (use domain's mode)
+      await enom.setAutoRenew(sld, tld, false, { mode: domain.enomMode });
+
+      const result = await pool.query(
+        `UPDATE domains SET auto_renew = false, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1
+         RETURNING id, domain_name, auto_renew, auto_renew_payment_method_id`,
+        [domainId]
+      );
+
+      return res.json(result.rows[0]);
+    }
+
+    // If turning ON auto-renew, check if payment method exists
+    if (!domain.auto_renew_payment_method_id) {
+      // Return a signal that payment setup is required
+      return res.status(402).json({
+        error: 'Payment method required',
+        code: 'PAYMENT_METHOD_REQUIRED',
+        message: 'A payment method must be set up for auto-renewal. Use /setup-auto-renew to add one.',
+        domainId: domain.id,
+        domainName: `${domain.domain_name}.${domain.tld}`
+      });
+    }
+
+    // Payment method exists, enable auto-renew (use domain's mode)
+    await enom.setAutoRenew(sld, tld, true, { mode: domain.enomMode });
+
+    const result = await pool.query(
+      `UPDATE domains SET auto_renew = true, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1
+       RETURNING id, domain_name, auto_renew, auto_renew_payment_method_id`,
+      [domainId]
+    );
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error updating auto-renew:', error);
+    res.status(500).json({ error: 'Failed to update auto-renew setting' });
+  }
+});
+
+// Create Setup Intent for auto-renew payment method (no charge)
+router.post('/:id/setup-auto-renew', authMiddleware, async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+
+  try {
+    // Verify ownership and check if suspended
+    const access = await checkDomainAccess(pool, domainId, req.user.id);
+    if (access.error) {
+      return res.status(access.status).json({ error: access.error });
+    }
+
+    const domain = access.domain;
+
+    // Get or create Stripe customer for this user
+    const userResult = await pool.query(
+      'SELECT stripe_customer_id, email, full_name FROM users WHERE id = $1',
+      [req.user.id]
+    );
+
+    let customerId = userResult.rows[0].stripe_customer_id;
+
+    if (!customerId) {
+      // Create new Stripe customer
+      const customer = await stripeService.createCustomer({
+        email: userResult.rows[0].email,
+        name: userResult.rows[0].full_name,
+        metadata: {
+          userId: req.user.id.toString()
+        }
+      });
+      customerId = customer.id;
+
+      // Save customer ID
+      await pool.query(
+        'UPDATE users SET stripe_customer_id = $1 WHERE id = $2',
+        [customerId, req.user.id]
+      );
+    }
+
+    // Create Setup Intent (validates payment method without charging)
+    // Only allow payment methods that support off-session charges (auto-renewal)
+    const setupIntent = await stripeService.createSetupIntent({
+      customer: customerId,
+      payment_method_types: ['card', 'link', 'cashapp', 'amazon_pay'],
+      usage: 'off_session', // Explicitly indicate this will be used for future off-session payments
+      metadata: {
+        userId: req.user.id.toString(),
+        domainId: domainId.toString(),
+        domainName: `${domain.domain_name}.${domain.tld}`,
+        purpose: 'auto_renew'
+      }
+    });
+
+    res.json({
+      clientSecret: setupIntent.client_secret,
+      setupIntentId: setupIntent.id,
+      domainId: domain.id,
+      domainName: `${domain.domain_name}.${domain.tld}`
+    });
+  } catch (error) {
+    console.error('Error creating setup intent:', error);
+    res.status(500).json({ error: 'Failed to initialize payment setup' });
+  }
+});
+
+// Confirm auto-renew setup after successful Setup Intent
+router.post('/:id/confirm-auto-renew', authMiddleware, async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+  const { setup_intent_id, payment_method_id } = req.body;
+
+  if (!setup_intent_id && !payment_method_id) {
+    return res.status(400).json({ error: 'setup_intent_id or payment_method_id required' });
+  }
+
+  try {
+    // Verify ownership and check if suspended
+    const access = await checkDomainAccess(pool, domainId, req.user.id);
+    if (access.error) {
+      return res.status(access.status).json({ error: access.error });
+    }
+
+    const domain = access.domain;
+    const sld = domain.domain_name;
+    const tld = domain.tld;
+
+    let paymentMethodId = payment_method_id;
+
+    // If setup_intent_id provided, retrieve the payment method from it
+    if (setup_intent_id) {
+      const setupIntent = await stripeService.retrieveSetupIntent(setup_intent_id);
+
+      if (setupIntent.status !== 'succeeded') {
+        return res.status(400).json({
+          error: 'Setup Intent not completed',
+          status: setupIntent.status
+        });
+      }
+
+      // Verify the setup intent belongs to this domain
+      if (setupIntent.metadata.domainId !== domainId.toString()) {
+        return res.status(400).json({ error: 'Setup Intent does not match this domain' });
+      }
+
+      paymentMethodId = setupIntent.payment_method;
+    }
+
+    if (!paymentMethodId) {
+      return res.status(400).json({ error: 'No payment method found' });
+    }
+
+    // Get payment method details for display
+    const paymentMethod = await stripeService.retrievePaymentMethod(paymentMethodId);
+
+    // Update eNom auto-renew setting (use domain's mode)
+    await enom.setAutoRenew(sld, tld, true, { mode: domain.enomMode });
+
+    // Save payment method to domain and enable auto-renew
+    const result = await pool.query(
+      `UPDATE domains SET
+        auto_renew = true,
+        auto_renew_payment_method_id = $1,
+        updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2
+       RETURNING id, domain_name, tld, auto_renew, auto_renew_payment_method_id`,
+      [paymentMethodId, domainId]
+    );
+
+    // Log activity
+    await pool.query(
+      `INSERT INTO activity_logs (user_id, action, entity_type, entity_id, details)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [
+        req.user.id,
+        'auto_renew_setup',
+        'domain',
+        domainId,
+        JSON.stringify({
+          domain: `${domain.domain_name}.${domain.tld}`,
+          paymentMethodLast4: paymentMethod.card?.last4,
+          paymentMethodBrand: paymentMethod.card?.brand
+        })
+      ]
+    );
+
+    res.json({
+      success: true,
+      domain: result.rows[0],
+      paymentMethod: {
+        id: paymentMethodId,
+        brand: paymentMethod.card?.brand,
+        last4: paymentMethod.card?.last4,
+        expMonth: paymentMethod.card?.exp_month,
+        expYear: paymentMethod.card?.exp_year
+      },
+      message: `Auto-renewal enabled for ${domain.domain_name}.${domain.tld}. Your card will be charged when the domain is due for renewal.`
+    });
+  } catch (error) {
+    console.error('Error confirming auto-renew setup:', error);
+    res.status(500).json({ error: 'Failed to confirm auto-renew setup' });
+  }
+});
+
+// Get auto-renew payment method details
+router.get('/:id/auto-renew-status', authMiddleware, async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+
+  try {
+    // Verify ownership
     const domainResult = await pool.query(
-      'SELECT * FROM domains WHERE id = $1 AND user_id = $2',
+      'SELECT id, domain_name, tld, auto_renew, auto_renew_payment_method_id, expiration_date FROM domains WHERE id = $1 AND user_id = $2',
       [domainId, req.user.id]
     );
 
@@ -371,25 +651,83 @@ router.put('/:id/autorenew', authMiddleware, async (req, res) => {
     }
 
     const domain = domainResult.rows[0];
-    const parts = domain.domain_name.split('.');
-    const tld = parts.pop();
-    const sld = parts.join('.');
+    let paymentMethod = null;
 
-    // Call eNom API to update auto-renew
-    await enom.setAutoRenew(sld, tld, !!auto_renew);
+    // Get payment method details if one is saved
+    if (domain.auto_renew_payment_method_id) {
+      try {
+        const pm = await stripeService.retrievePaymentMethod(domain.auto_renew_payment_method_id);
+        paymentMethod = {
+          id: pm.id,
+          brand: pm.card?.brand,
+          last4: pm.card?.last4,
+          expMonth: pm.card?.exp_month,
+          expYear: pm.card?.exp_year
+        };
+      } catch (e) {
+        // Payment method may have been deleted
+        console.error('Error retrieving payment method:', e.message);
+      }
+    }
 
-    // Update local database
-    const result = await pool.query(
-      `UPDATE domains SET auto_renew = $1, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $2
-       RETURNING id, domain_name, auto_renew`,
-      [!!auto_renew, domainId]
+    // Get renewal pricing
+    const pricingResult = await pool.query(
+      'SELECT price_renew FROM tld_pricing WHERE tld = $1',
+      [domain.tld]
     );
 
-    res.json(result.rows[0]);
+    res.json({
+      domainId: domain.id,
+      domainName: `${domain.domain_name}.${domain.tld}`,
+      autoRenew: domain.auto_renew,
+      expirationDate: domain.expiration_date,
+      paymentMethod,
+      renewalPrice: pricingResult.rows[0]?.price_renew || null
+    });
   } catch (error) {
-    console.error('Error updating auto-renew:', error);
-    res.status(500).json({ error: 'Failed to update auto-renew setting' });
+    console.error('Error getting auto-renew status:', error);
+    res.status(500).json({ error: 'Failed to get auto-renew status' });
+  }
+});
+
+// Remove auto-renew payment method (disable auto-renew)
+router.delete('/:id/auto-renew', authMiddleware, async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+
+  try {
+    // Verify ownership and check if suspended
+    const access = await checkDomainAccess(pool, domainId, req.user.id);
+    if (access.error) {
+      return res.status(access.status).json({ error: access.error });
+    }
+
+    const domain = access.domain;
+    const sld = domain.domain_name;
+    const tld = domain.tld;
+
+    // Update eNom auto-renew setting (use domain's mode)
+    await enom.setAutoRenew(sld, tld, false, { mode: domain.enomMode });
+
+    // Disable auto-renew and clear payment method
+    const result = await pool.query(
+      `UPDATE domains SET
+        auto_renew = false,
+        auto_renew_payment_method_id = NULL,
+        updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1
+       RETURNING id, domain_name, tld, auto_renew`,
+      [domainId]
+    );
+
+    res.json({
+      success: true,
+      domain: result.rows[0],
+      message: 'Auto-renewal disabled'
+    });
+  } catch (error) {
+    console.error('Error disabling auto-renew:', error);
+    res.status(500).json({ error: 'Failed to disable auto-renew' });
   }
 });
 
@@ -410,12 +748,11 @@ router.get('/:id/privacy', authMiddleware, async (req, res) => {
     }
 
     const domain = domainResult.rows[0];
-    const parts = domain.domain_name.split('.');
-    const tld = parts.pop();
-    const sld = parts.join('.');
+    const sld = domain.domain_name;
+    const tld = domain.tld;
 
-    // Get privacy status from eNom
-    const privacyStatus = await enom.getPrivacyStatus(sld, tld);
+    // Get privacy status from eNom (use domain's mode)
+    const privacyStatus = await enom.getPrivacyStatus(sld, tld, { mode: domain.enom_mode || 'test' });
 
     res.json({
       domainId,
@@ -436,24 +773,19 @@ router.put('/:id/privacy', authMiddleware, async (req, res) => {
   const force = req.body.force === true; // Allow forcing even if it will charge
 
   try {
-    // Verify ownership
-    const domainResult = await pool.query(
-      'SELECT * FROM domains WHERE id = $1 AND user_id = $2',
-      [domainId, req.user.id]
-    );
-
-    if (domainResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Domain not found' });
+    // Verify ownership and check if suspended
+    const access = await checkDomainAccess(pool, domainId, req.user.id);
+    if (access.error) {
+      return res.status(access.status).json({ error: access.error });
     }
 
-    const domain = domainResult.rows[0];
-    const parts = domain.domain_name.split('.');
-    const tld = parts.pop();
-    const sld = parts.join('.');
+    const domain = access.domain;
+    const sld = domain.domain_name;
+    const tld = domain.tld;
 
     // If trying to enable privacy, check if it's already purchased
     if (privacy_enabled) {
-      const privacyStatus = await enom.getPrivacyStatus(sld, tld);
+      const privacyStatus = await enom.getPrivacyStatus(sld, tld, { mode: domain.enomMode });
 
       // If privacy will incur a charge and force is not set, return warning
       if (privacyStatus.willCharge && !force) {
@@ -466,8 +798,8 @@ router.put('/:id/privacy', authMiddleware, async (req, res) => {
       }
     }
 
-    // Call eNom API to toggle privacy
-    await enom.setWhoisPrivacy(sld, tld, !!privacy_enabled);
+    // Call eNom API to toggle privacy (use domain's mode)
+    await enom.setWhoisPrivacy(sld, tld, !!privacy_enabled, { mode: domain.enomMode });
 
     // Update local database
     const result = await pool.query(
@@ -491,23 +823,18 @@ router.put('/:id/lock', authMiddleware, async (req, res) => {
   const { locked } = req.body;
 
   try {
-    // Verify ownership
-    const domainResult = await pool.query(
-      'SELECT * FROM domains WHERE id = $1 AND user_id = $2',
-      [domainId, req.user.id]
-    );
-
-    if (domainResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Domain not found' });
+    // Verify ownership and check if suspended
+    const access = await checkDomainAccess(pool, domainId, req.user.id);
+    if (access.error) {
+      return res.status(access.status).json({ error: access.error });
     }
 
-    const domain = domainResult.rows[0];
-    const parts = domain.domain_name.split('.');
-    const tld = parts.pop();
-    const sld = parts.join('.');
+    const domain = access.domain;
+    const sld = domain.domain_name;
+    const tld = domain.tld;
 
-    // Call eNom API to set lock status
-    await enom.setDomainLock(sld, tld, !!locked);
+    // Call eNom API to set lock status (use domain's mode)
+    await enom.setDomainLock(sld, tld, !!locked, { mode: domain.enomMode });
 
     // Update local database
     const result = await pool.query(
@@ -541,12 +868,11 @@ router.get('/:id/authcode', authMiddleware, async (req, res) => {
     }
 
     const domain = domainResult.rows[0];
-    const parts = domain.domain_name.split('.');
-    const tld = parts.pop();
-    const sld = parts.join('.');
+    const sld = domain.domain_name;
+    const tld = domain.tld;
 
-    // Get auth code from eNom (this also unlocks the domain)
-    const result = await enom.getAuthCode(sld, tld);
+    // Get auth code from eNom (this also unlocks the domain) - use domain's mode
+    const result = await enom.getAuthCode(sld, tld, { mode: domain.enom_mode || 'test' });
 
     // Update lock status in database since getAuthCode unlocks the domain
     await pool.query(
@@ -582,12 +908,11 @@ router.get('/:id/contacts', authMiddleware, async (req, res) => {
     }
 
     const domain = domainResult.rows[0];
-    const parts = domain.domain_name.split('.');
-    const tld = parts.pop();
-    const sld = parts.join('.');
+    const sld = domain.domain_name;
+    const tld = domain.tld;
 
-    // Get contacts from eNom
-    const contacts = await enom.getWhoisContacts(sld, tld);
+    // Get contacts from eNom (use domain's mode)
+    const contacts = await enom.getWhoisContacts(sld, tld, { mode: domain.enom_mode || 'test' });
 
     res.json({
       domain: domain.domain_name,
@@ -606,23 +931,18 @@ router.put('/:id/contacts', authMiddleware, async (req, res) => {
   const { registrant, admin, tech, billing } = req.body;
 
   try {
-    // Verify ownership
-    const domainResult = await pool.query(
-      'SELECT * FROM domains WHERE id = $1 AND user_id = $2',
-      [domainId, req.user.id]
-    );
-
-    if (domainResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Domain not found' });
+    // Verify ownership and check if suspended
+    const access = await checkDomainAccess(pool, domainId, req.user.id);
+    if (access.error) {
+      return res.status(access.status).json({ error: access.error });
     }
 
-    const domain = domainResult.rows[0];
-    const parts = domain.domain_name.split('.');
-    const tld = parts.pop();
-    const sld = parts.join('.');
+    const domain = access.domain;
+    const sld = domain.domain_name;
+    const tld = domain.tld;
 
-    // Get current contacts first (for partial update support)
-    const currentContacts = await enom.getWhoisContacts(sld, tld);
+    // Get current contacts first (for partial update support) - use domain's mode
+    const currentContacts = await enom.getWhoisContacts(sld, tld, { mode: domain.enomMode });
 
     // Helper to normalize contact format for eNom API
     const normalizeContact = (contact) => {
@@ -650,8 +970,8 @@ router.put('/:id/contacts', authMiddleware, async (req, res) => {
       billing: billing ? normalizeContact(billing) : normalizeContact(currentContacts.billing)
     };
 
-    // Update contacts via eNom
-    await enom.updateContacts(sld, tld, updatedContacts);
+    // Update contacts via eNom (use domain's mode)
+    await enom.updateContacts(sld, tld, updatedContacts, { mode: domain.enomMode });
 
     res.json({
       success: true,
@@ -671,20 +991,15 @@ router.post('/:id/renew', authMiddleware, async (req, res) => {
   const { years = 1 } = req.body;
 
   try {
-    // Verify ownership
-    const domainResult = await pool.query(
-      'SELECT * FROM domains WHERE id = $1 AND user_id = $2',
-      [domainId, req.user.id]
-    );
-
-    if (domainResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Domain not found' });
+    // Verify ownership and check if suspended
+    const access = await checkDomainAccess(pool, domainId, req.user.id);
+    if (access.error) {
+      return res.status(access.status).json({ error: access.error });
     }
 
-    const domain = domainResult.rows[0];
-    const parts = domain.domain_name.split('.');
-    const tld = parts.pop();
-    const sld = parts.join('.');
+    const domain = access.domain;
+    const sld = domain.domain_name;
+    const tld = domain.tld;
 
     // Get renewal pricing
     const pricingResult = await pool.query(
@@ -698,8 +1013,8 @@ router.post('/:id/renew', authMiddleware, async (req, res) => {
 
     const renewalPrice = parseFloat(pricingResult.rows[0].price_renew) * years;
 
-    // Renew via eNom
-    const result = await enom.renewDomain(sld, tld, years);
+    // Renew via eNom (use domain's mode)
+    const result = await enom.renewDomain(sld, tld, years, { mode: domain.enomMode });
 
     // Parse new expiration date
     let newExpDate = null;
@@ -750,20 +1065,8 @@ router.post('/:id/renew', authMiddleware, async (req, res) => {
 });
 
 // Get eNom account balance (admin only)
-router.get('/admin/balance', authMiddleware, async (req, res) => {
-  const pool = req.app.locals.pool;
-
+router.get('/admin/balance', authMiddleware, adminMiddleware, async (req, res) => {
   try {
-    // Check if user is admin
-    const userResult = await pool.query(
-      'SELECT is_admin FROM users WHERE id = $1',
-      [req.user.id]
-    );
-
-    if (!userResult.rows[0]?.is_admin) {
-      return res.status(403).json({ error: 'Admin access required' });
-    }
-
     const balance = await enom.getBalance();
     res.json(balance);
   } catch (error) {

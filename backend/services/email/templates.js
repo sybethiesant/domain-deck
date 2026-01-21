@@ -274,5 +274,71 @@ module.exports = {
         <a href="https://worxtech.biz/admin/orders" class="btn">View in Admin</a>
       </p>
     `)
+  }),
+
+  // Domain renewal confirmation
+  renewalConfirmation: ({ domain, years, newExpiration, cost }) => ({
+    subject: `Domain Renewed: ${domain}`,
+    html: baseWrapper(`
+      <h2><span class="status-badge status-success">Renewed</span></h2>
+      <h2>Domain Renewal Successful!</h2>
+      <p>Your domain has been automatically renewed:</p>
+      <div class="highlight" style="text-align: center;">
+        <span class="domain-name">${domain}</span>
+        <p style="margin-top: 8px; color: #64748b;">
+          Extended by ${years} year${years > 1 ? 's' : ''}<br>
+          New Expiration: ${newExpiration}
+        </p>
+      </div>
+      <table class="order-table">
+        <tr>
+          <td><strong>Domain</strong></td>
+          <td class="domain-name">${domain}</td>
+        </tr>
+        <tr>
+          <td><strong>Renewal Period</strong></td>
+          <td>${years} year${years > 1 ? 's' : ''}</td>
+        </tr>
+        <tr>
+          <td><strong>New Expiration</strong></td>
+          <td>${newExpiration}</td>
+        </tr>
+        <tr class="total-row">
+          <td><strong>Amount Charged</strong></td>
+          <td>$${parseFloat(cost).toFixed(2)}</td>
+        </tr>
+      </table>
+      <p style="text-align: center;">
+        <a href="https://worxtech.biz/dashboard" class="btn btn-success">View Domain</a>
+      </p>
+    `)
+  }),
+
+  // Domain renewal failed
+  renewalFailed: ({ domain, error, expirationDate }) => ({
+    subject: `Action Required: ${domain} renewal failed`,
+    html: baseWrapper(`
+      <h2><span class="status-badge status-error">Renewal Failed</span></h2>
+      <h2>Domain Auto-Renewal Issue</h2>
+      <p>We were unable to automatically renew your domain:</p>
+      <div class="highlight" style="text-align: center;">
+        <span class="domain-name">${domain}</span>
+        <p style="margin-top: 8px; color: #dc2626; font-weight: 600;">
+          Expires: ${expirationDate}
+        </p>
+      </div>
+      <div class="highlight">
+        <strong>Error:</strong> ${error}
+      </div>
+      <p><strong>What to do:</strong></p>
+      <ul>
+        <li>Check your payment method is up to date</li>
+        <li>Manually renew before the expiration date</li>
+        <li>Contact support if you need assistance</li>
+      </ul>
+      <p style="text-align: center;">
+        <a href="https://worxtech.biz/dashboard" class="btn btn-warning">Renew Manually</a>
+      </p>
+    `)
   })
 };

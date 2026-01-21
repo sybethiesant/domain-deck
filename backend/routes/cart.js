@@ -56,8 +56,8 @@ router.post('/add', authMiddleware, async (req, res) => {
     // Check if item already in cart
     const existingResult = await pool.query(
       `SELECT id FROM cart_items
-       WHERE user_id = $1 AND domain_name = $2 AND item_type = $3`,
-      [req.user.id, fullDomain, item_type]
+       WHERE user_id = $1 AND domain_name = $2 AND tld = $3 AND item_type = $4`,
+      [req.user.id, domain_name.toLowerCase(), tld.toLowerCase(), item_type]
     );
 
     if (existingResult.rows.length > 0) {
@@ -98,7 +98,7 @@ router.post('/add', authMiddleware, async (req, res) => {
       `INSERT INTO cart_items (user_id, item_type, domain_name, tld, years, price, options)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING *`,
-      [req.user.id, item_type, fullDomain, tld, years, price, JSON.stringify(options)]
+      [req.user.id, item_type, domain_name.toLowerCase(), tld.toLowerCase(), years, price, JSON.stringify(options)]
     );
 
     res.status(201).json(result.rows[0]);

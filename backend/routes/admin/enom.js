@@ -10,9 +10,13 @@ const enom = require('../../services/enom');
 // Sync domains from eNom
 router.post('/sync-enom', async (req, res) => {
   const pool = req.app.locals.pool;
-  const { user_id = 1 } = req.body;
+  const user_id = req.body?.user_id || 1;
 
   try {
+    // Get current eNom mode for labeling domains
+    const currentEnomMode = enom.getMode().mode;
+    console.log('[Sync] Current eNom mode for labeling:', currentEnomMode);
+
     // Get all domains from main account
     const enomDomains = await enom.getAllDomains();
 
@@ -34,18 +38,19 @@ router.post('/sync-enom', async (req, res) => {
           }
         }
 
-        // Upsert domain
+        // Upsert domain (domain_name stores SLD only, not full domain)
         await pool.query(`
-          INSERT INTO domains (user_id, domain_name, tld, status, expiration_date, auto_renew, privacy_enabled, enom_order_id, enom_account)
-          VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, 'main')
-          ON CONFLICT (domain_name) DO UPDATE SET
+          INSERT INTO domains (user_id, domain_name, tld, status, expiration_date, auto_renew, privacy_enabled, enom_order_id, enom_account, enom_mode)
+          VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, 'main', $8)
+          ON CONFLICT (domain_name, tld) DO UPDATE SET
             expiration_date = COALESCE(EXCLUDED.expiration_date, domains.expiration_date),
             auto_renew = EXCLUDED.auto_renew,
             privacy_enabled = EXCLUDED.privacy_enabled,
             enom_order_id = COALESCE(EXCLUDED.enom_order_id, domains.enom_order_id),
+            enom_mode = EXCLUDED.enom_mode,
             last_synced_at = CURRENT_TIMESTAMP,
             updated_at = CURRENT_TIMESTAMP
-        `, [user_id, domain.domain, domain.tld, expDate, domain.autoRenew, domain.privacyEnabled, domain.domainNameId]);
+        `, [user_id, domain.sld, domain.tld, expDate, domain.autoRenew, domain.privacyEnabled, domain.domainNameId, currentEnomMode]);
 
         imported.push({ domain: domain.domain, account: 'main' });
       } catch (err) {
@@ -78,16 +83,17 @@ router.post('/sync-enom', async (req, res) => {
                   }
 
                   await pool.query(`
-                    INSERT INTO domains (user_id, domain_name, tld, status, expiration_date, auto_renew, privacy_enabled, enom_account)
-                    VALUES ($1, $2, $3, 'active', $4, $5, $6, $7)
-                    ON CONFLICT (domain_name) DO UPDATE SET
+                    INSERT INTO domains (user_id, domain_name, tld, status, expiration_date, auto_renew, privacy_enabled, enom_account, enom_mode)
+                    VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, $8)
+                    ON CONFLICT (domain_name, tld) DO UPDATE SET
                       expiration_date = COALESCE(EXCLUDED.expiration_date, domains.expiration_date),
                       auto_renew = EXCLUDED.auto_renew,
                       privacy_enabled = EXCLUDED.privacy_enabled,
                       enom_account = EXCLUDED.enom_account,
+                      enom_mode = EXCLUDED.enom_mode,
                       last_synced_at = CURRENT_TIMESTAMP,
                       updated_at = CURRENT_TIMESTAMP
-                  `, [user_id, `${sld}.${tld}`, tld, expDate, info.autoRenew || false, info.whoisPrivacy || false, subAccount.loginId]);
+                  `, [user_id, `${sld}.${tld}`, tld, expDate, info.autoRenew || false, info.whoisPrivacy || false, subAccount.loginId, currentEnomMode]);
 
                   imported.push({ domain: `${sld}.${tld}`, account: subAccount.loginId });
                 }
@@ -182,7 +188,7 @@ router.post('/enom/import-domain', async (req, res) => {
     const result = await pool.query(`
       INSERT INTO domains (user_id, domain_name, tld, status, registration_date, expiration_date, auto_renew, privacy_enabled, nameservers, enom_account, last_synced_at)
       VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)
-      ON CONFLICT (domain_name) DO UPDATE SET
+      ON CONFLICT (domain_name, tld) DO UPDATE SET
         expiration_date = EXCLUDED.expiration_date,
         auto_renew = EXCLUDED.auto_renew,
         privacy_enabled = EXCLUDED.privacy_enabled,

@@ -64,7 +64,7 @@ function CartSidebar({ onClose, onCheckout }) {
                 >
                   <div className="flex-1 min-w-0">
                     <p className="font-mono font-medium text-slate-900 dark:text-slate-100 truncate">
-                      {item.domain_name}
+                      {item.domain_name}.{item.tld}
                     </p>
                     <p className="text-sm text-slate-500 dark:text-slate-400">
                       {getItemTypeLabel(item.item_type)} • {item.years} year{item.years > 1 ? 's' : ''}
