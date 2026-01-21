@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { ExternalLink, Loader2, AlertCircle, Save, Trash2 } from 'lucide-react';
+import { ExternalLink, Loader2, AlertCircle, Save, Trash2, Info } from 'lucide-react';
 import { useAuth } from '../../App';
 import { API_URL } from '../../config/api';
 import toast from 'react-hot-toast';
 
-function UrlForwardingPanel({ domainId, domainName, tld }) {
+function UrlForwardingPanel({ domainId, domainName, tld, nameservers }) {
   const { token } = useAuth();
   const [forwarding, setForwarding] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -19,9 +19,13 @@ function UrlForwardingPanel({ domainId, domainName, tld }) {
   const [cloakTitle, setCloakTitle] = useState('');
   const [cloakDescription, setCloakDescription] = useState('');
 
+  // Check if using eNom nameservers (required for forwarding)
+  const isUsingEnomNS = !nameservers || nameservers.length === 0 ||
+    nameservers.some(ns => ns.toLowerCase().includes('enom') || ns.toLowerCase().includes('registrar-servers'));
+
   useEffect(() => {
     fetchForwarding();
-  }, [domainId]);
+  }, [domainId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchForwarding = async () => {
     setLoading(true);
@@ -41,9 +45,19 @@ function UrlForwardingPanel({ domainId, domainName, tld }) {
           setCloakTitle(data.cloakTitle || '');
           setCloakDescription(data.cloakDescription || '');
         }
+      } else if (res.status === 404) {
+        // Not configured - this is fine
+        setForwarding({ enabled: false });
       } else {
         const data = await res.json();
-        setError(data.error || 'Failed to load URL forwarding');
+        // Check if it's just "not configured" vs actual error
+        if (data.error?.toLowerCase().includes('not found') ||
+            data.error?.toLowerCase().includes('not enabled') ||
+            data.error?.toLowerCase().includes('no forwarding')) {
+          setForwarding({ enabled: false });
+        } else {
+          setError(data.error || 'Failed to load URL forwarding');
+        }
       }
     } catch (err) {
       setError('Connection error');
@@ -126,10 +140,25 @@ function UrlForwardingPanel({ domainId, domainName, tld }) {
 
   return (
     <div className="space-y-4">
-      <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-200 dark:border-blue-800">
+      {/* Nameserver Warning */}
+      {!isUsingEnomNS && (
+        <div className="p-4 bg-amber-50 dark:bg-amber-900/20 rounded-xl border border-amber-200 dark:border-amber-800 flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-medium text-amber-800 dark:text-amber-300">Custom Nameservers Detected</p>
+            <p className="text-sm text-amber-700 dark:text-amber-400 mt-1">
+              URL forwarding requires our default nameservers. You're currently using custom nameservers,
+              so URL forwarding may not work. Configure redirects at your DNS provider instead.
+            </p>
+          </div>
+        </div>
+      )}
+
+      <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-200 dark:border-blue-800 flex items-start gap-3">
+        <Info className="w-5 h-5 text-blue-500 flex-shrink-0 mt-0.5" />
         <p className="text-sm text-blue-700 dark:text-blue-400">
-          <strong>URL Forwarding</strong> redirects visitors from your domain to another website.
-          Use this if you want <span className="font-mono">{domainName}.{tld}</span> to redirect to another URL.
+          Redirect visitors from <span className="font-mono">{domainName}.{tld}</span> to another website.
+          Useful for redirecting to your main site or a landing page.
         </p>
       </div>
 

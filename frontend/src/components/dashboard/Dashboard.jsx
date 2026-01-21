@@ -866,6 +866,7 @@ function Dashboard() {
                       domainId={selectedDomain.id}
                       domainName={selectedDomain.domain_name}
                       tld={selectedDomain.tld}
+                      nameservers={managementData[selectedDomain.id]?.nameservers || []}
                     />
                   </div>
 
@@ -881,6 +882,7 @@ function Dashboard() {
                       domainId={selectedDomain.id}
                       domainName={selectedDomain.domain_name}
                       tld={selectedDomain.tld}
+                      nameservers={managementData[selectedDomain.id]?.nameservers || []}
                     />
                   </div>
                 </div>

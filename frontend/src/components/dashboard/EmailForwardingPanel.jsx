@@ -1,27 +1,33 @@
 import React, { useState, useEffect } from 'react';
-import { Mail, Plus, Trash2, Loader2, ArrowRight, AlertCircle } from 'lucide-react';
+import { Mail, Plus, Trash2, Loader2, ArrowRight, AlertCircle, Info } from 'lucide-react';
 import { useAuth } from '../../App';
 import { API_URL } from '../../config/api';
 import toast from 'react-hot-toast';
 
-function EmailForwardingPanel({ domainId, domainName, tld }) {
+function EmailForwardingPanel({ domainId, domainName, tld, nameservers }) {
   const { token } = useAuth();
   const [forwards, setForwards] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [notConfigured, setNotConfigured] = useState(false);
   const [adding, setAdding] = useState(false);
   const [newEmailUser, setNewEmailUser] = useState('');
   const [newForwardTo, setNewForwardTo] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [deleting, setDeleting] = useState(null);
 
+  // Check if using eNom nameservers (required for forwarding)
+  const isUsingEnomNS = !nameservers || nameservers.length === 0 ||
+    nameservers.some(ns => ns.toLowerCase().includes('enom') || ns.toLowerCase().includes('registrar-servers'));
+
   useEffect(() => {
     fetchForwards();
-  }, [domainId]);
+  }, [domainId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchForwards = async () => {
     setLoading(true);
     setError(null);
+    setNotConfigured(false);
     try {
       const res = await fetch(`${API_URL}/domains/${domainId}/email-forwarding`, {
         headers: { 'Authorization': `Bearer ${token}` }
@@ -30,9 +36,20 @@ function EmailForwardingPanel({ domainId, domainName, tld }) {
       if (res.ok) {
         const data = await res.json();
         setForwards(data.forwards || []);
+      } else if (res.status === 404) {
+        // Not configured yet - this is fine, not an error
+        setNotConfigured(true);
+        setForwards([]);
       } else {
         const data = await res.json();
-        setError(data.error || 'Failed to load email forwards');
+        // Check if it's just "no forwards" vs actual error
+        if (data.error?.toLowerCase().includes('not found') ||
+            data.error?.toLowerCase().includes('no email')) {
+          setNotConfigured(true);
+          setForwards([]);
+        } else {
+          setError(data.error || 'Failed to load email forwards');
+        }
       }
     } catch (err) {
       setError('Connection error');
@@ -105,10 +122,25 @@ function EmailForwardingPanel({ domainId, domainName, tld }) {
 
   return (
     <div className="space-y-4">
-      <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-200 dark:border-blue-800">
+      {/* Nameserver Warning */}
+      {!isUsingEnomNS && (
+        <div className="p-4 bg-amber-50 dark:bg-amber-900/20 rounded-xl border border-amber-200 dark:border-amber-800 flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-medium text-amber-800 dark:text-amber-300">Custom Nameservers Detected</p>
+            <p className="text-sm text-amber-700 dark:text-amber-400 mt-1">
+              Email forwarding requires our default nameservers. You're currently using custom nameservers,
+              so email forwarding may not work. Configure email forwarding at your DNS provider instead.
+            </p>
+          </div>
+        </div>
+      )}
+
+      <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-200 dark:border-blue-800 flex items-start gap-3">
+        <Info className="w-5 h-5 text-blue-500 flex-shrink-0 mt-0.5" />
         <p className="text-sm text-blue-700 dark:text-blue-400">
-          <strong>Email Forwarding</strong> allows you to create email addresses at your domain
-          that forward to your existing email accounts.
+          Create email addresses at your domain that forward to your existing email accounts.
+          For example: <span className="font-mono">info@{domainName}.{tld}</span> → <span className="font-mono">you@gmail.com</span>
         </p>
       </div>
 
@@ -155,9 +187,14 @@ function EmailForwardingPanel({ domainId, domainName, tld }) {
       )}
 
       {forwards.length === 0 && !error && (
-        <div className="text-center py-6 text-slate-500 dark:text-slate-400">
-          <Mail className="w-8 h-8 mx-auto mb-2 opacity-50" />
-          <p>No email forwards configured</p>
+        <div className="text-center py-8 px-4">
+          <div className="w-12 h-12 bg-slate-100 dark:bg-slate-700 rounded-full flex items-center justify-center mx-auto mb-3">
+            <Mail className="w-6 h-6 text-slate-400" />
+          </div>
+          <p className="text-slate-600 dark:text-slate-400 font-medium">No Email Forwards</p>
+          <p className="text-sm text-slate-500 dark:text-slate-500 mt-1">
+            Create your first email forward to get started
+          </p>
         </div>
       )}
 
