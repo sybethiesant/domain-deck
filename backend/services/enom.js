@@ -1939,6 +1939,249 @@ class EnomAPI {
     const match = xml.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`));
     return match ? match[1].trim() : '';
   }
+
+  // ============================================
+  // EMAIL FORWARDING FUNCTIONS
+  // ============================================
+
+  /**
+   * Get email forwarding addresses for a domain
+   * @param {string} sld - Second level domain
+   * @param {string} tld - Top level domain
+   * @returns {Promise<object>} - Email forwards
+   */
+  async getEmailForwarding(sld, tld, options = {}) {
+    try {
+      this.validateDomainParts(sld, tld);
+      const response = await this.request('GetEmailForward', { sld, tld }, { mode: options.mode });
+
+      const forwards = [];
+      const count = parseInt(response.ForwardCount || response.forwardcount || 0);
+
+      for (let i = 1; i <= count; i++) {
+        const emailUser = response[`forward${i}email`] || response[`Forward${i}Email`];
+        const forwardTo = response[`forward${i}value`] || response[`Forward${i}Value`];
+
+        if (emailUser && forwardTo) {
+          forwards.push({
+            id: i,
+            emailUser: emailUser,
+            emailAddress: `${emailUser}@${sld}.${tld}`,
+            forwardTo: forwardTo
+          });
+        }
+      }
+
+      return {
+        domainName: `${sld}.${tld}`,
+        forwards,
+        count: forwards.length
+      };
+    } catch (error) {
+      // If no forwarding is set up, eNom may return an error
+      if (error.message.includes('No Email Forwards')) {
+        return { domainName: `${sld}.${tld}`, forwards: [], count: 0 };
+      }
+      console.error(`eNom get email forwarding error for ${sld}.${tld}:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Set email forwarding for a domain
+   * @param {string} sld - Second level domain
+   * @param {string} tld - Top level domain
+   * @param {string} emailUser - Local part of email (before @)
+   * @param {string} forwardTo - Email address to forward to
+   * @returns {Promise<object>} - Result
+   */
+  async setEmailForward(sld, tld, emailUser, forwardTo, options = {}) {
+    try {
+      this.validateDomainParts(sld, tld);
+
+      // Validate email user (local part)
+      if (!emailUser || !/^[a-zA-Z0-9._%+-]+$/.test(emailUser)) {
+        throw new Error('Invalid email username format');
+      }
+
+      // Validate forward-to address
+      if (!forwardTo || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(forwardTo)) {
+        throw new Error('Invalid forward-to email address');
+      }
+
+      const response = await this.request('SetEmailForward', {
+        sld,
+        tld,
+        EmailUser: emailUser.toLowerCase(),
+        ForwardEmail: forwardTo.toLowerCase()
+      }, { mode: options.mode });
+
+      return {
+        success: true,
+        domainName: `${sld}.${tld}`,
+        emailAddress: `${emailUser.toLowerCase()}@${sld}.${tld}`,
+        forwardTo: forwardTo.toLowerCase()
+      };
+    } catch (error) {
+      console.error(`eNom set email forward error for ${sld}.${tld}:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Delete email forwarding
+   * @param {string} sld - Second level domain
+   * @param {string} tld - Top level domain
+   * @param {string} emailUser - Local part of email to delete
+   * @returns {Promise<object>} - Result
+   */
+  async deleteEmailForward(sld, tld, emailUser, options = {}) {
+    try {
+      this.validateDomainParts(sld, tld);
+
+      const response = await this.request('DeleteEmailForward', {
+        sld,
+        tld,
+        EmailUser: emailUser.toLowerCase()
+      }, { mode: options.mode });
+
+      return {
+        success: true,
+        domainName: `${sld}.${tld}`,
+        deleted: `${emailUser.toLowerCase()}@${sld}.${tld}`
+      };
+    } catch (error) {
+      console.error(`eNom delete email forward error for ${sld}.${tld}:`, error.message);
+      throw error;
+    }
+  }
+
+  // ============================================
+  // URL FORWARDING FUNCTIONS
+  // ============================================
+
+  /**
+   * Get URL forwarding settings for a domain
+   * @param {string} sld - Second level domain
+   * @param {string} tld - Top level domain
+   * @returns {Promise<object>} - URL forwarding settings
+   */
+  async getUrlForwarding(sld, tld, options = {}) {
+    try {
+      this.validateDomainParts(sld, tld);
+      const response = await this.request('GetForwarding', { sld, tld }, { mode: options.mode });
+
+      return {
+        domainName: `${sld}.${tld}`,
+        enabled: response.ForwardingEnabled === '1' || response.forwarding === 'enabled',
+        forwardUrl: response.ForwardURL || response.forwardurl || null,
+        forwardType: response.ForwardType || response.forwardtype || 'temporary', // 'permanent' (301) or 'temporary' (302)
+        cloak: response.CloakTitle ? true : false,
+        cloakTitle: response.CloakTitle || null,
+        cloakDescription: response.CloakDescription || null,
+        cloakKeywords: response.CloakKeywords || null,
+        // Subdomain forwarding
+        subdomainForwarding: response.SubForwarding || null,
+        subdomainUrl: response.SubForwardURL || null
+      };
+    } catch (error) {
+      // If no forwarding is set, eNom may return an error
+      if (error.message.includes('No forwarding') || error.message.includes('not enabled')) {
+        return {
+          domainName: `${sld}.${tld}`,
+          enabled: false,
+          forwardUrl: null,
+          forwardType: null,
+          cloak: false
+        };
+      }
+      console.error(`eNom get URL forwarding error for ${sld}.${tld}:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Set URL forwarding for a domain
+   * @param {string} sld - Second level domain
+   * @param {string} tld - Top level domain
+   * @param {object} params - Forwarding parameters
+   * @returns {Promise<object>} - Result
+   */
+  async setUrlForwarding(sld, tld, params, options = {}) {
+    const {
+      forwardUrl,
+      forwardType = 'temporary', // 'permanent' (301) or 'temporary' (302)
+      cloak = false,
+      cloakTitle = '',
+      cloakDescription = '',
+      cloakKeywords = ''
+    } = params;
+
+    try {
+      this.validateDomainParts(sld, tld);
+
+      // Validate URL
+      if (!forwardUrl) {
+        throw new Error('Forward URL is required');
+      }
+
+      // Ensure URL has protocol
+      let normalizedUrl = forwardUrl;
+      if (!normalizedUrl.match(/^https?:\/\//i)) {
+        normalizedUrl = 'https://' + normalizedUrl;
+      }
+
+      const requestParams = {
+        sld,
+        tld,
+        ForwardURL: normalizedUrl,
+        ForwardType: forwardType === 'permanent' ? '301' : '302'
+      };
+
+      // Add cloaking options if enabled
+      if (cloak) {
+        requestParams.CloakTitle = cloakTitle || sld;
+        requestParams.CloakDescription = cloakDescription || '';
+        requestParams.CloakKeywords = cloakKeywords || '';
+      }
+
+      const response = await this.request('SetForwarding', requestParams, { mode: options.mode });
+
+      return {
+        success: true,
+        domainName: `${sld}.${tld}`,
+        forwardUrl: normalizedUrl,
+        forwardType,
+        cloak
+      };
+    } catch (error) {
+      console.error(`eNom set URL forwarding error for ${sld}.${tld}:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Disable URL forwarding for a domain
+   * @param {string} sld - Second level domain
+   * @param {string} tld - Top level domain
+   * @returns {Promise<object>} - Result
+   */
+  async disableUrlForwarding(sld, tld, options = {}) {
+    try {
+      this.validateDomainParts(sld, tld);
+
+      const response = await this.request('DeleteForwarding', { sld, tld }, { mode: options.mode });
+
+      return {
+        success: true,
+        domainName: `${sld}.${tld}`,
+        message: 'URL forwarding disabled'
+      };
+    } catch (error) {
+      console.error(`eNom disable URL forwarding error for ${sld}.${tld}:`, error.message);
+      throw error;
+    }
+  }
 }
 
 module.exports = new EnomAPI();

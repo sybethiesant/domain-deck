@@ -1075,4 +1075,194 @@ router.get('/admin/balance', authMiddleware, adminMiddleware, async (req, res) =
   }
 });
 
+// ============================================
+// EMAIL FORWARDING ROUTES
+// ============================================
+
+// Get email forwarding for a domain
+router.get('/:id/email-forwarding', authMiddleware, async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+
+  try {
+    // Verify ownership
+    const domainResult = await pool.query(
+      'SELECT * FROM domains WHERE id = $1 AND user_id = $2',
+      [domainId, req.user.id]
+    );
+
+    if (domainResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Domain not found' });
+    }
+
+    const domain = domainResult.rows[0];
+    const sld = domain.domain_name;
+    const tld = domain.tld;
+
+    // Get email forwards from eNom
+    const forwards = await enom.getEmailForwarding(sld, tld, { mode: domain.enom_mode || 'test' });
+
+    res.json(forwards);
+  } catch (error) {
+    console.error('Error getting email forwarding:', error);
+    res.status(500).json({ error: 'Failed to get email forwarding' });
+  }
+});
+
+// Add email forwarding
+router.post('/:id/email-forwarding', authMiddleware, async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+  const { emailUser, forwardTo } = req.body;
+
+  if (!emailUser || !forwardTo) {
+    return res.status(400).json({ error: 'emailUser and forwardTo are required' });
+  }
+
+  try {
+    // Verify ownership and check if suspended
+    const access = await checkDomainAccess(pool, domainId, req.user.id);
+    if (access.error) {
+      return res.status(access.status).json({ error: access.error });
+    }
+
+    const domain = access.domain;
+    const sld = domain.domain_name;
+    const tld = domain.tld;
+
+    // Set email forward via eNom
+    const result = await enom.setEmailForward(sld, tld, emailUser, forwardTo, { mode: domain.enomMode });
+
+    res.json(result);
+  } catch (error) {
+    console.error('Error setting email forwarding:', error);
+    res.status(500).json({ error: error.message || 'Failed to set email forwarding' });
+  }
+});
+
+// Delete email forwarding
+router.delete('/:id/email-forwarding/:emailUser', authMiddleware, async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+  const { emailUser } = req.params;
+
+  try {
+    // Verify ownership and check if suspended
+    const access = await checkDomainAccess(pool, domainId, req.user.id);
+    if (access.error) {
+      return res.status(access.status).json({ error: access.error });
+    }
+
+    const domain = access.domain;
+    const sld = domain.domain_name;
+    const tld = domain.tld;
+
+    // Delete email forward via eNom
+    const result = await enom.deleteEmailForward(sld, tld, emailUser, { mode: domain.enomMode });
+
+    res.json(result);
+  } catch (error) {
+    console.error('Error deleting email forwarding:', error);
+    res.status(500).json({ error: error.message || 'Failed to delete email forwarding' });
+  }
+});
+
+// ============================================
+// URL FORWARDING ROUTES
+// ============================================
+
+// Get URL forwarding for a domain
+router.get('/:id/url-forwarding', authMiddleware, async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+
+  try {
+    // Verify ownership
+    const domainResult = await pool.query(
+      'SELECT * FROM domains WHERE id = $1 AND user_id = $2',
+      [domainId, req.user.id]
+    );
+
+    if (domainResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Domain not found' });
+    }
+
+    const domain = domainResult.rows[0];
+    const sld = domain.domain_name;
+    const tld = domain.tld;
+
+    // Get URL forwarding from eNom
+    const forwarding = await enom.getUrlForwarding(sld, tld, { mode: domain.enom_mode || 'test' });
+
+    res.json(forwarding);
+  } catch (error) {
+    console.error('Error getting URL forwarding:', error);
+    res.status(500).json({ error: 'Failed to get URL forwarding' });
+  }
+});
+
+// Set URL forwarding
+router.put('/:id/url-forwarding', authMiddleware, async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+  const { forwardUrl, forwardType, cloak, cloakTitle, cloakDescription, cloakKeywords } = req.body;
+
+  if (!forwardUrl) {
+    return res.status(400).json({ error: 'forwardUrl is required' });
+  }
+
+  try {
+    // Verify ownership and check if suspended
+    const access = await checkDomainAccess(pool, domainId, req.user.id);
+    if (access.error) {
+      return res.status(access.status).json({ error: access.error });
+    }
+
+    const domain = access.domain;
+    const sld = domain.domain_name;
+    const tld = domain.tld;
+
+    // Set URL forwarding via eNom
+    const result = await enom.setUrlForwarding(sld, tld, {
+      forwardUrl,
+      forwardType: forwardType || 'temporary',
+      cloak: cloak || false,
+      cloakTitle,
+      cloakDescription,
+      cloakKeywords
+    }, { mode: domain.enomMode });
+
+    res.json(result);
+  } catch (error) {
+    console.error('Error setting URL forwarding:', error);
+    res.status(500).json({ error: error.message || 'Failed to set URL forwarding' });
+  }
+});
+
+// Disable URL forwarding
+router.delete('/:id/url-forwarding', authMiddleware, async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+
+  try {
+    // Verify ownership and check if suspended
+    const access = await checkDomainAccess(pool, domainId, req.user.id);
+    if (access.error) {
+      return res.status(access.status).json({ error: access.error });
+    }
+
+    const domain = access.domain;
+    const sld = domain.domain_name;
+    const tld = domain.tld;
+
+    // Disable URL forwarding via eNom
+    const result = await enom.disableUrlForwarding(sld, tld, { mode: domain.enomMode });
+
+    res.json(result);
+  } catch (error) {
+    console.error('Error disabling URL forwarding:', error);
+    res.status(500).json({ error: error.message || 'Failed to disable URL forwarding' });
+  }
+});
+
 module.exports = router;

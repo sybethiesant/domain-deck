@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Globe, RefreshCw, Settings, AlertTriangle, Check, Clock, Loader2, X, Server, Shield, Lock, Unlock, Key, ShoppingCart, Users, Search, ChevronLeft, ChevronRight, Eye, CreditCard, Trash2, Plus } from 'lucide-react';
+import { Globe, RefreshCw, Settings, AlertTriangle, Check, Clock, Loader2, X, Server, Shield, Lock, Unlock, Key, ShoppingCart, Users, Search, ChevronLeft, ChevronRight, Eye, CreditCard, Trash2, Plus, Mail, ExternalLink } from 'lucide-react';
 import { useAuth, useCart } from '../../App';
 import { API_URL } from '../../config/api';
 import toast from 'react-hot-toast';
 import DomainContactsPanel from './DomainContactsPanel';
 import PrivacyPurchaseModal from './PrivacyPurchaseModal';
 import AutoRenewSetupModal from './AutoRenewSetupModal';
+import EmailForwardingPanel from './EmailForwardingPanel';
+import UrlForwardingPanel from './UrlForwardingPanel';
 
 function Dashboard() {
   const { token } = useAuth();
@@ -654,10 +656,11 @@ function Dashboard() {
             </div>
 
             {/* Tabs */}
-            <div className="flex border-b border-slate-200 dark:border-slate-700">
+            <div className="flex border-b border-slate-200 dark:border-slate-700 overflow-x-auto">
               {[
                 { id: 'details', label: 'Details', icon: Globe },
                 { id: 'nameservers', label: 'Nameservers', icon: Server },
+                { id: 'forwarding', label: 'Forwarding', icon: ExternalLink },
                 { id: 'settings', label: 'Settings', icon: Settings },
                 { id: 'transfer', label: 'Transfer', icon: Key }
               ].map(tab => (
@@ -847,6 +850,39 @@ function Dashboard() {
                       'Save Nameservers'
                     )}
                   </button>
+                </div>
+              )}
+
+              {/* Forwarding Tab */}
+              {activeTab === 'forwarding' && (
+                <div className="space-y-6">
+                  {/* Email Forwarding Section */}
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-3 flex items-center gap-2">
+                      <Mail className="w-4 h-4" />
+                      Email Forwarding
+                    </h3>
+                    <EmailForwardingPanel
+                      domainId={selectedDomain.id}
+                      domainName={selectedDomain.domain_name}
+                      tld={selectedDomain.tld}
+                    />
+                  </div>
+
+                  <hr className="border-slate-200 dark:border-slate-700" />
+
+                  {/* URL Forwarding Section */}
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-3 flex items-center gap-2">
+                      <ExternalLink className="w-4 h-4" />
+                      URL Forwarding
+                    </h3>
+                    <UrlForwardingPanel
+                      domainId={selectedDomain.id}
+                      domainName={selectedDomain.domain_name}
+                      tld={selectedDomain.tld}
+                    />
+                  </div>
                 </div>
               )}
 
