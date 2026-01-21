@@ -89,7 +89,7 @@ function UrlForwardingPanel({ domainId, domainName, tld }) {
   };
 
   const handleDisable = async () => {
-    if (!confirm('Are you sure you want to disable URL forwarding?')) return;
+    if (!window.confirm('Are you sure you want to disable URL forwarding?')) return;
 
     setDeleting(true);
     try {
