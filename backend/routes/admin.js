@@ -348,10 +348,9 @@ router.post('/orders/:orderId/items/:itemId/retry', async (req, res) => {
       return res.status(400).json({ error: 'User has no default contact set' });
     }
 
-    // Parse domain
-    const parts = item.domain_name.split('.');
-    const tld = parts.pop();
-    const sld = parts.join('.');
+    // order_items stores domain_name (SLD) and tld separately
+    const sld = item.domain_name;
+    const tld = item.tld;
 
     let result;
     if (item.item_type === 'register') {
@@ -609,9 +608,9 @@ router.post('/domains/:id/sync', async (req, res) => {
     }
 
     const domain = domainResult.rows[0];
-    const parts = domain.domain_name.split('.');
-    const tld = parts.pop();
-    const sld = parts.join('.');
+    // domain_name stores SLD only, tld is in separate column
+    const sld = domain.domain_name;
+    const tld = domain.tld;
 
     // Get info from eNom
     const info = await enom.getDomainInfo(sld, tld);
@@ -674,9 +673,9 @@ router.post('/domains/:id/auth-code', async (req, res) => {
     }
 
     const domain = domainResult.rows[0];
-    const parts = domain.domain_name.split('.');
-    const tld = parts.pop();
-    const sld = parts.join('.');
+    // domain_name stores SLD only, tld is in separate column
+    const sld = domain.domain_name;
+    const tld = domain.tld;
 
     // Get auth code from eNom
     const authCode = await enom.getAuthCode(sld, tld);
@@ -703,9 +702,9 @@ router.post('/domains/:id/lock', async (req, res) => {
     }
 
     const domain = domainResult.rows[0];
-    const parts = domain.domain_name.split('.');
-    const tld = parts.pop();
-    const sld = parts.join('.');
+    // domain_name stores SLD only, tld is in separate column
+    const sld = domain.domain_name;
+    const tld = domain.tld;
 
     // Lock/unlock at eNom
     await enom.setDomainLock(sld, tld, lock);
@@ -738,9 +737,9 @@ router.put('/domains/:id/privacy', async (req, res) => {
     }
 
     const domain = domainResult.rows[0];
-    const parts = domain.domain_name.split('.');
-    const tld = parts.pop();
-    const sld = parts.join('.');
+    // domain_name stores SLD only, tld is in separate column
+    const sld = domain.domain_name;
+    const tld = domain.tld;
 
     // Update at eNom (admin bypass - no payment check)
     await enom.setWhoisPrivacy(sld, tld, !!enabled);
@@ -774,9 +773,9 @@ router.put('/domains/:id/autorenew', async (req, res) => {
     }
 
     const domain = domainResult.rows[0];
-    const parts = domain.domain_name.split('.');
-    const tld = parts.pop();
-    const sld = parts.join('.');
+    // domain_name stores SLD only, tld is in separate column
+    const sld = domain.domain_name;
+    const tld = domain.tld;
 
     // Update at eNom
     await enom.setAutoRenew(sld, tld, !!auto_renew);
@@ -814,9 +813,9 @@ router.put('/domains/:id/nameservers', async (req, res) => {
     }
 
     const domain = domainResult.rows[0];
-    const parts = domain.domain_name.split('.');
-    const tld = parts.pop();
-    const sld = parts.join('.');
+    // domain_name stores SLD only, tld is in separate column
+    const sld = domain.domain_name;
+    const tld = domain.tld;
 
     // Update at eNom
     await enom.updateNameservers(sld, tld, nameservers);
@@ -1516,9 +1515,9 @@ router.post('/sync-domains', async (req, res) => {
 
     for (const domain of result.rows) {
       try {
-        const parts = domain.domain_name.split('.');
-        const tld = parts.pop();
-        const sld = parts.join('.');
+        // domain_name stores SLD only, tld is in separate column
+        const sld = domain.domain_name;
+        const tld = domain.tld;
 
         // Fetch comprehensive data from eNom (5 API calls in parallel)
         const data = await enom.getFullDomainData(sld, tld);

@@ -979,7 +979,7 @@ function Dashboard() {
                       <div className="mt-4">
                         <DomainContactsPanel
                           domainId={selectedDomain.id}
-                          domainName={selectedDomain.domain_name}
+                          domainName={`${selectedDomain.domain_name}.${selectedDomain.tld}`}
                         />
                       </div>
                     )}

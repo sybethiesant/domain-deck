@@ -14,8 +14,10 @@ function generateOrderNumber() {
 // Get user's orders
 router.get('/', authMiddleware, async (req, res) => {
   const pool = req.app.locals.pool;
-  const { page = 1, limit = 20 } = req.query;
-  const offset = (parseInt(page) - 1) * parseInt(limit);
+  // Validate and bound pagination parameters
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
+  const offset = (page - 1) * limit;
 
   try {
     const result = await pool.query(
@@ -28,7 +30,7 @@ router.get('/', authMiddleware, async (req, res) => {
        GROUP BY o.id
        ORDER BY o.created_at DESC
        LIMIT $2 OFFSET $3`,
-      [req.user.id, parseInt(limit), offset]
+      [req.user.id, limit, offset]
     );
 
     const countResult = await pool.query(
@@ -39,8 +41,8 @@ router.get('/', authMiddleware, async (req, res) => {
     res.json({
       orders: result.rows,
       total: parseInt(countResult.rows[0].count),
-      page: parseInt(page),
-      totalPages: Math.ceil(countResult.rows[0].count / parseInt(limit))
+      page,
+      totalPages: Math.ceil(countResult.rows[0].count / limit)
     });
   } catch (error) {
     console.error('Error fetching orders:', error);

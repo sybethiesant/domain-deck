@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { authMiddleware } = require('../middleware/auth');
+const { authMiddleware, parseIntParam } = require('../middleware/auth');
 
 // All routes require authentication
 router.use(authMiddleware);
@@ -43,7 +43,11 @@ router.get('/default/current', async (req, res) => {
 // Get a single contact
 router.get('/:id', async (req, res) => {
   const pool = req.app.locals.pool;
-  const { id } = req.params;
+  const id = parseIntParam(req.params.id);
+
+  if (id === null) {
+    return res.status(400).json({ error: 'Invalid contact ID' });
+  }
 
   try {
     const result = await pool.query(
@@ -139,7 +143,12 @@ router.post('/', async (req, res) => {
 // Update a contact
 router.put('/:id', async (req, res) => {
   const pool = req.app.locals.pool;
-  const { id } = req.params;
+  const id = parseIntParam(req.params.id);
+
+  if (id === null) {
+    return res.status(400).json({ error: 'Invalid contact ID' });
+  }
+
   const {
     contact_type,
     first_name,
@@ -239,7 +248,11 @@ router.put('/:id', async (req, res) => {
 // Delete a contact
 router.delete('/:id', async (req, res) => {
   const pool = req.app.locals.pool;
-  const { id } = req.params;
+  const id = parseIntParam(req.params.id);
+
+  if (id === null) {
+    return res.status(400).json({ error: 'Invalid contact ID' });
+  }
 
   try {
     // First verify ownership to prevent information disclosure
@@ -284,7 +297,12 @@ router.delete('/:id', async (req, res) => {
 // Set a contact as default
 router.post('/:id/set-default', async (req, res) => {
   const pool = req.app.locals.pool;
-  const { id } = req.params;
+  const id = parseIntParam(req.params.id);
+
+  if (id === null) {
+    return res.status(400).json({ error: 'Invalid contact ID' });
+  }
+
   const client = await pool.connect();
 
   try {

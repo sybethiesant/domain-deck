@@ -93,7 +93,7 @@ router.post('/sync-enom', async (req, res) => {
                       enom_mode = EXCLUDED.enom_mode,
                       last_synced_at = CURRENT_TIMESTAMP,
                       updated_at = CURRENT_TIMESTAMP
-                  `, [user_id, `${sld}.${tld}`, tld, expDate, info.autoRenew || false, info.whoisPrivacy || false, subAccount.loginId, currentEnomMode]);
+                  `, [user_id, sld, tld, expDate, info.autoRenew || false, info.whoisPrivacy || false, subAccount.loginId, currentEnomMode]);
 
                   imported.push({ domain: `${sld}.${tld}`, account: subAccount.loginId });
                 }

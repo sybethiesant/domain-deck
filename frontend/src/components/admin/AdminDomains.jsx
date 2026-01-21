@@ -741,7 +741,7 @@ function DomainDetailModal({ domain, onClose, onSave, onRefresh, token }) {
                   Changes are applied directly to eNom.
                 </p>
               </div>
-              <DomainContactsPanel domainId={domain.id} domainName={domain.domain_name} />
+              <DomainContactsPanel domainId={domain.id} domainName={`${domain.domain_name}.${domain.tld}`} />
             </div>
           )}
 

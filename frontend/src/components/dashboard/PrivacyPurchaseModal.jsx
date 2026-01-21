@@ -96,31 +96,14 @@ export default function PrivacyPurchaseModal({ domain, onClose, onSuccess }) {
   const [amount, setAmount] = useState(0);
   const [privacyStatus, setPrivacyStatus] = useState(null);
 
-  // Validate domain prop
-  if (!domain || !domain.id) {
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-        <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl p-6 max-w-md w-full">
-          <div className="text-red-600 dark:text-red-400 flex items-center gap-2 mb-4">
-            <AlertCircle className="w-5 h-5" />
-            <span className="font-medium">Invalid domain</span>
-          </div>
-          <p className="text-slate-600 dark:text-slate-400 mb-4">
-            Domain information is missing. Please try again.
-          </p>
-          <button
-            onClick={onClose}
-            className="w-full px-4 py-2 bg-slate-100 dark:bg-slate-700 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors"
-          >
-            Close
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   // Initialize Stripe and create payment intent
   useEffect(() => {
+    // Skip if domain is invalid
+    if (!domain?.id) {
+      setLoading(false);
+      return;
+    }
+
     async function initPayment() {
       try {
         // Get Stripe config
@@ -162,7 +145,30 @@ export default function PrivacyPurchaseModal({ domain, onClose, onSuccess }) {
     }
 
     initPayment();
-  }, [domain.id, token]);
+  }, [domain?.id, token]);
+
+  // Validate domain prop - moved after hooks
+  if (!domain || !domain.id) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+        <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl p-6 max-w-md w-full">
+          <div className="text-red-600 dark:text-red-400 flex items-center gap-2 mb-4">
+            <AlertCircle className="w-5 h-5" />
+            <span className="font-medium">Invalid domain</span>
+          </div>
+          <p className="text-slate-600 dark:text-slate-400 mb-4">
+            Domain information is missing. Please try again.
+          </p>
+          <button
+            onClick={onClose}
+            className="w-full px-4 py-2 bg-slate-100 dark:bg-slate-700 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const handlePaymentSuccess = (paymentIntent) => {
     toast.success('WHOIS Privacy purchased successfully!');
@@ -183,7 +189,7 @@ export default function PrivacyPurchaseModal({ domain, onClose, onSuccess }) {
                 WHOIS Privacy Protection
               </h2>
               <p className="text-sm text-white/80">
-                {domain.domain_name}
+                {domain.domain_name}.{domain.tld}
               </p>
             </div>
           </div>
@@ -326,7 +332,7 @@ export default function PrivacyPurchaseModal({ domain, onClose, onSuccess }) {
                       clientSecret={clientSecret}
                       onSuccess={handlePaymentSuccess}
                       onCancel={onClose}
-                      domainName={domain.domain_name}
+                      domainName={`${domain.domain_name}.${domain.tld}`}
                       amount={amount}
                     />
                   </Elements>

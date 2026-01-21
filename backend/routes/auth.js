@@ -131,7 +131,6 @@ router.post('/register', async (req, res) => {
           username: result.rows[0].username,
           verificationUrl
         });
-        console.log(`Verification email sent to ${normalizedEmail}`);
       } catch (emailError) {
         console.error('Failed to send verification email:', emailError.message);
       }
@@ -155,7 +154,6 @@ router.post('/register', async (req, res) => {
       await emailService.sendWelcome(normalizedEmail, {
         username: result.rows[0].username
       });
-      console.log(`Welcome email sent to ${normalizedEmail}`);
     } catch (emailError) {
       // Don't fail registration if email fails
       console.error('Failed to send welcome email:', emailError.message);
@@ -174,7 +172,6 @@ router.post('/register', async (req, res) => {
 
 // Login user
 router.post('/login', async (req, res) => {
-  console.log('[LOGIN] Attempt for:', req.body?.email);
   const { email, password } = req.body;
   const pool = req.app.locals.pool;
 
@@ -277,8 +274,7 @@ router.post('/login', async (req, res) => {
       token
     });
   } catch (error) {
-    console.error('[LOGIN] Error:', error.message);
-    console.error('[LOGIN] Stack:', error.stack);
+    console.error('Login error:', error);
     res.status(500).json({ error: 'Server error during login' });
   }
 });

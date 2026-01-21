@@ -90,10 +90,7 @@ router.post('/create-payment-intent', authMiddleware, async (req, res) => {
 
 // Create payment intent for WHOIS privacy purchase
 router.post('/privacy-purchase', authMiddleware, async (req, res) => {
-  console.log('[privacy-purchase] Request received:', { domain_id: req.body.domain_id, user_id: req.user.id });
-
   if (!stripeService.isConfigured()) {
-    console.log('[privacy-purchase] ERROR: Stripe not configured');
     return res.status(503).json({ error: 'Payment processing not configured' });
   }
   const stripe = stripeService.getInstance();
@@ -102,20 +99,17 @@ router.post('/privacy-purchase', authMiddleware, async (req, res) => {
   const { domain_id } = req.body;
 
   if (!domain_id) {
-    console.log('[privacy-purchase] ERROR: No domain_id provided');
     return res.status(400).json({ error: 'Domain ID is required' });
   }
 
   try {
     // Verify domain ownership
-    console.log('[privacy-purchase] Looking up domain:', domain_id, 'for user:', req.user.id);
     const domainResult = await pool.query(
       'SELECT * FROM domains WHERE id = $1 AND user_id = $2',
       [domain_id, req.user.id]
     );
 
     if (domainResult.rows.length === 0) {
-      console.log('[privacy-purchase] ERROR: Domain not found or not owned by user');
       return res.status(404).json({ error: 'Domain not found' });
     }
 
@@ -192,8 +186,7 @@ router.post('/privacy-purchase', authMiddleware, async (req, res) => {
       privacyStatus
     });
   } catch (error) {
-    console.error('[privacy-purchase] ERROR:', error.message);
-    console.error('[privacy-purchase] Stack:', error.stack);
+    console.error('Privacy purchase error:', error);
     res.status(500).json({ error: 'Failed to initialize payment: ' + error.message });
   }
 });
@@ -293,7 +286,6 @@ async function savePaymentMethodIfNew(pool, paymentIntent, userId) {
       );
     }
 
-    console.log(`Saved payment method ${pm.card.brand} *${pm.card.last4} for user ${userId}`);
   } catch (error) {
     console.error('Error saving payment method:', error.message);
     // Don't throw - this is not critical to order processing
@@ -305,8 +297,6 @@ async function savePaymentMethodIfNew(pool, paymentIntent, userId) {
  */
 async function handlePaymentSuccess(pool, paymentIntent) {
   const { id: paymentIntentId, metadata } = paymentIntent;
-
-  console.log('Processing payment success:', paymentIntentId, 'type:', metadata?.type);
 
   // Save payment method for future use (auto-renewal)
   if (metadata?.userId) {

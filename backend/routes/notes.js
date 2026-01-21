@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { authMiddleware, staffMiddleware } = require('../middleware/auth');
+const { authMiddleware, staffMiddleware, parseIntParam } = require('../middleware/auth');
 
 // All routes require authentication and staff level
 router.use(authMiddleware);
@@ -9,12 +9,17 @@ router.use(staffMiddleware);
 // Get notes for an entity
 router.get('/:entityType/:entityId', async (req, res) => {
   const pool = req.app.locals.pool;
-  const { entityType, entityId } = req.params;
+  const { entityType } = req.params;
+  const entityId = parseIntParam(req.params.entityId);
 
   // Validate entity type
   const validTypes = ['user', 'order', 'domain'];
   if (!validTypes.includes(entityType)) {
     return res.status(400).json({ error: 'Invalid entity type' });
+  }
+
+  if (entityId === null) {
+    return res.status(400).json({ error: 'Invalid entity ID' });
   }
 
   try {
@@ -37,13 +42,18 @@ router.get('/:entityType/:entityId', async (req, res) => {
 // Create a note
 router.post('/:entityType/:entityId', async (req, res) => {
   const pool = req.app.locals.pool;
-  const { entityType, entityId } = req.params;
+  const { entityType } = req.params;
+  const entityId = parseIntParam(req.params.entityId);
   const { note, is_pinned = false } = req.body;
 
   // Validate entity type
   const validTypes = ['user', 'order', 'domain'];
   if (!validTypes.includes(entityType)) {
     return res.status(400).json({ error: 'Invalid entity type' });
+  }
+
+  if (entityId === null) {
+    return res.status(400).json({ error: 'Invalid entity ID' });
   }
 
   if (!note || note.trim().length === 0) {
@@ -94,8 +104,12 @@ router.post('/:entityType/:entityId', async (req, res) => {
 // Update a note
 router.put('/:noteId', async (req, res) => {
   const pool = req.app.locals.pool;
-  const { noteId } = req.params;
+  const noteId = parseIntParam(req.params.noteId);
   const { note, is_pinned } = req.body;
+
+  if (noteId === null) {
+    return res.status(400).json({ error: 'Invalid note ID' });
+  }
 
   try {
     // Check if note exists
@@ -143,7 +157,11 @@ router.put('/:noteId', async (req, res) => {
 // Delete a note
 router.delete('/:noteId', async (req, res) => {
   const pool = req.app.locals.pool;
-  const { noteId } = req.params;
+  const noteId = parseIntParam(req.params.noteId);
+
+  if (noteId === null) {
+    return res.status(400).json({ error: 'Invalid note ID' });
+  }
 
   try {
     // Check ownership or admin status
@@ -173,7 +191,11 @@ router.delete('/:noteId', async (req, res) => {
 // Toggle pin status
 router.post('/:noteId/toggle-pin', async (req, res) => {
   const pool = req.app.locals.pool;
-  const { noteId } = req.params;
+  const noteId = parseIntParam(req.params.noteId);
+
+  if (noteId === null) {
+    return res.status(400).json({ error: 'Invalid note ID' });
+  }
 
   try {
     // Check if note exists and get ownership info
