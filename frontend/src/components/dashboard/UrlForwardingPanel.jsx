@@ -19,9 +19,15 @@ function UrlForwardingPanel({ domainId, domainName, tld, nameservers }) {
   const [cloakTitle, setCloakTitle] = useState('');
   const [cloakDescription, setCloakDescription] = useState('');
 
-  // Check if using eNom nameservers (required for forwarding)
+  // Check if using eNom/WorxTech nameservers (required for forwarding)
   const isUsingEnomNS = !nameservers || nameservers.length === 0 ||
-    nameservers.some(ns => ns.toLowerCase().includes('enom') || ns.toLowerCase().includes('registrar-servers'));
+    nameservers.some(ns => {
+      const nsLower = ns.toLowerCase();
+      return nsLower.includes('enom') ||
+             nsLower.includes('registrar-servers') ||
+             nsLower.includes('name-services') ||
+             nsLower.includes('worxtech.biz');
+    });
 
   useEffect(() => {
     fetchForwarding();

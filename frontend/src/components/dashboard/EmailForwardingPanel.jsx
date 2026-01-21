@@ -16,9 +16,15 @@ function EmailForwardingPanel({ domainId, domainName, tld, nameservers }) {
   const [submitting, setSubmitting] = useState(false);
   const [deleting, setDeleting] = useState(null);
 
-  // Check if using eNom nameservers (required for forwarding)
+  // Check if using eNom/WorxTech nameservers (required for forwarding)
   const isUsingEnomNS = !nameservers || nameservers.length === 0 ||
-    nameservers.some(ns => ns.toLowerCase().includes('enom') || ns.toLowerCase().includes('registrar-servers'));
+    nameservers.some(ns => {
+      const nsLower = ns.toLowerCase();
+      return nsLower.includes('enom') ||
+             nsLower.includes('registrar-servers') ||
+             nsLower.includes('name-services') ||
+             nsLower.includes('worxtech.biz');
+    });
 
   useEffect(() => {
     fetchForwards();

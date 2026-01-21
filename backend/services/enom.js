@@ -5,6 +5,13 @@ const querystring = require('querystring');
 const CC_FEE_PERCENT = 0.05;  // eNom charges 5% for CC refills
 const MIN_REFILL = 25.00;     // Minimum refill amount allowed by eNom
 
+// White-label/branded nameservers (point to eNom's DNS infrastructure)
+// These should be set up as glue records at your registrar
+const BRANDED_NAMESERVERS = [
+  'ns1.worxtech.biz',  // → 64.98.148.137 (dns1.name-services.com)
+  'ns2.worxtech.biz'   // → 216.40.47.201 (dns2.name-services.com)
+];
+
 class EnomAPI {
   constructor() {
     // Store all credentials for dynamic switching
@@ -407,17 +414,20 @@ class EnomAPI {
     // Validate domain parts
     this.validateDomainParts(sld, tld);
 
+    // Use branded nameservers as default if none specified
+    const nsToUse = nameservers.length > 0 ? nameservers : BRANDED_NAMESERVERS;
+
     const requestParams = {
       sld,
       tld,
       NumYears: years,
-      UseDNS: nameservers.length > 0 ? 'default' : '',
+      UseDNS: 'default',
       // Disable auto-renew on eNom side - our system handles renewals
       RenewName: '0'
     };
 
-    // Add nameservers
-    nameservers.forEach((ns, index) => {
+    // Add nameservers (branded by default)
+    nsToUse.forEach((ns, index) => {
       requestParams[`NS${index + 1}`] = ns;
     });
 
