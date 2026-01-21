@@ -144,11 +144,18 @@ router.get('/users/:id', async (req, res) => {
   }
 });
 
-// Update user (admin toggle and role management)
+// Update user (full profile editing for admins)
 router.put('/users/:id', async (req, res) => {
   const pool = req.app.locals.pool;
   const userId = parseInt(req.params.id);
-  const { is_admin, role_level, role_name, email_verified } = req.body;
+  const {
+    // Role/admin fields
+    is_admin, role_level, role_name, email_verified,
+    // Profile fields
+    full_name, email, phone, company_name,
+    address_line1, address_line2, city, state, postal_code, country,
+    theme_preference
+  } = req.body;
 
   try {
     // Get current user data for audit
@@ -157,12 +164,7 @@ router.put('/users/:id', async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    const oldValues = {
-      is_admin: currentUser.rows[0].is_admin,
-      role_level: currentUser.rows[0].role_level,
-      role_name: currentUser.rows[0].role_name,
-      email_verified: currentUser.rows[0].email_verified
-    };
+    const oldValues = currentUser.rows[0];
 
     // Check if trying to set a role higher than or equal to own role
     if (role_level !== undefined && role_level >= req.user.role_level && !req.user.is_admin) {
@@ -174,6 +176,22 @@ router.put('/users/:id', async (req, res) => {
       return res.status(403).json({ error: 'Cannot demote yourself' });
     }
 
+    // Validate email format if provided
+    if (email !== undefined && email !== null) {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email)) {
+        return res.status(400).json({ error: 'Invalid email format' });
+      }
+      // Check for duplicate email
+      const emailCheck = await pool.query(
+        'SELECT id FROM users WHERE email = $1 AND id != $2',
+        [email.toLowerCase(), userId]
+      );
+      if (emailCheck.rows.length > 0) {
+        return res.status(400).json({ error: 'Email already in use by another account' });
+      }
+    }
+
     const result = await pool.query(
       `UPDATE users SET
         is_admin = COALESCE($1, is_admin),
@@ -181,16 +199,34 @@ router.put('/users/:id', async (req, res) => {
         role_name = COALESCE($3, role_name),
         email_verified = COALESCE($4, email_verified),
         email_verified_at = CASE WHEN $4 = true AND email_verified = false THEN CURRENT_TIMESTAMP ELSE email_verified_at END,
+        full_name = COALESCE($5, full_name),
+        email = COALESCE(LOWER($6), email),
+        phone = COALESCE($7, phone),
+        company_name = COALESCE($8, company_name),
+        address_line1 = COALESCE($9, address_line1),
+        address_line2 = COALESCE($10, address_line2),
+        city = COALESCE($11, city),
+        state = COALESCE($12, state),
+        postal_code = COALESCE($13, postal_code),
+        country = COALESCE($14, country),
+        theme_preference = COALESCE($15, theme_preference),
         updated_at = CURRENT_TIMESTAMP
-       WHERE id = $5
-       RETURNING id, username, email, is_admin, role_level, role_name, email_verified`,
-      [is_admin, role_level, role_name, email_verified, userId]
+       WHERE id = $16
+       RETURNING id, username, email, full_name, phone, company_name,
+                 address_line1, address_line2, city, state, postal_code, country,
+                 is_admin, role_level, role_name, email_verified, theme_preference`,
+      [is_admin, role_level, role_name, email_verified,
+       full_name, email, phone, company_name,
+       address_line1, address_line2, city, state, postal_code, country,
+       theme_preference, userId]
     );
 
-    // Log the audit
-    await logAudit(pool, req.user.id, 'update_user_role', 'user', userId, oldValues, result.rows[0], req);
+    const newValues = result.rows[0];
 
-    res.json(result.rows[0]);
+    // Log the audit with all changed fields
+    await logAudit(pool, req.user.id, 'update_user', 'user', userId, oldValues, newValues, req);
+
+    res.json(newValues);
   } catch (error) {
     console.error('Error updating user:', error);
     res.status(500).json({ error: 'Failed to update user' });

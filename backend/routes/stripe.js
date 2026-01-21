@@ -874,7 +874,7 @@ async function handlePrivacyPurchaseSuccess(pool, paymentIntent) {
 
 // Get saved payment methods
 router.get('/payment-methods', authMiddleware, async (req, res) => {
-  if (!stripe) {
+  if (!stripeService.isConfigured()) {
     return res.status(503).json({ error: 'Stripe not configured' });
   }
 
@@ -908,7 +908,7 @@ router.get('/payment-methods', authMiddleware, async (req, res) => {
 
 // Set default payment method
 router.put('/payment-methods/:pmId/default', authMiddleware, async (req, res) => {
-  if (!stripe) {
+  if (!stripeService.isConfigured()) {
     return res.status(503).json({ error: 'Stripe not configured' });
   }
 
