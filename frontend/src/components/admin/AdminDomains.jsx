@@ -325,7 +325,7 @@ function DomainDetailModal({ domain, onClose, onSave, onRefresh, token }) {
           <div className="flex items-center gap-3">
             <Globe className="w-6 h-6 text-white" />
             <div>
-              <h2 className="text-lg font-bold text-white">{domain.domain_name}</h2>
+              <h2 className="text-lg font-bold text-white">{domain.domain_name}.{domain.tld}</h2>
               <p className="text-sm text-white/70">Domain Management</p>
             </div>
           </div>

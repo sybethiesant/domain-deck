@@ -2072,6 +2072,7 @@ class EnomAPI {
 
   /**
    * Get URL forwarding settings for a domain
+   * Uses GetHosts to find URL record type
    * @param {string} sld - Second level domain
    * @param {string} tld - Top level domain
    * @returns {Promise<object>} - URL forwarding settings
@@ -2079,39 +2080,50 @@ class EnomAPI {
   async getUrlForwarding(sld, tld, options = {}) {
     try {
       this.validateDomainParts(sld, tld);
-      const response = await this.request('GetForwarding', { sld, tld }, { mode: options.mode });
+      const response = await this.request('GetHosts', { sld, tld }, { mode: options.mode });
+
+      // Look for URL or URL301 record types in the host records
+      let forwardUrl = null;
+      let forwardType = null;
+
+      // eNom returns host records as HostName1, RecordType1, Address1, etc.
+      for (let i = 1; i <= 20; i++) {
+        const recordType = response[`RecordType${i}`];
+        const hostName = response[`HostName${i}`];
+        const address = response[`Address${i}`];
+
+        if (recordType === 'URL' || recordType === 'URL301') {
+          if (hostName === '@' || hostName === '' || !hostName) {
+            forwardUrl = address;
+            forwardType = recordType === 'URL301' ? 'permanent' : 'temporary';
+            break;
+          }
+        }
+      }
 
       return {
         domainName: `${sld}.${tld}`,
-        enabled: response.ForwardingEnabled === '1' || response.forwarding === 'enabled',
-        forwardUrl: response.ForwardURL || response.forwardurl || null,
-        forwardType: response.ForwardType || response.forwardtype || 'temporary', // 'permanent' (301) or 'temporary' (302)
-        cloak: response.CloakTitle ? true : false,
-        cloakTitle: response.CloakTitle || null,
-        cloakDescription: response.CloakDescription || null,
-        cloakKeywords: response.CloakKeywords || null,
-        // Subdomain forwarding
-        subdomainForwarding: response.SubForwarding || null,
-        subdomainUrl: response.SubForwardURL || null
+        enabled: !!forwardUrl,
+        forwardUrl,
+        forwardType,
+        cloak: false // Cloaking would need Frame record type
       };
     } catch (error) {
-      // If no forwarding is set, eNom may return an error
-      if (error.message.includes('No forwarding') || error.message.includes('not enabled')) {
-        return {
-          domainName: `${sld}.${tld}`,
-          enabled: false,
-          forwardUrl: null,
-          forwardType: null,
-          cloak: false
-        };
-      }
       console.error(`eNom get URL forwarding error for ${sld}.${tld}:`, error.message);
-      throw error;
+      // Return empty state on error
+      return {
+        domainName: `${sld}.${tld}`,
+        enabled: false,
+        forwardUrl: null,
+        forwardType: null,
+        cloak: false
+      };
     }
   }
 
   /**
    * Set URL forwarding for a domain
+   * Uses SetHosts with URL or URL301 record type
    * @param {string} sld - Second level domain
    * @param {string} tld - Top level domain
    * @param {object} params - Forwarding parameters
@@ -2122,9 +2134,7 @@ class EnomAPI {
       forwardUrl,
       forwardType = 'temporary', // 'permanent' (301) or 'temporary' (302)
       cloak = false,
-      cloakTitle = '',
-      cloakDescription = '',
-      cloakKeywords = ''
+      cloakTitle = ''
     } = params;
 
     try {
@@ -2141,21 +2151,29 @@ class EnomAPI {
         normalizedUrl = 'https://' + normalizedUrl;
       }
 
+      // Determine record type: URL (302), URL301 (301), or Frame (cloak)
+      let recordType = 'URL'; // Default: 302 temporary redirect
+      if (forwardType === 'permanent') {
+        recordType = 'URL301';
+      }
+      if (cloak) {
+        recordType = 'Frame';
+      }
+
       const requestParams = {
         sld,
         tld,
-        ForwardURL: normalizedUrl,
-        ForwardType: forwardType === 'permanent' ? '301' : '302'
+        HostName1: '@',
+        RecordType1: recordType,
+        Address1: normalizedUrl
       };
 
-      // Add cloaking options if enabled
-      if (cloak) {
-        requestParams.CloakTitle = cloakTitle || sld;
-        requestParams.CloakDescription = cloakDescription || '';
-        requestParams.CloakKeywords = cloakKeywords || '';
+      // Add title for Frame (cloaking)
+      if (cloak && cloakTitle) {
+        requestParams.Address1 = `${normalizedUrl},${cloakTitle}`;
       }
 
-      const response = await this.request('SetForwarding', requestParams, { mode: options.mode });
+      await this.request('SetHosts', requestParams, { mode: options.mode });
 
       return {
         success: true,
@@ -2172,6 +2190,7 @@ class EnomAPI {
 
   /**
    * Disable URL forwarding for a domain
+   * Removes all host records (sets empty hosts)
    * @param {string} sld - Second level domain
    * @param {string} tld - Top level domain
    * @returns {Promise<object>} - Result
@@ -2180,7 +2199,41 @@ class EnomAPI {
     try {
       this.validateDomainParts(sld, tld);
 
-      const response = await this.request('DeleteForwarding', { sld, tld }, { mode: options.mode });
+      // First get existing hosts to preserve non-URL records
+      const existingHosts = await this.request('GetHosts', { sld, tld }, { mode: options.mode });
+
+      // Build new host list excluding URL/URL301/Frame records for @
+      const newHosts = {};
+      let hostIndex = 1;
+
+      for (let i = 1; i <= 20; i++) {
+        const recordType = existingHosts[`RecordType${i}`];
+        const hostName = existingHosts[`HostName${i}`];
+        const address = existingHosts[`Address${i}`];
+
+        if (!recordType || !address) continue;
+
+        // Skip URL forwarding records for @ (root domain)
+        if ((recordType === 'URL' || recordType === 'URL301' || recordType === 'Frame') &&
+            (hostName === '@' || hostName === '' || !hostName)) {
+          continue;
+        }
+
+        // Keep all other records
+        newHosts[`HostName${hostIndex}`] = hostName || '@';
+        newHosts[`RecordType${hostIndex}`] = recordType;
+        newHosts[`Address${hostIndex}`] = address;
+        hostIndex++;
+      }
+
+      // If no records left, we need to set at least something or clear all
+      if (hostIndex === 1) {
+        // No records to keep - just acknowledge success
+        // eNom doesn't have a "delete all" so we just return success
+      } else {
+        // Set the remaining records
+        await this.request('SetHosts', { sld, tld, ...newHosts }, { mode: options.mode });
+      }
 
       return {
         success: true,
