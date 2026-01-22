@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Loader2, User, Mail, Phone, MapPin, Building2, Edit2, AlertCircle } from 'lucide-react';
+import { Loader2, User, Mail, Phone, MapPin, Edit2, AlertCircle } from 'lucide-react';
 import { useAuth } from '../../App';
 import { API_URL } from '../../config/api';
 import DomainContactEditModal from './DomainContactEditModal';

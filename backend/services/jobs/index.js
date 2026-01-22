@@ -51,6 +51,9 @@ class JobScheduler {
     // Auto-renew domains - daily at 3 AM
     this.scheduleCron('autoRenew', '0 3 * * *', this.autoRenewDomains.bind(this));
 
+    // Expire pending domain push requests - every hour
+    this.scheduleCron('expirePushRequests', '30 * * * *', this.expirePushRequests.bind(this));
+
     console.log('Job scheduler started with', this.cronJobs.size, 'cron jobs');
   }
 
@@ -649,6 +652,52 @@ class JobScheduler {
     }
 
     console.log(`[autoRenew] Complete - Renewed: ${renewed}, Failed: ${failed}, No Payment Method: ${noPaymentMethod}`);
+  }
+
+  /**
+   * Expire pending domain push requests that have passed their expiration date
+   */
+  async expirePushRequests() {
+    if (!this.pool) {
+      console.error('[expirePush] No database pool available');
+      return;
+    }
+
+    console.log('[expirePush] Checking for expired push requests...');
+
+    try {
+      // Find and expire all pending requests that have passed their expires_at date
+      const result = await this.pool.query(`
+        UPDATE domain_push_requests
+        SET status = 'expired', responded_at = CURRENT_TIMESTAMP
+        WHERE status = 'pending'
+          AND expires_at IS NOT NULL
+          AND expires_at < CURRENT_TIMESTAMP
+        RETURNING id, domain_id, from_user_id, to_user_id
+      `);
+
+      if (result.rows.length > 0) {
+        console.log(`[expirePush] Expired ${result.rows.length} push request(s)`);
+
+        // Log each expired request
+        for (const expired of result.rows) {
+          // Get domain info for logging
+          const domainResult = await this.pool.query(
+            'SELECT domain_name, tld FROM domains WHERE id = $1',
+            [expired.domain_id]
+          );
+
+          if (domainResult.rows[0]) {
+            const domain = domainResult.rows[0];
+            console.log(`[expirePush] Expired push for ${domain.domain_name}.${domain.tld} (request #${expired.id})`);
+          }
+        }
+      } else {
+        console.log('[expirePush] No expired push requests found');
+      }
+    } catch (error) {
+      console.error('[expirePush] Error expiring push requests:', error.message);
+    }
   }
 }
 

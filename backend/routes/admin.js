@@ -914,6 +914,78 @@ router.post('/domains/:id/push', async (req, res) => {
   }
 });
 
+// Get all pending push requests (admin view)
+router.get('/push-requests', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const { status = 'pending', page = 1, limit = 50 } = req.query;
+  const offset = (parseInt(page) - 1) * parseInt(limit);
+
+  try {
+    const validStatuses = ['pending', 'accepted', 'rejected', 'cancelled', 'expired', 'all'];
+    const filterStatus = validStatuses.includes(status) ? status : 'pending';
+
+    let whereClause = filterStatus === 'all' ? '' : 'WHERE dpr.status = $1';
+    const params = filterStatus === 'all' ? [] : [filterStatus];
+
+    const result = await pool.query(`
+      SELECT
+        dpr.*,
+        d.domain_name, d.tld,
+        fu.email as from_email, fu.full_name as from_name,
+        tu.email as to_email, tu.full_name as to_name
+      FROM domain_push_requests dpr
+      JOIN domains d ON d.id = dpr.domain_id
+      JOIN users fu ON fu.id = dpr.from_user_id
+      JOIN users tu ON tu.id = dpr.to_user_id
+      ${whereClause}
+      ORDER BY dpr.created_at DESC
+      LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+    `, [...params, parseInt(limit), offset]);
+
+    const countResult = await pool.query(`
+      SELECT COUNT(*) FROM domain_push_requests dpr
+      ${whereClause}
+    `, params);
+
+    res.json({
+      requests: result.rows,
+      total: parseInt(countResult.rows[0].count),
+      page: parseInt(page),
+      totalPages: Math.ceil(countResult.rows[0].count / parseInt(limit))
+    });
+  } catch (error) {
+    console.error('Error fetching push requests:', error);
+    res.status(500).json({ error: 'Failed to fetch push requests' });
+  }
+});
+
+// Admin: Expire a pending push request
+router.post('/push-requests/:id/expire', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const requestId = parseInt(req.params.id);
+
+  try {
+    const result = await pool.query(`
+      UPDATE domain_push_requests
+      SET status = 'expired', responded_at = CURRENT_TIMESTAMP
+      WHERE id = $1 AND status = 'pending'
+      RETURNING *
+    `, [requestId]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Pending push request not found' });
+    }
+
+    await logAudit(pool, req.user.id, 'admin_expire_push', 'push_request', requestId,
+      { status: 'pending' }, { status: 'expired' }, req);
+
+    res.json({ success: true, message: 'Push request expired', request: result.rows[0] });
+  } catch (error) {
+    console.error('Error expiring push request:', error);
+    res.status(500).json({ error: 'Failed to expire push request' });
+  }
+});
+
 // List all orders
 router.get('/orders', async (req, res) => {
   const pool = req.app.locals.pool;

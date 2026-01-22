@@ -629,6 +629,11 @@ function Dashboard() {
                       "{req.notes}"
                     </p>
                   )}
+                  {req.expires_at && (
+                    <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                      Expires: {new Date(req.expires_at).toLocaleDateString()} ({Math.max(0, Math.ceil((new Date(req.expires_at) - new Date()) / (1000 * 60 * 60 * 24)))} days left)
+                    </p>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   <button
@@ -683,6 +688,11 @@ function Dashboard() {
                   </p>
                   <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">
                     Waiting for acceptance...
+                    {req.expires_at && (
+                      <span className="ml-2 text-amber-600 dark:text-amber-400">
+                        (Expires in {Math.max(0, Math.ceil((new Date(req.expires_at) - new Date()) / (1000 * 60 * 60 * 24)))} days)
+                      </span>
+                    )}
                   </p>
                 </div>
                 <button

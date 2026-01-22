@@ -611,12 +611,12 @@ function AdminSettings() {
           </button>
         </div>
 
-        <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4 mb-6">
+        <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 mb-6">
           <div className="flex items-start gap-3">
-            <AlertTriangle className="w-5 h-5 text-yellow-600 dark:text-yellow-400 mt-0.5" />
-            <div className="text-sm text-yellow-800 dark:text-yellow-200">
-              <p className="font-medium">Important</p>
-              <p>Domains registered in test mode cannot be managed in production mode and vice versa. Mode changes take effect immediately.</p>
+            <Zap className="w-5 h-5 text-blue-600 dark:text-blue-400 mt-0.5" />
+            <div className="text-sm text-blue-800 dark:text-blue-200">
+              <p className="font-medium">How API Modes Work</p>
+              <p>Mode changes only affect <strong>new registrations</strong>. Existing domains remember which mode they were registered in and will always be managed using that mode automatically.</p>
             </div>
           </div>
         </div>
@@ -783,6 +783,24 @@ function AdminSettings() {
                 onChange={(e) => handleChange('sync_interval_hours', e.target.value)}
                 className="input w-full"
               />
+            </div>
+          </div>
+          <div className="pt-4 border-t border-slate-200 dark:border-slate-700">
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+              Domain Push Request Timeout (days)
+            </label>
+            <div className="flex items-center gap-4">
+              <input
+                type="number"
+                min="1"
+                max="30"
+                value={settings.push_timeout_days || '7'}
+                onChange={(e) => handleChange('push_timeout_days', e.target.value)}
+                className="input w-32"
+              />
+              <p className="text-sm text-slate-500">
+                Pending push requests expire after this many days if not accepted
+              </p>
             </div>
           </div>
         </div>

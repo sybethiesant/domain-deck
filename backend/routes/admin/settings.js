@@ -74,6 +74,9 @@ const DEFAULT_SETTINGS = {
   order_expiration_hours: '24',
   require_contact_for_checkout: 'true',
 
+  // Domain transfer settings
+  push_timeout_days: '7',
+
   // Notification settings
   admin_notification_email: 'admin@worxtech.biz',
   admin_email_notifications: 'true',
@@ -147,7 +150,8 @@ router.put('/settings', async (req, res) => {
     const validationRules = {
       sync_interval_hours: (v) => parseInt(v) >= 1 && parseInt(v) <= 168,
       order_expiration_hours: (v) => parseInt(v) >= 1 && parseInt(v) <= 168,
-      expiring_domain_days: (v) => parseInt(v) >= 1 && parseInt(v) <= 90
+      expiring_domain_days: (v) => parseInt(v) >= 1 && parseInt(v) <= 90,
+      push_timeout_days: (v) => parseInt(v) >= 1 && parseInt(v) <= 30
     };
 
     for (const [key, value] of Object.entries(settings)) {

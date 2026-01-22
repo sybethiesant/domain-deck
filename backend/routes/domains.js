@@ -1409,6 +1409,7 @@ router.get('/push-requests', authMiddleware, async (req, res) => {
 
   try {
     // Get incoming requests (domains being pushed TO this user)
+    // Filter out expired requests (expires_at is null or in the future)
     const incoming = await pool.query(`
       SELECT
         dpr.*,
@@ -1418,10 +1419,12 @@ router.get('/push-requests', authMiddleware, async (req, res) => {
       JOIN domains d ON d.id = dpr.domain_id
       JOIN users u ON u.id = dpr.from_user_id
       WHERE dpr.to_user_id = $1 AND dpr.status = 'pending'
+        AND (dpr.expires_at IS NULL OR dpr.expires_at > CURRENT_TIMESTAMP)
       ORDER BY dpr.created_at DESC
     `, [userId]);
 
     // Get outgoing requests (domains this user is pushing)
+    // Filter out expired requests
     const outgoing = await pool.query(`
       SELECT
         dpr.*,
@@ -1431,6 +1434,7 @@ router.get('/push-requests', authMiddleware, async (req, res) => {
       JOIN domains d ON d.id = dpr.domain_id
       JOIN users u ON u.id = dpr.to_user_id
       WHERE dpr.from_user_id = $1 AND dpr.status = 'pending'
+        AND (dpr.expires_at IS NULL OR dpr.expires_at > CURRENT_TIMESTAMP)
       ORDER BY dpr.created_at DESC
     `, [userId]);
 
@@ -1526,13 +1530,19 @@ router.post('/:id/push', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'You cannot push a domain to yourself' });
     }
 
-    // Create push request
+    // Get push timeout setting
+    const timeoutResult = await pool.query(
+      "SELECT value FROM app_settings WHERE key = 'push_timeout_days'"
+    );
+    const timeoutDays = parseInt(timeoutResult.rows[0]?.value) || 7;
+
+    // Create push request with expiration
     const pushResult = await pool.query(`
       INSERT INTO domain_push_requests
-        (domain_id, from_user_id, to_user_id, to_email, notes, initiated_by_admin)
-      VALUES ($1, $2, $3, $4, $5, false)
+        (domain_id, from_user_id, to_user_id, to_email, notes, initiated_by_admin, expires_at)
+      VALUES ($1, $2, $3, $4, $5, false, CURRENT_TIMESTAMP + ($6 || ' days')::interval)
       RETURNING *
-    `, [domainId, userId, recipient.id, recipient.email, notes || null]);
+    `, [domainId, userId, recipient.id, recipient.email, notes || null, timeoutDays]);
 
     res.json({
       success: true,
@@ -1571,6 +1581,16 @@ router.post('/push-requests/:requestId/accept', authMiddleware, async (req, res)
 
     if (pushRequest.status !== 'pending') {
       return res.status(400).json({ error: `This request is already ${pushRequest.status}` });
+    }
+
+    // Check if request has expired
+    if (pushRequest.expires_at && new Date(pushRequest.expires_at) < new Date()) {
+      // Mark as expired
+      await pool.query(
+        "UPDATE domain_push_requests SET status = 'expired', responded_at = CURRENT_TIMESTAMP WHERE id = $1",
+        [requestId]
+      );
+      return res.status(400).json({ error: 'This push request has expired' });
     }
 
     // Start transaction
