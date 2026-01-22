@@ -231,6 +231,9 @@ router.post('/orders/:orderId/items/:itemId/retry', async (req, res) => {
     if (!contact) {
       const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [item.user_id]);
       const u = userResult.rows[0];
+      if (!u) {
+        return res.status(400).json({ error: 'User not found for this order item' });
+      }
       contact = {
         first_name: u.full_name?.split(' ')[0] || u.username,
         last_name: u.full_name?.split(' ').slice(1).join(' ') || u.username,

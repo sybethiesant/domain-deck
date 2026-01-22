@@ -71,8 +71,8 @@ router.get('/audit-logs', async (req, res) => {
 
     const result = await pool.query(query, params);
 
-    // Get total count
-    let countQuery = 'SELECT COUNT(*) FROM audit_logs al WHERE 1=1';
+    // Get total count with same filters as main query
+    let countQuery = 'SELECT COUNT(*) FROM audit_logs al LEFT JOIN users u ON al.user_id = u.id WHERE 1=1';
     const countParams = [];
     if (user_id) {
       countParams.push(parseInt(user_id));
@@ -85,6 +85,18 @@ router.get('/audit-logs', async (req, res) => {
     if (entity_type) {
       countParams.push(entity_type);
       countQuery += ` AND al.entity_type = $${countParams.length}`;
+    }
+    if (start_date) {
+      countParams.push(start_date);
+      countQuery += ` AND al.created_at >= $${countParams.length}`;
+    }
+    if (end_date) {
+      countParams.push(end_date);
+      countQuery += ` AND al.created_at <= $${countParams.length}`;
+    }
+    if (search) {
+      countParams.push(`%${search}%`);
+      countQuery += ` AND (u.username ILIKE $${countParams.length} OR al.action ILIKE $${countParams.length})`;
     }
 
     const countResult = await pool.query(countQuery, countParams);
@@ -185,7 +197,7 @@ router.get('/activity', async (req, res) => {
 
     const result = await pool.query(query, params);
 
-    // Get total count
+    // Get total count with same filters as main query
     let countQuery = 'SELECT COUNT(*) FROM activity_logs WHERE 1=1';
     const countParams = [];
     if (action) {
@@ -195,6 +207,18 @@ router.get('/activity', async (req, res) => {
     if (user_id) {
       countParams.push(parseInt(user_id));
       countQuery += ` AND user_id = $${countParams.length}`;
+    }
+    if (entity_type) {
+      countParams.push(entity_type);
+      countQuery += ` AND entity_type = $${countParams.length}`;
+    }
+    if (start_date) {
+      countParams.push(start_date);
+      countQuery += ` AND created_at >= $${countParams.length}`;
+    }
+    if (end_date) {
+      countParams.push(end_date);
+      countQuery += ` AND created_at <= $${countParams.length}`;
     }
 
     const countResult = await pool.query(countQuery, countParams);

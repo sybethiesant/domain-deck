@@ -15,18 +15,23 @@ function getCryptoModule() {
   return cryptoModule;
 }
 
-// Balance management constants
-const CC_FEE_PERCENT = 0.05;  // eNom charges 5% for CC refills
+// Balance management constants (from centralized config)
+const CC_FEE_PERCENT = BALANCE.CC_FEE_PERCENT;
 const MIN_REFILL = BALANCE.MIN_REFILL;
 
-// eNom's default nameservers (required for DNS hosting/URL forwarding to work)
-// Branded/vanity nameservers don't work with eNom's DNS hosting
-const DEFAULT_NAMESERVERS = [
+// Default nameservers (fallback - can be overridden via app_settings)
+// eNom's default nameservers are required for DNS hosting/URL forwarding to work
+const FALLBACK_NAMESERVERS = [
   'dns1.name-services.com',
   'dns2.name-services.com',
   'dns3.name-services.com',
   'dns4.name-services.com'
 ];
+
+// Cached nameservers from DB
+let cachedNameservers = null;
+let nameserversCacheTime = 0;
+const NAMESERVERS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 class EnomAPI {
   constructor() {
@@ -44,8 +49,56 @@ class EnomAPI {
       }
     };
 
+    // Database pool for settings queries
+    this.pool = null;
+
     // Initialize with env var setting
     this.setMode(process.env.ENOM_ENV || 'test');
+  }
+
+  /**
+   * Set database pool for settings queries
+   * @param {Pool} pool - PostgreSQL connection pool
+   */
+  setPool(pool) {
+    this.pool = pool;
+  }
+
+  /**
+   * Get default nameservers from database settings or fallback
+   * @returns {Promise<string[]>} Array of nameserver hostnames
+   */
+  async getDefaultNameservers() {
+    const now = Date.now();
+
+    // Return cached value if still valid
+    if (cachedNameservers && (now - nameserversCacheTime) < NAMESERVERS_CACHE_TTL) {
+      return cachedNameservers;
+    }
+
+    // Try to fetch from database
+    if (this.pool) {
+      try {
+        const result = await this.pool.query(
+          "SELECT value FROM app_settings WHERE key = 'default_nameservers'"
+        );
+        if (result.rows.length > 0 && result.rows[0].value) {
+          const parsed = JSON.parse(result.rows[0].value);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            cachedNameservers = parsed;
+            nameserversCacheTime = now;
+            return cachedNameservers;
+          }
+        }
+      } catch (err) {
+        console.error('[eNom] Error fetching nameservers from settings:', err.message);
+      }
+    }
+
+    // Fallback to hardcoded defaults
+    cachedNameservers = FALLBACK_NAMESERVERS;
+    nameserversCacheTime = now;
+    return cachedNameservers;
   }
 
   /**
@@ -439,7 +492,8 @@ class EnomAPI {
     this.validateDomainParts(sld, tld);
 
     // Use eNom default nameservers if none specified (required for DNS hosting)
-    const nsToUse = nameservers.length > 0 ? nameservers : DEFAULT_NAMESERVERS;
+    const defaultNs = await this.getDefaultNameservers();
+    const nsToUse = nameservers.length > 0 ? nameservers : defaultNs;
 
     const requestParams = {
       sld,

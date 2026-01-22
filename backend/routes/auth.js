@@ -7,6 +7,7 @@ const jwt = require('jsonwebtoken');
 const router = express.Router();
 const { authMiddleware } = require('../middleware/auth');
 const emailService = require('../services/email');
+const { AUTH } = require('../config/constants');
 
 // Helper to check if email verification is required
 async function isEmailVerificationRequired(pool) {
@@ -18,6 +19,22 @@ async function isEmailVerificationRequired(pool) {
   } catch (err) {
     return false;
   }
+}
+
+// Helper to get account lockout duration from settings (in minutes)
+async function getLockoutDuration(pool) {
+  try {
+    const result = await pool.query(
+      "SELECT value FROM app_settings WHERE key = 'lockout_duration_minutes'"
+    );
+    if (result.rows.length > 0) {
+      const minutes = parseInt(result.rows[0].value);
+      if (!isNaN(minutes) && minutes > 0) return minutes;
+    }
+  } catch (err) {
+    // Fall back to default
+  }
+  return AUTH.LOCKOUT_DURATION_MINUTES;
 }
 
 // Generate verification token
@@ -171,7 +188,7 @@ router.post('/register', async (req, res) => {
     const token = jwt.sign(
       { id: result.rows[0].id, username: result.rows[0].username },
       process.env.JWT_SECRET,
-      { expiresIn: '7d' }
+      { expiresIn: AUTH.JWT_EXPIRY }
     );
 
     // Send welcome email
@@ -233,24 +250,26 @@ router.post('/login', async (req, res) => {
       // Increment failed login attempts (only if user exists)
       if (user) {
         const attempts = (user.failed_login_attempts || 0) + 1;
-      let lockoutUntil = null;
+        let lockoutUntil = null;
+        let lockoutMinutes = null;
 
-      // Lock account after 5 failed attempts for 15 minutes
-      if (attempts >= 5) {
-        lockoutUntil = new Date(Date.now() + 15 * 60 * 1000);
-      }
+        // Lock account after configured failed attempts
+        if (attempts >= AUTH.LOCKOUT_ATTEMPTS) {
+          lockoutMinutes = await getLockoutDuration(pool);
+          lockoutUntil = new Date(Date.now() + lockoutMinutes * 60 * 1000);
+        }
 
-      await pool.query(
-        'UPDATE users SET failed_login_attempts = $1, lockout_until = $2 WHERE id = $3',
-        [attempts, lockoutUntil, user.id]
-      );
+        await pool.query(
+          'UPDATE users SET failed_login_attempts = $1, lockout_until = $2 WHERE id = $3',
+          [attempts, lockoutUntil, user.id]
+        );
 
-      if (lockoutUntil) {
-        return res.status(429).json({
-          error: 'Account temporarily locked due to too many failed login attempts',
-          minutes_remaining: 15
-        });
-      }
+        if (lockoutUntil) {
+          return res.status(429).json({
+            error: 'Account temporarily locked due to too many failed login attempts',
+            minutes_remaining: lockoutMinutes
+          });
+        }
       }
 
       return res.status(401).json({ error: 'Invalid credentials' });
@@ -275,7 +294,7 @@ router.post('/login', async (req, res) => {
     const token = jwt.sign(
       { id: user.id, username: user.username },
       process.env.JWT_SECRET,
-      { expiresIn: '7d' }
+      { expiresIn: AUTH.JWT_EXPIRY }
     );
 
     // Clear rate limit on successful login
@@ -351,7 +370,7 @@ router.post('/verify-email', async (req, res) => {
     const authToken = jwt.sign(
       { id: user.id, username: user.username },
       process.env.JWT_SECRET,
-      { expiresIn: '7d' }
+      { expiresIn: AUTH.JWT_EXPIRY }
     );
 
     // Send welcome email now that they're verified
@@ -658,7 +677,7 @@ router.post('/reset-password', async (req, res) => {
     const authToken = jwt.sign(
       { id: user.id, username: user.username },
       process.env.JWT_SECRET,
-      { expiresIn: '7d' }
+      { expiresIn: AUTH.JWT_EXPIRY }
     );
 
     res.json({

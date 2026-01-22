@@ -26,7 +26,8 @@ module.exports = {
     MIN_THRESHOLD: 50.00,
     DEFAULT_REFILL_AMOUNT: 100.00,
     LOW_BALANCE_ALERT: 25.00,
-    MIN_REFILL: 25.00
+    MIN_REFILL: 25.00,
+    CC_FEE_PERCENT: 0.05  // eNom charges 5% for CC refills
   },
 
   // Cache TTLs (milliseconds)
@@ -47,7 +48,9 @@ module.exports = {
   AUTH: {
     JWT_EXPIRY: '7d',
     PASSWORD_RESET_EXPIRY: '1h',
-    EMAIL_VERIFY_EXPIRY: '24h'
+    EMAIL_VERIFY_EXPIRY: '24h',
+    LOCKOUT_ATTEMPTS: 5,           // Failed attempts before lockout
+    LOCKOUT_DURATION_MINUTES: 15   // Default lockout duration
   },
 
   // Cart

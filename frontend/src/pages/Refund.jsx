@@ -1,7 +1,35 @@
 import React from 'react';
-import { RotateCcw } from 'lucide-react';
+import { RotateCcw, Loader2 } from 'lucide-react';
+import { useLegalPage } from '../hooks/useLegalPage';
 
 function Refund() {
+  const { loading, customContent, siteConfig } = useLegalPage('refund');
+
+  if (loading) {
+    return (
+      <div className="max-w-4xl mx-auto px-4 py-12 flex justify-center">
+        <Loader2 className="w-8 h-8 animate-spin text-indigo-500" />
+      </div>
+    );
+  }
+
+  // If custom content exists, render it
+  if (customContent) {
+    return (
+      <div className="max-w-4xl mx-auto px-4 py-12">
+        <div className="flex items-center gap-3 mb-8">
+          <RotateCcw className="w-8 h-8 text-indigo-500" />
+          <h1 className="text-3xl font-bold text-slate-900 dark:text-white">Refund Policy</h1>
+        </div>
+        <div
+          className="prose prose-slate dark:prose-invert max-w-none"
+          dangerouslySetInnerHTML={{ __html: customContent }}
+        />
+      </div>
+    );
+  }
+
+  // Default content with dynamic site config
   return (
     <div className="max-w-4xl mx-auto px-4 py-12">
       <div className="flex items-center gap-3 mb-8">
@@ -103,7 +131,7 @@ function Refund() {
             <li>Reason for the refund request</li>
           </ul>
           <p className="text-slate-600 dark:text-slate-300 mt-4">
-            <strong>Email:</strong> support@worxtech.biz
+            <strong>Email:</strong> {siteConfig.support_email}
           </p>
         </section>
 
@@ -137,8 +165,8 @@ function Refund() {
           <h2 className="text-xl font-semibold text-slate-900 dark:text-white mb-4">10. Contact Us</h2>
           <p className="text-slate-600 dark:text-slate-300">
             If you have questions about our Refund Policy, please contact us at:<br />
-            <strong>Email:</strong> support@worxtech.biz<br />
-            <strong>Company:</strong> WorxTech Internet Services LLC
+            <strong>Email:</strong> {siteConfig.support_email}<br />
+            <strong>Company:</strong> {siteConfig.company_name}
           </p>
         </section>
       </div>

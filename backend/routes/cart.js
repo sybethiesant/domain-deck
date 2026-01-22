@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { authMiddleware } = require('../middleware/auth');
+const { CART } = require('../config/constants');
 
 // Get cart contents
 router.get('/', authMiddleware, async (req, res) => {
@@ -53,9 +54,16 @@ router.post('/add', authMiddleware, async (req, res) => {
     return res.status(400).json({ error: 'Years must be between 1 and 10' });
   }
 
-  const fullDomain = `${domain_name}.${tld}`.toLowerCase();
-
   try {
+    // Check cart item limit
+    const countResult = await pool.query(
+      'SELECT COUNT(*) FROM cart_items WHERE user_id = $1 AND expires_at > CURRENT_TIMESTAMP',
+      [req.user.id]
+    );
+    if (parseInt(countResult.rows[0].count) >= CART.MAX_ITEMS) {
+      return res.status(400).json({ error: `Cart is full. Maximum ${CART.MAX_ITEMS} items allowed.` });
+    }
+
     // Check if item already in cart
     const existingResult = await pool.query(
       `SELECT id FROM cart_items

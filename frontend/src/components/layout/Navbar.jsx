@@ -79,7 +79,7 @@ function Navbar() {
   ];
 
   return (
-    <header className="sticky top-0 z-40 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200 dark:border-slate-800">
+    <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16">
           {/* Logo */}
@@ -105,12 +105,12 @@ function Navbar() {
               />
             ) : (
               <>
-                <Logo className="w-9 h-9 text-indigo-600 dark:text-indigo-400 transition-transform group-hover:scale-105" />
+                <Logo className="w-9 h-9 text-indigo-600 transition-transform group-hover:scale-105" />
                 <div className="flex flex-col">
-                  <span className="text-xl font-bold tracking-tight text-slate-900 dark:text-white">
-                    Worx<span className="text-indigo-600 dark:text-indigo-400">Tech</span>
+                  <span className="text-xl font-bold tracking-tight text-slate-900">
+                    Worx<span className="text-indigo-600">Tech</span>
                   </span>
-                  <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400 -mt-1 tracking-wider uppercase">
+                  <span className="text-[10px] font-medium text-slate-500 -mt-1 tracking-wider uppercase">
                     {siteConfig?.site_tagline || 'Internet Services'}
                   </span>
                 </div>
@@ -127,8 +127,8 @@ function Navbar() {
                   to={link.path}
                   className={`text-sm font-medium transition-colors ${
                     isActive(link.path)
-                      ? 'text-primary-600 dark:text-primary-400'
-                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+                      ? 'text-primary-600'
+                      : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
                   {link.label}
@@ -142,7 +142,7 @@ function Navbar() {
             {/* Theme Toggle */}
             <button
               onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-              className="p-2 rounded-lg text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              className="p-2 rounded-lg text-slate-600 hover:bg-slate-100 transition-colors"
               title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
             >
               {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
@@ -152,7 +152,7 @@ function Navbar() {
             {user && (
               <button
                 onClick={() => setShowCart(true)}
-                className="relative p-2 rounded-lg text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                className="relative p-2 rounded-lg text-slate-600 hover:bg-slate-100 transition-colors"
               >
                 <ShoppingCart className="w-5 h-5" />
                 {cart.items.length > 0 && (
@@ -168,10 +168,10 @@ function Navbar() {
               <div className="relative">
                 <button
                   onClick={() => setShowUserMenu(!showUserMenu)}
-                  className="flex items-center gap-2 p-2 rounded-lg text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                  className="flex items-center gap-2 p-2 rounded-lg text-slate-600 hover:bg-slate-100 transition-colors"
                 >
-                  <div className="w-8 h-8 bg-primary-100 dark:bg-primary-900 rounded-full flex items-center justify-center">
-                    <span className="text-sm font-semibold text-primary-600 dark:text-primary-400">
+                  <div className="w-8 h-8 bg-primary-100 rounded-full flex items-center justify-center">
+                    <span className="text-sm font-semibold text-primary-600">
                       {user.username?.[0]?.toUpperCase() || 'U'}
                     </span>
                   </div>
@@ -275,7 +275,7 @@ function Navbar() {
             {/* Mobile Menu Button */}
             <button
               onClick={() => setShowMobileMenu(!showMobileMenu)}
-              className="md:hidden p-2 rounded-lg text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+              className="md:hidden p-2 rounded-lg text-slate-600 hover:bg-slate-100"
             >
               {showMobileMenu ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
             </button>
@@ -284,7 +284,7 @@ function Navbar() {
 
         {/* Mobile Navigation */}
         {showMobileMenu && (
-          <div className="md:hidden border-t border-slate-200 dark:border-slate-700 py-4">
+          <div className="md:hidden border-t border-slate-200 py-4">
             <nav className="flex flex-col gap-2">
               {navLinks.map((link) => (
                 (link.public || user) && (
@@ -294,8 +294,8 @@ function Navbar() {
                     onClick={() => setShowMobileMenu(false)}
                     className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                       isActive(link.path)
-                        ? 'bg-primary-50 dark:bg-primary-900/20 text-primary-600 dark:text-primary-400'
-                        : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+                        ? 'bg-primary-50 text-primary-600'
+                        : 'text-slate-600 hover:bg-slate-100'
                     }`}
                   >
                     {link.label}
@@ -308,8 +308,8 @@ function Navbar() {
                   onClick={() => setShowMobileMenu(false)}
                   className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                     isActive('/settings')
-                      ? 'bg-primary-50 dark:bg-primary-900/20 text-primary-600 dark:text-primary-400'
-                      : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+                      ? 'bg-primary-50 text-primary-600'
+                      : 'text-slate-600 hover:bg-slate-100'
                   }`}
                 >
                   Settings
@@ -319,7 +319,7 @@ function Navbar() {
                 <Link
                   to="/admin"
                   onClick={() => setShowMobileMenu(false)}
-                  className="px-4 py-2 rounded-lg text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20"
+                  className="px-4 py-2 rounded-lg text-sm font-medium text-indigo-600 hover:bg-indigo-50"
                 >
                   Admin Panel
                 </Link>

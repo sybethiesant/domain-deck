@@ -262,6 +262,10 @@ app.locals.rateLimitStore = rateLimitStore;
 // Connect email service to database for template fetching
 emailService.setPool(pool);
 
+// Connect eNom service to database for settings queries
+const enomService = require('./services/enom');
+enomService.setPool(pool);
+
 // ============ STATIC FILES ============
 
 // Serve uploaded files (logos, etc.) with proper caching for images
@@ -360,9 +364,19 @@ app.post('/api/jobs/:name/trigger', require('./middleware/auth').authMiddleware,
 app.get('/api/site-config', async (req, res) => {
   try {
     const result = await pool.query(
-      "SELECT key, value FROM app_settings WHERE key IN ('site_name', 'site_tagline', 'logo_url', 'logo_width', 'logo_height')"
+      `SELECT key, value FROM app_settings WHERE key IN (
+        'site_name', 'site_tagline', 'logo_url', 'logo_width', 'logo_height',
+        'default_theme', 'company_name', 'support_email', 'site_url'
+      )`
     );
-    const config = {};
+    const config = {
+      site_name: 'WorxTech',
+      site_tagline: 'Domain Names Made Simple',
+      company_name: 'WorxTech Internet Services LLC',
+      support_email: 'support@worxtech.biz',
+      site_url: 'https://worxtech.biz',
+      default_theme: 'dark'
+    };
     for (const row of result.rows) {
       config[row.key] = row.value;
     }
@@ -370,6 +384,41 @@ app.get('/api/site-config', async (req, res) => {
   } catch (error) {
     console.error('Error fetching site config:', error);
     res.status(500).json({ error: 'Failed to fetch site config' });
+  }
+});
+
+// Get public legal page content - no auth required
+app.get('/api/legal/:pageKey', async (req, res) => {
+  const { pageKey } = req.params;
+  const validPages = ['terms', 'privacy', 'refund'];
+
+  if (!validPages.includes(pageKey)) {
+    return res.status(404).json({ error: 'Page not found' });
+  }
+
+  try {
+    const result = await pool.query(
+      'SELECT page_key, title, content, updated_at FROM legal_pages WHERE page_key = $1',
+      [pageKey]
+    );
+
+    if (result.rows.length === 0 || !result.rows[0].content) {
+      // Return empty content - frontend will show default
+      return res.json({
+        page_key: pageKey,
+        title: pageKey.charAt(0).toUpperCase() + pageKey.slice(1),
+        content: '',
+        has_custom_content: false
+      });
+    }
+
+    res.json({
+      ...result.rows[0],
+      has_custom_content: true
+    });
+  } catch (error) {
+    console.error('Error fetching legal page:', error);
+    res.status(500).json({ error: 'Failed to fetch legal page' });
   }
 });
 

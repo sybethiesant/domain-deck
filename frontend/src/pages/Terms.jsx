@@ -1,7 +1,70 @@
-import React from 'react';
-import { FileText } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { FileText, Loader2 } from 'lucide-react';
+import { API_URL } from '../config/api';
 
 function Terms() {
+  const [loading, setLoading] = useState(true);
+  const [customContent, setCustomContent] = useState(null);
+  const [siteConfig, setSiteConfig] = useState({
+    site_name: 'WorxTech',
+    company_name: 'WorxTech Internet Services LLC',
+    support_email: 'support@worxtech.biz',
+    site_url: 'https://worxtech.biz'
+  });
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        // Fetch site config and legal content in parallel
+        const [configRes, contentRes] = await Promise.all([
+          fetch(`${API_URL}/site-config`),
+          fetch(`${API_URL}/legal/terms`)
+        ]);
+
+        if (configRes.ok) {
+          const config = await configRes.json();
+          setSiteConfig(prev => ({ ...prev, ...config }));
+        }
+
+        if (contentRes.ok) {
+          const content = await contentRes.json();
+          if (content.has_custom_content && content.content) {
+            setCustomContent(content.content);
+          }
+        }
+      } catch (err) {
+        console.error('Error fetching terms:', err);
+      }
+      setLoading(false);
+    };
+    fetchData();
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="max-w-4xl mx-auto px-4 py-12 flex justify-center">
+        <Loader2 className="w-8 h-8 animate-spin text-indigo-500" />
+      </div>
+    );
+  }
+
+  // If custom content exists, render it
+  if (customContent) {
+    return (
+      <div className="max-w-4xl mx-auto px-4 py-12">
+        <div className="flex items-center gap-3 mb-8">
+          <FileText className="w-8 h-8 text-indigo-500" />
+          <h1 className="text-3xl font-bold text-slate-900 dark:text-white">Terms of Service</h1>
+        </div>
+        <div
+          className="prose prose-slate dark:prose-invert max-w-none"
+          dangerouslySetInnerHTML={{ __html: customContent }}
+        />
+      </div>
+    );
+  }
+
+  // Default content
   return (
     <div className="max-w-4xl mx-auto px-4 py-12">
       <div className="flex items-center gap-3 mb-8">
@@ -18,8 +81,8 @@ function Terms() {
         <section className="mb-8">
           <h2 className="text-xl font-semibold text-slate-900 dark:text-white mb-4">1. Acceptance of Terms</h2>
           <p className="text-slate-600 dark:text-slate-300">
-            By accessing or using WorxTech Internet Services LLC ("WorxTech," "we," "our," or "us")
-            website and services at worxtech.biz, you agree to be bound by these Terms of Service.
+            By accessing or using {siteConfig.company_name} ("{siteConfig.site_name}," "we," "our," or "us")
+            website and services at {siteConfig.site_url?.replace(/^https?:\/\//, '')}, you agree to be bound by these Terms of Service.
             If you do not agree to these terms, please do not use our services.
           </p>
         </section>
@@ -27,7 +90,7 @@ function Terms() {
         <section className="mb-8">
           <h2 className="text-xl font-semibold text-slate-900 dark:text-white mb-4">2. Services Provided</h2>
           <p className="text-slate-600 dark:text-slate-300 mb-4">
-            WorxTech provides domain registration, domain transfer, domain renewal, WHOIS privacy
+            {siteConfig.site_name} provides domain registration, domain transfer, domain renewal, WHOIS privacy
             protection, and DNS management services. We act as an authorized reseller through
             accredited domain registrars.
           </p>
@@ -54,7 +117,7 @@ function Terms() {
           <h2 className="text-xl font-semibold text-slate-900 dark:text-white mb-4">4. Domain Registration Terms</h2>
           <p className="text-slate-600 dark:text-slate-300 mb-4">
             Domain registrations are subject to the terms and policies of ICANN and the applicable
-            domain registry. By registering a domain through WorxTech, you agree to:
+            domain registry. By registering a domain through {siteConfig.site_name}, you agree to:
           </p>
           <ul className="list-disc pl-6 text-slate-600 dark:text-slate-300 space-y-2">
             <li>Provide accurate WHOIS contact information</li>
@@ -100,7 +163,7 @@ function Terms() {
         <section className="mb-8">
           <h2 className="text-xl font-semibold text-slate-900 dark:text-white mb-4">8. Limitation of Liability</h2>
           <p className="text-slate-600 dark:text-slate-300">
-            WorxTech shall not be liable for any indirect, incidental, special, consequential, or
+            {siteConfig.site_name} shall not be liable for any indirect, incidental, special, consequential, or
             punitive damages arising from your use of our services. Our total liability shall not
             exceed the amount paid by you for the specific service giving rise to the claim.
           </p>
@@ -128,8 +191,8 @@ function Terms() {
           <h2 className="text-xl font-semibold text-slate-900 dark:text-white mb-4">11. Contact Information</h2>
           <p className="text-slate-600 dark:text-slate-300">
             For questions about these Terms of Service, please contact us at:<br />
-            <strong>Email:</strong> support@worxtech.biz<br />
-            <strong>Company:</strong> WorxTech Internet Services LLC
+            <strong>Email:</strong> {siteConfig.support_email}<br />
+            <strong>Company:</strong> {siteConfig.company_name}
           </p>
         </section>
       </div>

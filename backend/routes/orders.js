@@ -149,6 +149,10 @@ router.post('/checkout', authMiddleware, async (req, res) => {
 
     // Create order items
     for (const item of items) {
+      // Calculate unit price correctly: for multi-year purchases, divide by years; otherwise use total
+      const itemYears = parseInt(item.years) || 1;
+      const unitPrice = itemYears > 1 ? parseFloat(item.price) / itemYears : parseFloat(item.price);
+
       await pool.query(
         `INSERT INTO order_items (
           order_id, item_type, domain_name, tld, years,
@@ -159,10 +163,10 @@ router.post('/checkout', authMiddleware, async (req, res) => {
           item.item_type,
           item.domain_name,
           item.tld,
-          item.years,
-          item.years > 0 ? item.price / item.years : item.price,
-          item.years,
-          item.price,
+          itemYears,
+          unitPrice,
+          itemYears,
+          parseFloat(item.price),
           'pending'
         ]
       );
@@ -260,7 +264,16 @@ router.post('/:orderId/items/:itemId/retry', authMiddleware, async (req, res) =>
 
         case 'transfer':
           // Transfers need EPP/auth code - check if stored or require user input
-          if (!item.options?.auth_code) {
+          // Parse options if it's a JSON string
+          let transferOptions = item.options;
+          if (typeof transferOptions === 'string') {
+            try {
+              transferOptions = JSON.parse(transferOptions);
+            } catch (e) {
+              transferOptions = {};
+            }
+          }
+          if (!transferOptions?.auth_code) {
             await pool.query(
               `UPDATE order_items SET status = 'failed', error = 'Authorization code required for transfer retry', updated_at = CURRENT_TIMESTAMP
                WHERE id = $1`,
@@ -271,7 +284,7 @@ router.post('/:orderId/items/:itemId/retry', authMiddleware, async (req, res) =>
           result = await enomService.initiateTransfer(
             item.domain_name,
             item.tld,
-            item.options.auth_code
+            transferOptions.auth_code
           );
           break;
 

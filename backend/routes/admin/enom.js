@@ -335,7 +335,7 @@ router.post('/enom/subaccounts/:accountId/import', async (req, res) => {
             domainInfo.auto_renew || false,
             domainInfo.lock_status !== false,
             JSON.stringify(domainInfo.nameservers || []),
-            enom.env // Store current eNom mode
+            enom.getMode().mode // Store current eNom mode (consistent with sync job)
           ]
         );
 

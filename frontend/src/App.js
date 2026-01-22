@@ -128,13 +128,37 @@ function AppContent() {
   const [maintenanceMode, setMaintenanceMode] = useState(false);
   const [maintenanceMessage, setMaintenanceMessage] = useState('');
 
-  // Theme state - default to light mode
+  // Site config state (fetched from API)
+  const [siteConfig, setSiteConfig] = useState(null);
+
+  // Theme state - use localStorage if set, otherwise wait for site config default
   const [theme, setTheme] = useState(() => {
     const saved = localStorage.getItem('theme');
     if (saved === 'light' || saved === 'dark') return saved;
-    // Default to light mode for professional appearance
-    return 'light';
+    // Return dark as initial default, will be updated by site config fetch
+    return 'dark';
   });
+
+  // Fetch site config (including default_theme) on mount
+  useEffect(() => {
+    const fetchSiteConfig = async () => {
+      try {
+        const res = await fetch(`${API_URL}/site-config`);
+        if (res.ok) {
+          const config = await res.json();
+          setSiteConfig(config);
+          // Apply default theme if user hasn't set a preference
+          const savedTheme = localStorage.getItem('theme');
+          if (!savedTheme && config.default_theme) {
+            setTheme(config.default_theme);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to fetch site config:', err);
+      }
+    };
+    fetchSiteConfig();
+  }, []);
 
   // Auth state
   const [user, setUser] = useState(null);

@@ -296,6 +296,58 @@ router.get('/', authMiddleware, async (req, res) => {
   }
 });
 
+// ============================================
+// DOMAIN PUSH REQUESTS - Must be before /:id routes
+// ============================================
+
+// Get pending push requests for current user (incoming and outgoing)
+router.get('/push-requests', authMiddleware, async (req, res) => {
+  const pool = req.app.locals.pool;
+  const userId = req.user.id;
+
+  try {
+    // Get incoming requests (domains being pushed TO this user)
+    const incoming = await pool.query(`
+      SELECT
+        dpr.*,
+        d.domain_name, d.tld,
+        u.email as from_email, u.full_name as from_name
+      FROM domain_push_requests dpr
+      JOIN domains d ON d.id = dpr.domain_id
+      JOIN users u ON u.id = dpr.from_user_id
+      WHERE dpr.to_user_id = $1 AND dpr.status = 'pending'
+        AND (dpr.expires_at IS NULL OR dpr.expires_at > CURRENT_TIMESTAMP)
+      ORDER BY dpr.created_at DESC
+    `, [userId]);
+
+    // Get outgoing requests (domains this user is pushing)
+    const outgoing = await pool.query(`
+      SELECT
+        dpr.*,
+        d.domain_name, d.tld,
+        u.email as to_email, u.full_name as to_name
+      FROM domain_push_requests dpr
+      JOIN domains d ON d.id = dpr.domain_id
+      JOIN users u ON u.id = dpr.to_user_id
+      WHERE dpr.from_user_id = $1 AND dpr.status = 'pending'
+        AND (dpr.expires_at IS NULL OR dpr.expires_at > CURRENT_TIMESTAMP)
+      ORDER BY dpr.created_at DESC
+    `, [userId]);
+
+    res.json({
+      incoming: incoming.rows,
+      outgoing: outgoing.rows
+    });
+  } catch (error) {
+    console.error('Error fetching push requests:', error);
+    res.status(500).json({ error: 'Failed to fetch push requests' });
+  }
+});
+
+// ============================================
+// DOMAIN BY ID ROUTES
+// ============================================
+
 // Get single domain details
 router.get('/:id', authMiddleware, async (req, res) => {
   const pool = req.app.locals.pool;
@@ -354,9 +406,19 @@ router.get('/:id/nameservers', authMiddleware, async (req, res) => {
     }
 
     const domain = domainResult.rows[0];
-    const nameservers = domain.nameservers ?
-      (typeof domain.nameservers === 'string' ? JSON.parse(domain.nameservers) : domain.nameservers)
-      : [];
+    let nameservers = [];
+    if (domain.nameservers) {
+      if (typeof domain.nameservers === 'string') {
+        try {
+          nameservers = JSON.parse(domain.nameservers);
+        } catch (e) {
+          console.error('Failed to parse nameservers JSON:', e.message);
+          nameservers = [];
+        }
+      } else {
+        nameservers = domain.nameservers;
+      }
+    }
 
     res.json({ nameservers });
   } catch (error) {
@@ -988,7 +1050,13 @@ router.put('/:id/contacts', authMiddleware, async (req, res) => {
 router.post('/:id/renew', authMiddleware, async (req, res) => {
   const pool = req.app.locals.pool;
   const domainId = parseInt(req.params.id);
-  const { years = 1 } = req.body;
+  const yearsParam = parseInt(req.body.years) || 1;
+
+  // Validate years parameter
+  if (yearsParam < 1 || yearsParam > 10 || isNaN(yearsParam)) {
+    return res.status(400).json({ error: 'Years must be between 1 and 10' });
+  }
+  const years = yearsParam;
 
   try {
     // Verify ownership and check if suspended
@@ -1395,8 +1463,7 @@ router.delete('/:id/url-forwarding', authMiddleware, async (req, res) => {
   }
 });
 
-// TEST ROUTE
-router.get("/test-dns-route", (req, res) => { res.json({ working: true }); });
+// Test route removed - was for debugging only
 
 // ============================================
 // DOMAIN PUSH (Internal Transfer) ROUTES

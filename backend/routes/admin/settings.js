@@ -50,22 +50,37 @@ const DEFAULT_SETTINGS = {
   site_name: 'WorxTech',
   site_tagline: 'Domain Names Made Simple',
   support_email: 'support@worxtech.biz',
+  company_name: 'WorxTech Internet Services LLC',
+  site_url: 'https://worxtech.biz',
 
   // Logo settings
   logo_url: '',
   logo_width: '180',
   logo_height: '50',
 
+  // Appearance settings
+  default_theme: 'dark',
+
+  // Email branding settings
+  email_logo_url: '',
+  email_logo_background: '#ffffff',
+  email_header_style: 'gradient',
+  email_header_color: '#4f46e5',
+  email_header_gradient_end: '#6366f1',
+
   // Registration settings
   registration_enabled: 'true',
   email_verification_required: 'false',
+
+  // Security settings
+  lockout_duration_minutes: '15',
 
   // API Mode settings
   enom_test_mode: 'true',
   stripe_test_mode: 'true',
 
   // Domain settings
-  default_nameservers: 'dns1.name-services.com,dns2.name-services.com,dns3.name-services.com,dns4.name-services.com',
+  default_nameservers: '["dns1.name-services.com","dns2.name-services.com","dns3.name-services.com","dns4.name-services.com"]',
   suspended_nameservers: 'ns1.suspended.worxtech.biz,ns2.suspended.worxtech.biz',
   auto_sync_enabled: 'true',
   sync_interval_hours: '24',
@@ -154,6 +169,10 @@ router.put('/settings', async (req, res) => {
       push_timeout_days: (v) => parseInt(v) >= 1 && parseInt(v) <= 30
     };
 
+    // Track if any email-related settings are being updated
+    const emailSettings = ['email_logo_url', 'email_logo_background', 'email_header_style', 'email_header_color', 'email_header_gradient_end', 'site_name', 'company_name', 'support_email', 'site_url'];
+    let emailSettingsChanged = false;
+
     for (const [key, value] of Object.entries(settings)) {
       // Skip if validation fails
       if (validationRules[key] && !validationRules[key](value)) {
@@ -169,9 +188,19 @@ router.put('/settings', async (req, res) => {
           [key, String(value)]
         );
         updated.push(key);
+
+        // Check if this is an email-related setting
+        if (emailSettings.includes(key)) {
+          emailSettingsChanged = true;
+        }
       } catch (err) {
         errors.push({ key, error: err.message });
       }
+    }
+
+    // Clear email service cache if any email-related settings changed
+    if (emailSettingsChanged) {
+      emailService.clearCache();
     }
 
     await logAudit(pool, req.user.id, 'update_settings', 'app_settings', null, null, settings, req);
@@ -525,7 +554,8 @@ router.post('/email-templates/:id/preview', async (req, res) => {
     }
 
     const subject = emailService.replaceVariables(template.subject, data);
-    const html = emailService.getBaseWrapper(emailService.replaceVariables(template.html_content, data));
+    // getBaseWrapper is async - must await it
+    const html = await emailService.getBaseWrapper(emailService.replaceVariables(template.html_content, data));
 
     res.json({
       subject,
@@ -653,7 +683,7 @@ router.put('/logo/dimensions', async (req, res) => {
       );
     }
 
-    await logAudit(pool, req.user.id, 'logo_dimensions_updated', 'settings', null, { width, height });
+    await logAudit(pool, req.user.id, 'logo_dimensions_updated', 'settings', null, null, { width, height }, req);
 
     res.json({ success: true, width, height });
   } catch (error) {
@@ -719,6 +749,225 @@ router.get('/logo', async (req, res) => {
   } catch (error) {
     console.error('Error getting logo settings:', error);
     res.status(500).json({ error: 'Failed to get logo settings' });
+  }
+});
+
+// ============ EMAIL LOGO MANAGEMENT ============
+
+// Upload email logo
+router.post('/settings/email-logo', logoUpload.single('logo'), async (req, res) => {
+  const pool = req.app.locals.pool;
+
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded' });
+  }
+
+  try {
+    // Delete old email logo if exists
+    const oldLogoResult = await pool.query(
+      "SELECT value FROM app_settings WHERE key = 'email_logo_url'"
+    );
+    if (oldLogoResult.rows.length > 0 && oldLogoResult.rows[0].value) {
+      const oldValue = oldLogoResult.rows[0].value;
+      // Only delete if it's a local file
+      if (oldValue.startsWith('/uploads/')) {
+        const oldPath = path.join(__dirname, '../../', oldValue);
+        if (fs.existsSync(oldPath)) {
+          fs.unlinkSync(oldPath);
+        }
+      }
+    }
+
+    // Save new email logo URL
+    const logoUrl = `/uploads/logos/${req.file.filename}`;
+    await pool.query(
+      `INSERT INTO app_settings (key, value) VALUES ('email_logo_url', $1)
+       ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = CURRENT_TIMESTAMP`,
+      [logoUrl]
+    );
+
+    // Clear email service cache
+    emailService.clearCache();
+
+    await logAudit(pool, req.user.id, 'email_logo_uploaded', 'settings', null, {
+      filename: req.file.filename,
+      size: req.file.size
+    });
+
+    res.json({
+      success: true,
+      email_logo_url: logoUrl
+    });
+  } catch (error) {
+    console.error('Error uploading email logo:', error);
+    if (req.file) {
+      fs.unlinkSync(req.file.path);
+    }
+    res.status(500).json({ error: 'Failed to upload email logo' });
+  }
+});
+
+// Delete email logo
+router.delete('/settings/email-logo', async (req, res) => {
+  const pool = req.app.locals.pool;
+
+  try {
+    // Get current email logo URL
+    const result = await pool.query(
+      "SELECT value FROM app_settings WHERE key = 'email_logo_url'"
+    );
+
+    if (result.rows.length > 0 && result.rows[0].value) {
+      const logoUrl = result.rows[0].value;
+      // Only delete if it's a local file
+      if (logoUrl.startsWith('/uploads/')) {
+        const logoPath = path.join(__dirname, '../../', logoUrl);
+        if (fs.existsSync(logoPath)) {
+          fs.unlinkSync(logoPath);
+        }
+      }
+
+      // Clear setting
+      await pool.query(
+        "UPDATE app_settings SET value = '', updated_at = CURRENT_TIMESTAMP WHERE key = 'email_logo_url'"
+      );
+
+      // Clear email service cache
+      emailService.clearCache();
+
+      await logAudit(pool, req.user.id, 'email_logo_deleted', 'settings', null, {
+        deleted_url: logoUrl
+      });
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting email logo:', error);
+    res.status(500).json({ error: 'Failed to delete email logo' });
+  }
+});
+
+// ============ LEGAL PAGES MANAGEMENT ============
+
+// Get all legal pages
+router.get('/legal-pages', async (req, res) => {
+  const pool = req.app.locals.pool;
+
+  try {
+    const result = await pool.query(
+      'SELECT * FROM legal_pages ORDER BY page_key'
+    );
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching legal pages:', error);
+    res.status(500).json({ error: 'Failed to fetch legal pages' });
+  }
+});
+
+// Get single legal page
+router.get('/legal-pages/:pageKey', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const { pageKey } = req.params;
+
+  try {
+    const result = await pool.query(
+      'SELECT * FROM legal_pages WHERE page_key = $1',
+      [pageKey]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Legal page not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error fetching legal page:', error);
+    res.status(500).json({ error: 'Failed to fetch legal page' });
+  }
+});
+
+// Update legal page
+router.put('/legal-pages/:pageKey', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const { pageKey } = req.params;
+  const { title, content } = req.body;
+
+  try {
+    // Check if page exists
+    const existing = await pool.query(
+      'SELECT * FROM legal_pages WHERE page_key = $1',
+      [pageKey]
+    );
+
+    let result;
+    if (existing.rows.length === 0) {
+      // Create new page
+      result = await pool.query(
+        `INSERT INTO legal_pages (page_key, title, content, last_updated_by, updated_at)
+         VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+         RETURNING *`,
+        [pageKey, title || pageKey, content || '', req.user.id]
+      );
+    } else {
+      // Update existing page
+      result = await pool.query(
+        `UPDATE legal_pages SET
+          title = COALESCE($1, title),
+          content = COALESCE($2, content),
+          last_updated_by = $3,
+          updated_at = CURRENT_TIMESTAMP
+         WHERE page_key = $4
+         RETURNING *`,
+        [title, content, req.user.id, pageKey]
+      );
+    }
+
+    await logAudit(pool, req.user.id, 'update_legal_page', 'legal_pages', null,
+      existing.rows[0] ? { content: existing.rows[0].content?.substring(0, 100) } : null,
+      { page_key: pageKey, title }, req);
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error updating legal page:', error);
+    res.status(500).json({ error: 'Failed to update legal page' });
+  }
+});
+
+// Delete legal page (reset to default)
+router.delete('/legal-pages/:pageKey', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const { pageKey } = req.params;
+
+  try {
+    const existing = await pool.query(
+      'SELECT * FROM legal_pages WHERE page_key = $1',
+      [pageKey]
+    );
+
+    if (existing.rows.length === 0) {
+      return res.json({ success: true, message: 'Page already uses default content' });
+    }
+
+    await pool.query('DELETE FROM legal_pages WHERE page_key = $1', [pageKey]);
+
+    await logAudit(pool, req.user.id, 'reset_legal_page', 'legal_pages', null,
+      { page_key: pageKey, old_title: existing.rows[0].title }, null, req);
+
+    res.json({ success: true, message: 'Legal page reset to default' });
+  } catch (error) {
+    console.error('Error resetting legal page:', error);
+    res.status(500).json({ error: 'Failed to reset legal page' });
+  }
+});
+
+// Clear email service cache when branding settings are updated
+router.post('/clear-email-cache', async (req, res) => {
+  try {
+    emailService.clearCache();
+    res.json({ success: true, message: 'Email cache cleared' });
+  } catch (error) {
+    console.error('Error clearing email cache:', error);
+    res.status(500).json({ error: 'Failed to clear email cache' });
   }
 });
 

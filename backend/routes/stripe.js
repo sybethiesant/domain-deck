@@ -116,10 +116,15 @@ router.post('/privacy-purchase', authMiddleware, async (req, res) => {
     const domain = domainResult.rows[0];
     // Use the tld column directly - domain_name may or may not include the TLD
     const tld = domain.tld;
-    // If domain_name includes TLD, strip it; otherwise use as-is
-    const sld = domain.domain_name.includes('.')
-      ? domain.domain_name.split('.').slice(0, -1).join('.')
-      : domain.domain_name;
+    // If domain_name ends with the TLD, strip it; otherwise use as-is
+    // This properly handles multi-level TLDs like .co.uk
+    let sld = domain.domain_name;
+    if (sld.endsWith('.' + tld)) {
+      sld = sld.slice(0, -(tld.length + 1));
+    } else if (sld.includes('.')) {
+      // Fallback: if domain_name has dots but doesn't end with TLD, strip last segment
+      sld = sld.split('.').slice(0, -1).join('.');
+    }
 
     // Check if privacy is already purchased
     const privacyStatus = await enom.getPrivacyStatus(sld, tld);
@@ -684,15 +689,14 @@ async function handlePaymentSuccess(pool, paymentIntent) {
       settings[row.key] = row.value;
     }
 
-    if (settings.admin_email_notifications !== 'false' && settings.notify_on_new_order !== 'false') {
-      const adminEmail = settings.admin_notification_email || 'admin@worxtech.biz';
-      await emailService.sendAdminNewOrder(adminEmail, {
+    if (settings.admin_email_notifications !== 'false' && settings.notify_on_new_order !== 'false' && settings.admin_notification_email) {
+      await emailService.sendAdminNewOrder(settings.admin_notification_email, {
         orderNumber: order.order_number,
         customerEmail: customerEmail,
         total: order.total,
         itemCount: itemsResult.rows.length
       });
-      console.log(`Admin notification sent to ${adminEmail}`);
+      console.log(`Admin notification sent to ${settings.admin_notification_email}`);
     }
   } catch (emailError) {
     // Don't fail the order if email fails
@@ -753,9 +757,8 @@ async function handlePaymentFailure(pool, paymentIntent) {
         settings[row.key] = row.value;
       }
 
-      if (settings.admin_email_notifications !== 'false' && settings.notify_on_failed_order !== 'false') {
-        const adminEmail = settings.admin_notification_email || 'admin@worxtech.biz';
-        await emailService.sendAdminOrderFailed(adminEmail, {
+      if (settings.admin_email_notifications !== 'false' && settings.notify_on_failed_order !== 'false' && settings.admin_notification_email) {
+        await emailService.sendAdminOrderFailed(settings.admin_notification_email, {
           orderNumber: order.order_number,
           customerEmail: order.customer_email,
           error: 'Payment declined',
