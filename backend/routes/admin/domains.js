@@ -259,6 +259,98 @@ router.put('/domains/:id', async (req, res) => {
   }
 });
 
+// Get WHOIS contacts for domain (admin - no ownership check)
+router.get('/domains/:id/contacts', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+
+  try {
+    const domainResult = await pool.query('SELECT * FROM domains WHERE id = $1', [domainId]);
+    if (domainResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Domain not found' });
+    }
+
+    const domain = domainResult.rows[0];
+    const domainMode = getDomainEnomMode(domain);
+    const sld = domain.domain_name;
+    const tld = domain.tld;
+
+    // Get contacts from eNom
+    const contacts = await enom.getWhoisContacts(sld, tld, { mode: domainMode });
+
+    res.json({
+      domain: `${sld}.${tld}`,
+      domain_id: domainId,
+      ...contacts
+    });
+  } catch (error) {
+    console.error('Error getting domain contacts:', error);
+    res.status(500).json({ error: 'Failed to get contacts: ' + error.message });
+  }
+});
+
+// Update WHOIS contacts for domain (admin - no ownership check)
+router.put('/domains/:id/contacts', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+  const { registrant, admin, tech, billing } = req.body;
+
+  try {
+    const domainResult = await pool.query('SELECT * FROM domains WHERE id = $1', [domainId]);
+    if (domainResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Domain not found' });
+    }
+
+    const domain = domainResult.rows[0];
+    const domainMode = getDomainEnomMode(domain);
+    const sld = domain.domain_name;
+    const tld = domain.tld;
+
+    // Get current contacts first (for partial update support)
+    const currentContacts = await enom.getWhoisContacts(sld, tld, { mode: domainMode });
+
+    // Helper to normalize contact format for eNom API
+    const normalizeContact = (contact) => {
+      if (!contact) return null;
+      return {
+        firstName: contact.firstName || contact.first_name,
+        lastName: contact.lastName || contact.last_name,
+        organization: contact.organization || contact.company || '',
+        email: contact.email || contact.emailAddress,
+        phone: contact.phone,
+        address1: contact.address1 || contact.address_line1,
+        address2: contact.address2 || contact.address_line2 || '',
+        city: contact.city,
+        state: contact.state || contact.stateProvince,
+        postalCode: contact.postalCode || contact.postal_code,
+        country: contact.country || 'US'
+      };
+    };
+
+    // Merge provided contacts with current contacts
+    const updatedContacts = {
+      registrant: registrant ? normalizeContact(registrant) : normalizeContact(currentContacts.registrant),
+      admin: admin ? normalizeContact(admin) : normalizeContact(currentContacts.admin),
+      tech: tech ? normalizeContact(tech) : normalizeContact(currentContacts.tech),
+      billing: billing ? normalizeContact(billing) : normalizeContact(currentContacts.billing)
+    };
+
+    // Update contacts via eNom
+    await enom.updateContacts(sld, tld, updatedContacts, { mode: domainMode });
+
+    await logAudit(pool, req.user.id, 'update_contacts', 'domain', domainId, null, { contacts: Object.keys(req.body) }, req);
+
+    res.json({
+      success: true,
+      domain: `${sld}.${tld}`,
+      message: 'Contacts updated successfully'
+    });
+  } catch (error) {
+    console.error('Error updating domain contacts:', error);
+    res.status(500).json({ error: 'Failed to update contacts: ' + error.message });
+  }
+});
+
 // Force sync domain with eNom
 router.post('/domains/:id/sync', async (req, res) => {
   const pool = req.app.locals.pool;
@@ -819,6 +911,158 @@ router.delete('/domains/:id/url-forwarding', async (req, res) => {
   } catch (error) {
     console.error('Error disabling URL forwarding:', error);
     res.status(500).json({ error: error.message || 'Failed to disable URL forwarding' });
+  }
+});
+
+// Admin: Push domain to another user (immediate transfer, no acceptance needed)
+router.post('/domains/:id/push', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const domainId = parseInt(req.params.id);
+  const { to_email, notes } = req.body;
+
+  if (!to_email) {
+    return res.status(400).json({ error: 'Recipient email is required' });
+  }
+
+  try {
+    // Get domain
+    const domainResult = await pool.query('SELECT * FROM domains WHERE id = $1', [domainId]);
+    if (domainResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Domain not found' });
+    }
+
+    const domain = domainResult.rows[0];
+    const previousOwnerId = domain.user_id;
+
+    // Find recipient user
+    const recipientResult = await pool.query(
+      'SELECT id, email, full_name FROM users WHERE LOWER(email) = LOWER($1)',
+      [to_email.trim()]
+    );
+
+    if (recipientResult.rows.length === 0) {
+      return res.status(404).json({ error: 'No user found with that email address' });
+    }
+
+    const recipient = recipientResult.rows[0];
+
+    if (recipient.id === previousOwnerId) {
+      return res.status(400).json({ error: 'User already owns this domain' });
+    }
+
+    // Start transaction
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Create a completed push record for history
+      await client.query(`
+        INSERT INTO domain_push_requests
+          (domain_id, from_user_id, to_user_id, to_email, notes, initiated_by_admin, status, responded_at)
+        VALUES ($1, $2, $3, $4, $5, true, 'accepted', CURRENT_TIMESTAMP)
+      `, [domainId, previousOwnerId, recipient.id, recipient.email, notes || 'Admin transfer']);
+
+      // Transfer domain ownership
+      await client.query(`
+        UPDATE domains
+        SET user_id = $1, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $2
+      `, [recipient.id, domainId]);
+
+      await client.query('COMMIT');
+
+      // Audit log
+      await logAudit(pool, req.user.id, 'admin_push_domain', 'domain', domainId,
+        { previous_owner_id: previousOwnerId },
+        { new_owner_id: recipient.id, to_email: recipient.email }, req);
+
+      res.json({
+        success: true,
+        message: `Domain ${domain.domain_name}.${domain.tld} transferred to ${recipient.email}`
+      });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('Error pushing domain:', error);
+    res.status(500).json({ error: 'Failed to push domain' });
+  }
+});
+
+// ========== PUSH REQUEST MANAGEMENT ==========
+
+// Get all pending push requests (admin view)
+router.get('/push-requests', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const { status = 'pending', page = 1, limit = 50 } = req.query;
+  const offset = (parseInt(page) - 1) * parseInt(limit);
+
+  try {
+    const validStatuses = ['pending', 'accepted', 'rejected', 'cancelled', 'expired', 'all'];
+    const filterStatus = validStatuses.includes(status) ? status : 'pending';
+
+    let whereClause = filterStatus === 'all' ? '' : 'WHERE dpr.status = $1';
+    const params = filterStatus === 'all' ? [] : [filterStatus];
+
+    const result = await pool.query(`
+      SELECT
+        dpr.*,
+        d.domain_name, d.tld,
+        fu.email as from_email, fu.full_name as from_name,
+        tu.email as to_email, tu.full_name as to_name
+      FROM domain_push_requests dpr
+      JOIN domains d ON d.id = dpr.domain_id
+      JOIN users fu ON fu.id = dpr.from_user_id
+      JOIN users tu ON tu.id = dpr.to_user_id
+      ${whereClause}
+      ORDER BY dpr.created_at DESC
+      LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+    `, [...params, parseInt(limit), offset]);
+
+    const countResult = await pool.query(`
+      SELECT COUNT(*) FROM domain_push_requests dpr
+      ${whereClause}
+    `, params);
+
+    res.json({
+      requests: result.rows,
+      total: parseInt(countResult.rows[0].count),
+      page: parseInt(page),
+      totalPages: Math.ceil(countResult.rows[0].count / parseInt(limit))
+    });
+  } catch (error) {
+    console.error('Error fetching push requests:', error);
+    res.status(500).json({ error: 'Failed to fetch push requests' });
+  }
+});
+
+// Admin: Expire a pending push request
+router.post('/push-requests/:id/expire', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const requestId = parseInt(req.params.id);
+
+  try {
+    const result = await pool.query(`
+      UPDATE domain_push_requests
+      SET status = 'expired', responded_at = CURRENT_TIMESTAMP
+      WHERE id = $1 AND status = 'pending'
+      RETURNING *
+    `, [requestId]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Pending push request not found' });
+    }
+
+    await logAudit(pool, req.user.id, 'admin_expire_push', 'push_request', requestId,
+      { status: 'pending' }, { status: 'expired' }, req);
+
+    res.json({ success: true, message: 'Push request expired', request: result.rows[0] });
+  } catch (error) {
+    console.error('Error expiring push request:', error);
+    res.status(500).json({ error: 'Failed to expire push request' });
   }
 });
 

@@ -267,7 +267,7 @@ function Navbar() {
                   onClick={() => openAuth('register')}
                   className="btn-primary text-sm"
                 >
-                  Get Started
+                  Sign Up
                 </button>
               </div>
             )}

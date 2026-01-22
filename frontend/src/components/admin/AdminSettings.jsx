@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Save, Loader2, RefreshCw, Globe, Mail, Bell, Server, ShoppingCart, Shield, AlertTriangle, Zap, CreditCard, Send, Eye, Edit2, X, Check, Upload, Trash2, Image } from 'lucide-react';
+import { Save, Loader2, RefreshCw, Globe, Mail, Bell, Server, ShoppingCart, Shield, AlertTriangle, Zap, CreditCard, Send, Eye, Edit2, X, Check, Upload, Trash2, Image, Users, Download, ArrowRight, KeyRound } from 'lucide-react';
 import { useAuth } from '../../App';
 import { API_URL } from '../../config/api';
 import { toast } from 'react-hot-toast';
@@ -32,6 +32,15 @@ function AdminSettings() {
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [deletingLogo, setDeletingLogo] = useState(false);
   const logoInputRef = useRef(null);
+
+  // Sub-account migration state
+  const [subAccounts, setSubAccounts] = useState([]);
+  const [subAccountsLoading, setSubAccountsLoading] = useState(false);
+  const [selectedSubAccount, setSelectedSubAccount] = useState(null);
+  const [subAccountDomains, setSubAccountDomains] = useState([]);
+  const [subAccountDomainsLoading, setSubAccountDomainsLoading] = useState(false);
+  const [importingSubAccount, setImportingSubAccount] = useState(null);
+  const [sendingResetEmail, setSendingResetEmail] = useState(null);
 
   const fetchSettings = useCallback(async () => {
     setLoading(true);
@@ -376,6 +385,94 @@ function AdminSettings() {
     } catch (err) {
       toast.error('Failed to toggle maintenance mode');
     }
+  };
+
+  // Sub-account migration functions
+  const fetchSubAccounts = async () => {
+    setSubAccountsLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/admin/enom/subaccounts`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        setSubAccounts(await res.json());
+      } else {
+        toast.error('Failed to load sub-accounts');
+      }
+    } catch (err) {
+      console.error('Error fetching sub-accounts:', err);
+      toast.error('Failed to load sub-accounts');
+    }
+    setSubAccountsLoading(false);
+  };
+
+  const fetchSubAccountDomains = async (accountId) => {
+    setSubAccountDomainsLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/admin/enom/subaccounts/${encodeURIComponent(accountId)}/domains`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        setSubAccountDomains(await res.json());
+      } else {
+        toast.error('Failed to load domains');
+      }
+    } catch (err) {
+      console.error('Error fetching sub-account domains:', err);
+      toast.error('Failed to load domains');
+    }
+    setSubAccountDomainsLoading(false);
+  };
+
+  const importSubAccount = async (accountId) => {
+    if (!window.confirm('Import this sub-account? This will create a new user account (without password) and import all their domains.')) {
+      return;
+    }
+
+    setImportingSubAccount(accountId);
+    try {
+      const res = await fetch(`${API_URL}/admin/enom/subaccounts/${encodeURIComponent(accountId)}/import`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+
+      const data = await res.json();
+
+      if (res.ok) {
+        toast.success(`Imported ${data.domains.imported} domains for ${data.user.email}`);
+        // Update the sub-account in the list to show it's been imported
+        setSubAccounts(prev => prev.map(sa =>
+          sa.loginId === accountId ? { ...sa, imported: true, worxtechUserId: data.user.id, worxtechUsername: data.user.username } : sa
+        ));
+      } else {
+        toast.error(data.error || 'Failed to import sub-account');
+      }
+    } catch (err) {
+      console.error('Error importing sub-account:', err);
+      toast.error('Failed to import sub-account');
+    }
+    setImportingSubAccount(null);
+  };
+
+  const sendPasswordResetToUser = async (userId) => {
+    setSendingResetEmail(userId);
+    try {
+      const res = await fetch(`${API_URL}/admin/users/${userId}/send-reset`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+
+      if (res.ok) {
+        toast.success('Password reset email sent');
+      } else {
+        const data = await res.json();
+        toast.error(data.error || 'Failed to send password reset email');
+      }
+    } catch (err) {
+      console.error('Error sending password reset:', err);
+      toast.error('Failed to send password reset email');
+    }
+    setSendingResetEmail(null);
   };
 
   if (loading) {
@@ -1171,6 +1268,182 @@ function AdminSettings() {
             </div>
             <div className="border-t dark:border-slate-700 p-4 flex justify-end">
               <button onClick={() => setPreviewingTemplate(null)} className="btn-secondary">Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sub-Account Migration */}
+      <div className="card p-6">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="w-10 h-10 rounded-lg bg-cyan-100 dark:bg-cyan-900/30 flex items-center justify-center">
+            <Users className="w-5 h-5 text-cyan-600 dark:text-cyan-400" />
+          </div>
+          <div>
+            <h3 className="font-semibold text-slate-900 dark:text-slate-100">Sub-Account Migration</h3>
+            <p className="text-sm text-slate-500">Import existing eNom sub-accounts and their domains</p>
+          </div>
+          <button
+            onClick={fetchSubAccounts}
+            disabled={subAccountsLoading}
+            className="ml-auto btn-secondary text-sm py-1"
+          >
+            {subAccountsLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+            <span className="ml-1">Load Sub-Accounts</span>
+          </button>
+        </div>
+
+        <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 mb-6">
+          <div className="flex items-start gap-3">
+            <KeyRound className="w-5 h-5 text-blue-600 dark:text-blue-400 mt-0.5" />
+            <div className="text-sm text-blue-800 dark:text-blue-200">
+              <p className="font-medium">How Migration Works</p>
+              <p>Imported accounts are created without a password. When customers try to log in or renew, they'll use the "Forgot Password" link to set their password, which also verifies their email.</p>
+            </div>
+          </div>
+        </div>
+
+        {subAccounts.length > 0 ? (
+          <div className="space-y-4">
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-slate-50 dark:bg-slate-800/50">
+                  <tr>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Account</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Name</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Email</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Domains</th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-slate-500 uppercase">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
+                  {subAccounts.map((account) => (
+                    <tr key={account.loginId} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                      <td className="px-4 py-3 font-mono text-sm">{account.loginId}</td>
+                      <td className="px-4 py-3 text-sm">
+                        {account.firstName} {account.lastName}
+                      </td>
+                      <td className="px-4 py-3 text-sm">{account.email || '-'}</td>
+                      <td className="px-4 py-3">
+                        <button
+                          onClick={() => {
+                            setSelectedSubAccount(account);
+                            fetchSubAccountDomains(account.loginId);
+                          }}
+                          className="text-sm text-primary-600 hover:underline"
+                        >
+                          {account.domainCount} domains
+                        </button>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          {account.imported ? (
+                            <>
+                              <span className="px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-400 text-xs rounded-full">
+                                Imported
+                              </span>
+                              <button
+                                onClick={() => sendPasswordResetToUser(account.worxtechUserId)}
+                                disabled={sendingResetEmail === account.worxtechUserId}
+                                className="btn-secondary text-xs py-1 px-2"
+                                title="Send password reset email"
+                              >
+                                {sendingResetEmail === account.worxtechUserId ? (
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                ) : (
+                                  <Mail className="w-3 h-3" />
+                                )}
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              onClick={() => importSubAccount(account.loginId)}
+                              disabled={importingSubAccount === account.loginId || !account.email}
+                              className="btn-primary text-xs py-1 px-3 disabled:opacity-50"
+                              title={!account.email ? 'No email address - cannot import' : 'Import this sub-account'}
+                            >
+                              {importingSubAccount === account.loginId ? (
+                                <Loader2 className="w-3 h-3 animate-spin mr-1" />
+                              ) : (
+                                <Download className="w-3 h-3 mr-1" />
+                              )}
+                              Import
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : (
+          <div className="text-center py-8 text-slate-500">
+            <Users className="w-12 h-12 mx-auto mb-3 opacity-50" />
+            <p>Click "Load Sub-Accounts" to fetch your eNom sub-accounts</p>
+          </div>
+        )}
+      </div>
+
+      {/* Sub-Account Domains Modal */}
+      {selectedSubAccount && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-slate-800 rounded-xl max-w-2xl w-full max-h-[80vh] overflow-hidden flex flex-col">
+            <div className="border-b dark:border-slate-700 p-4 flex justify-between items-center">
+              <div>
+                <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100">
+                  Domains for {selectedSubAccount.firstName} {selectedSubAccount.lastName}
+                </h3>
+                <p className="text-sm text-slate-500">{selectedSubAccount.loginId} - {selectedSubAccount.email}</p>
+              </div>
+              <button onClick={() => setSelectedSubAccount(null)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-auto p-4">
+              {subAccountDomainsLoading ? (
+                <div className="text-center py-8">
+                  <Loader2 className="w-8 h-8 animate-spin mx-auto" />
+                </div>
+              ) : subAccountDomains.length > 0 ? (
+                <div className="space-y-2">
+                  {subAccountDomains.map((domain, idx) => (
+                    <div
+                      key={idx}
+                      className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-700/50 rounded-lg"
+                    >
+                      <span className="font-mono text-sm">{domain.full_domain}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-8 text-slate-500">
+                  <Globe className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                  <p>No domains found for this sub-account</p>
+                </div>
+              )}
+            </div>
+            <div className="border-t dark:border-slate-700 p-4 flex justify-between items-center">
+              <p className="text-sm text-slate-500">
+                {subAccountDomains.length} domain{subAccountDomains.length !== 1 ? 's' : ''}
+              </p>
+              <div className="flex gap-3">
+                <button onClick={() => setSelectedSubAccount(null)} className="btn-secondary">Close</button>
+                {!selectedSubAccount.imported && selectedSubAccount.email && (
+                  <button
+                    onClick={() => {
+                      importSubAccount(selectedSubAccount.loginId);
+                      setSelectedSubAccount(null);
+                    }}
+                    disabled={importingSubAccount === selectedSubAccount.loginId}
+                    className="btn-primary"
+                  >
+                    <Download className="w-4 h-4 mr-2" />
+                    Import Account & Domains
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>

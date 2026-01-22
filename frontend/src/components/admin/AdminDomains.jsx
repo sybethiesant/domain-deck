@@ -43,8 +43,8 @@ const ToggleSwitch = ({ enabled, onChange, disabled }) => (
   </button>
 );
 
-// Domain detail/edit modal
-function DomainDetailModal({ domain, onClose, onSave, onRefresh, token }) {
+// Domain detail/edit modal - exported for use in other admin components
+export function DomainDetailModal({ domain, onClose, onSave, onRefresh, token }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -741,7 +741,7 @@ function DomainDetailModal({ domain, onClose, onSave, onRefresh, token }) {
                   Changes are applied directly to eNom.
                 </p>
               </div>
-              <DomainContactsPanel domainId={domain.id} domainName={`${domain.domain_name}.${domain.tld}`} />
+              <DomainContactsPanel domainId={domain.id} domainName={`${domain.domain_name}.${domain.tld}`} adminMode={true} ownerUserId={details?.user_id} />
             </div>
           )}
 

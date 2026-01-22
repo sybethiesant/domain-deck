@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { ArrowLeft, Save, Loader2, User, Globe, ShoppingCart, Users, MessageSquare, Activity, Check, X, Edit2, Pin, Trash2, Plus, ExternalLink, RefreshCw, Mail, Phone, Building, MapPin } from 'lucide-react';
+import { ArrowLeft, Save, Loader2, User, Globe, ShoppingCart, Users, MessageSquare, Activity, Check, X, Edit2, Pin, Trash2, Plus, Shield, Lock, Unlock, Eye } from 'lucide-react';
 import { useAuth } from '../../App';
 import { API_URL } from '../../config/api';
 import { toast } from 'react-hot-toast';
+import { DomainDetailModal } from './AdminDomains';
 
 const ROLE_OPTIONS = [
   { level: 0, name: 'customer', label: 'Customer' },
@@ -24,7 +25,9 @@ const COUNTRY_OPTIONS = [
 ];
 
 function AdminUserDetail({ userId, onClose }) {
-  const { token, user: currentUser } = useAuth();
+  const { token, user: currentUser, impersonate } = useAuth();
+  const [impersonating, setImpersonating] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -35,6 +38,9 @@ function AdminUserDetail({ userId, onClose }) {
   // Notes state
   const [newNote, setNewNote] = useState('');
   const [addingNote, setAddingNote] = useState(false);
+
+  // Domain management state
+  const [selectedDomain, setSelectedDomain] = useState(null);
 
   const fetchUser = useCallback(async () => {
     try {
@@ -221,6 +227,55 @@ function AdminUserDetail({ userId, onClose }) {
             <div className="flex items-center gap-3">
               {hasChanges && (
                 <span className="text-sm text-amber-600 dark:text-amber-400">Unsaved changes</span>
+              )}
+              {/* Delete button - only for super admins, can't delete self or higher roles */}
+              {currentUser?.role_level >= 4 && user?.id !== currentUser?.id && user?.role_level < currentUser?.role_level && (
+                <button
+                  onClick={async () => {
+                    if (!window.confirm(`Are you sure you want to delete ${user.username}? This action cannot be undone.`)) {
+                      return;
+                    }
+                    setDeleting(true);
+                    try {
+                      const res = await fetch(`${API_URL}/admin/users/${userId}`, {
+                        method: 'DELETE',
+                        headers: { 'Authorization': `Bearer ${token}` }
+                      });
+                      const data = await res.json();
+                      if (res.ok) {
+                        toast.success(data.message || 'User deleted');
+                        onClose();
+                      } else {
+                        toast.error(data.error || 'Failed to delete user');
+                      }
+                    } catch (err) {
+                      toast.error('Failed to delete user');
+                    }
+                    setDeleting(false);
+                  }}
+                  disabled={deleting}
+                  className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors disabled:opacity-50"
+                  title="Delete this user"
+                >
+                  {deleting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Trash2 className="w-4 h-4 mr-2" />}
+                  Delete
+                </button>
+              )}
+              {/* Impersonate button - only for super admins, can't impersonate self or higher roles */}
+              {currentUser?.role_level >= 4 && user?.id !== currentUser?.id && user?.role_level < currentUser?.role_level && (
+                <button
+                  onClick={async () => {
+                    setImpersonating(true);
+                    await impersonate(userId);
+                    setImpersonating(false);
+                  }}
+                  disabled={impersonating}
+                  className="btn-secondary"
+                  title="View site as this user"
+                >
+                  {impersonating ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Eye className="w-4 h-4 mr-2" />}
+                  Impersonate
+                </button>
               )}
               <button
                 onClick={handleSave}
@@ -460,10 +515,11 @@ function AdminUserDetail({ userId, onClose }) {
         {/* Domains Tab */}
         {activeTab === 'domains' && (
           <div className="card overflow-hidden">
-            <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-700">
+            <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
               <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
                 Domains ({user.domains?.length || 0})
               </h3>
+              <p className="text-sm text-slate-500">Click any row to manage domain</p>
             </div>
             {user.domains?.length > 0 ? (
               <div className="overflow-x-auto">
@@ -475,15 +531,24 @@ function AdminUserDetail({ userId, onClose }) {
                       <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Expires</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Auto-Renew</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Privacy</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Lock</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium text-slate-500 uppercase">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
                     {user.domains.map(domain => (
-                      <tr key={domain.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                      <tr
+                        key={domain.id}
+                        className="hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer transition-colors"
+                        onClick={() => setSelectedDomain(domain)}
+                      >
                         <td className="px-4 py-3">
-                          <span className="font-mono font-medium text-slate-900 dark:text-slate-100">
-                            {domain.domain_name}.{domain.tld}
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <Globe className="w-4 h-4 text-slate-400" />
+                            <span className="font-mono font-medium text-slate-900 dark:text-slate-100">
+                              {domain.domain_name}.{domain.tld}
+                            </span>
+                          </div>
                         </td>
                         <td className="px-4 py-3">
                           <StatusBadge status={domain.status} />
@@ -500,10 +565,25 @@ function AdminUserDetail({ userId, onClose }) {
                         </td>
                         <td className="px-4 py-3">
                           {domain.privacy_enabled ? (
-                            <Check className="w-5 h-5 text-green-500" />
+                            <Shield className="w-5 h-5 text-green-500" />
                           ) : (
-                            <X className="w-5 h-5 text-slate-400" />
+                            <Shield className="w-5 h-5 text-slate-400" />
                           )}
+                        </td>
+                        <td className="px-4 py-3">
+                          {domain.lock_status ? (
+                            <Lock className="w-5 h-5 text-amber-500" />
+                          ) : (
+                            <Unlock className="w-5 h-5 text-slate-400" />
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setSelectedDomain(domain); }}
+                            className="p-2 text-slate-400 hover:text-primary-600 hover:bg-primary-50 dark:hover:bg-primary-900/20 rounded-lg transition-colors"
+                          >
+                            <Edit2 className="w-4 h-4" />
+                          </button>
                         </td>
                       </tr>
                     ))}
@@ -515,6 +595,17 @@ function AdminUserDetail({ userId, onClose }) {
                 <Globe className="w-12 h-12 mx-auto mb-3 opacity-50" />
                 <p>No domains</p>
               </div>
+            )}
+
+            {/* Domain Detail Modal */}
+            {selectedDomain && (
+              <DomainDetailModal
+                domain={selectedDomain}
+                onClose={() => setSelectedDomain(null)}
+                onSave={() => { setSelectedDomain(null); fetchUser(); }}
+                onRefresh={fetchUser}
+                token={token}
+              />
             )}
           </div>
         )}

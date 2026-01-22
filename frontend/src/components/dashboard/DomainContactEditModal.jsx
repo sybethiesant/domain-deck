@@ -18,9 +18,13 @@ export default function DomainContactEditModal({
   currentContact,
   registrantContact, // Registrant data for copy functionality
   onClose,
-  onSaved
+  onSaved,
+  adminMode = false,
+  ownerUserId = null // User ID of domain owner (for admin mode to fetch their contacts)
 }) {
   const { token } = useAuth();
+  // Use admin endpoint if in admin mode
+  const apiBasePath = adminMode ? `${API_URL}/admin/domains` : `${API_URL}/domains`;
   // Check if registrant has data to enable copy option
   const hasRegistrantData = registrantContact && (registrantContact.firstName || registrantContact.first_name);
   const [mode, setMode] = useState('import'); // 'import', 'manual', or 'registrant'
@@ -53,10 +57,16 @@ export default function DomainContactEditModal({
   });
 
   // Fetch saved contacts for import
+  // In admin mode with ownerUserId, fetch the domain owner's contacts, not the admin's
   useEffect(() => {
     async function fetchSavedContacts() {
       try {
-        const res = await fetch(`${API_URL}/contacts`, {
+        // Use admin endpoint to get owner's contacts when in admin mode
+        const endpoint = adminMode && ownerUserId
+          ? `${API_URL}/admin/users/${ownerUserId}/contacts`
+          : `${API_URL}/contacts`;
+
+        const res = await fetch(endpoint, {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         if (res.ok) {
@@ -82,7 +92,7 @@ export default function DomainContactEditModal({
       setLoadingContacts(false);
     }
     fetchSavedContacts();
-  }, [token]);
+  }, [token, adminMode, ownerUserId]);
 
   const handleInputChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -180,7 +190,7 @@ export default function DomainContactEditModal({
       if (selectedTypes.tech) requestBody.tech = contactToSave;
       if (selectedTypes.billing) requestBody.billing = contactToSave;
 
-      const res = await fetch(`${API_URL}/domains/${domainId}/contacts`, {
+      const res = await fetch(`${apiBasePath}/${domainId}/contacts`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',

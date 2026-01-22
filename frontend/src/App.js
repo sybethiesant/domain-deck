@@ -17,6 +17,8 @@ import PrivacyPage from './pages/Privacy';
 import RefundPage from './pages/Refund';
 import VerifyEmailPage from './pages/VerifyEmail';
 import LoginPage from './pages/Login';
+import ForgotPasswordPage from './pages/ForgotPassword';
+import ResetPasswordPage from './pages/ResetPassword';
 import { API_URL } from './config/api';
 
 // Error Boundary for catching React rendering errors
@@ -141,9 +143,17 @@ function AppContent() {
   const [authMode, setAuthMode] = useState('login');
   const [authLoading, setAuthLoading] = useState(true);
 
+  // Impersonation state
+  const [isImpersonating, setIsImpersonating] = useState(() => !!localStorage.getItem('originalAdminToken'));
+  const [originalAdminUser, setOriginalAdminUser] = useState(() => {
+    const saved = localStorage.getItem('originalAdminUser');
+    return saved ? JSON.parse(saved) : null;
+  });
+
   // Cart state
   const [cart, setCart] = useState({ items: [], subtotal: 0 });
   const [showCart, setShowCart] = useState(false);
+  const [pendingCartItem, setPendingCartItem] = useState(null); // Item waiting for auth
 
   // Check for maintenance mode on API errors
   useEffect(() => {
@@ -242,22 +252,127 @@ function AppContent() {
     return () => controller.abort();
   }, [token, location.pathname, fetchCart]);
 
-  const login = (userData, authToken) => {
+  const login = async (userData, authToken) => {
     setUser(userData);
     setToken(authToken);
     localStorage.setItem('token', authToken);
     setShowAuthModal(false);
-    toast.success(`Welcome back, ${userData.username}!`);
-    fetchCart();
+    toast.success(`Welcome, ${userData.username}!`);
+
+    // Check if there's a pending cart item from before auth
+    if (pendingCartItem) {
+      const item = pendingCartItem;
+      setPendingCartItem(null); // Clear it first
+
+      // Add the item to cart now that we're authenticated
+      try {
+        const res = await fetch(`${API_URL}/cart/add`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${authToken}`
+          },
+          body: JSON.stringify(item)
+        });
+
+        if (res.ok) {
+          await fetchCart();
+          setShowCart(true);
+          toast.success(`Added ${item.domain_name}.${item.tld} to cart`);
+        } else {
+          const error = await res.json();
+          toast.error(error.error || 'Failed to add to cart');
+        }
+      } catch (error) {
+        console.error('Error adding pending item to cart:', error);
+        toast.error('Failed to add item to cart');
+      }
+    } else {
+      // No pending item - just fetch cart normally
+      fetchCart();
+    }
   };
 
   const logout = () => {
+    // If impersonating, also clear impersonation data
+    if (isImpersonating) {
+      localStorage.removeItem('originalAdminToken');
+      localStorage.removeItem('originalAdminUser');
+      setIsImpersonating(false);
+      setOriginalAdminUser(null);
+    }
     setUser(null);
     setToken(null);
     localStorage.removeItem('token');
     setCart({ items: [], subtotal: 0 });
     navigate('/');
     toast.success('Logged out successfully');
+  };
+
+  // Impersonate a user (admin only)
+  const impersonate = async (userId) => {
+    try {
+      const res = await fetch(`${API_URL}/admin/users/${userId}/impersonate`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (!res.ok) {
+        const error = await res.json();
+        toast.error(error.error || 'Failed to impersonate user');
+        return false;
+      }
+
+      const data = await res.json();
+
+      // Save current admin token and user before switching
+      localStorage.setItem('originalAdminToken', token);
+      localStorage.setItem('originalAdminUser', JSON.stringify(user));
+      setOriginalAdminUser(user);
+      setIsImpersonating(true);
+
+      // Switch to impersonated user
+      setToken(data.token);
+      setUser(data.user);
+      localStorage.setItem('token', data.token);
+
+      toast.success(`Now viewing as ${data.user.username}`);
+      navigate('/dashboard');
+      return true;
+    } catch (error) {
+      console.error('Impersonation error:', error);
+      toast.error('Failed to impersonate user');
+      return false;
+    }
+  };
+
+  // Stop impersonation and return to admin account
+  const stopImpersonation = () => {
+    const originalToken = localStorage.getItem('originalAdminToken');
+    const originalUser = localStorage.getItem('originalAdminUser');
+
+    if (!originalToken || !originalUser) {
+      toast.error('Could not restore admin session');
+      logout();
+      return;
+    }
+
+    // Restore admin token and user
+    setToken(originalToken);
+    setUser(JSON.parse(originalUser));
+    localStorage.setItem('token', originalToken);
+
+    // Clear impersonation data
+    localStorage.removeItem('originalAdminToken');
+    localStorage.removeItem('originalAdminUser');
+    setIsImpersonating(false);
+    setOriginalAdminUser(null);
+
+    toast.success('Returned to admin account');
+    navigate('/admin');
   };
 
   const openAuth = (mode = 'login') => {
@@ -267,6 +382,8 @@ function AppContent() {
 
   const addToCart = async (item) => {
     if (!token) {
+      // Store the item and prompt for auth - will be added after login/register
+      setPendingCartItem(item);
       openAuth('login');
       return;
     }
@@ -334,9 +451,27 @@ function AppContent() {
 
   return (
     <ThemeContext.Provider value={{ theme, setTheme: updateTheme }}>
-      <AuthContext.Provider value={{ user, token, login, logout, openAuth, fetchUser }}>
+      <AuthContext.Provider value={{ user, token, login, logout, openAuth, fetchUser, isImpersonating, originalAdminUser, impersonate, stopImpersonation }}>
         <CartContext.Provider value={{ cart, addToCart, removeFromCart, fetchCart, showCart, setShowCart }}>
           <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-900">
+            {/* Impersonation Banner */}
+            {isImpersonating && (
+              <div className="bg-amber-500 text-white px-4 py-2 flex items-center justify-center gap-4 text-sm font-medium sticky top-0 z-50">
+                <span className="flex items-center gap-2">
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                  </svg>
+                  Viewing as: <strong>{user?.username}</strong> ({user?.email})
+                </span>
+                <button
+                  onClick={stopImpersonation}
+                  className="bg-white text-amber-600 px-3 py-1 rounded-lg hover:bg-amber-50 transition-colors font-semibold"
+                >
+                  Switch Back to {originalAdminUser?.username}
+                </button>
+              </div>
+            )}
             <Navbar />
 
             <main className="flex-1">
@@ -395,6 +530,8 @@ function AppContent() {
                 <Route path="/refund" element={<RefundPage />} />
                 <Route path="/verify-email" element={<VerifyEmailPage />} />
                 <Route path="/login" element={<LoginPage />} />
+                <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+                <Route path="/reset-password" element={<ResetPasswordPage />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             </main>
@@ -405,7 +542,10 @@ function AppContent() {
             {showAuthModal && (
               <AuthModal
                 mode={authMode}
-                onClose={() => setShowAuthModal(false)}
+                onClose={() => {
+                  setShowAuthModal(false);
+                  setPendingCartItem(null); // Clear pending item if modal closed without auth
+                }}
                 onSwitchMode={setAuthMode}
               />
             )}

@@ -13,7 +13,15 @@ function AuthModal({ mode, onClose, onSwitchMode }) {
     username: '',
     email: '',
     password: '',
-    full_name: ''
+    full_name: '',
+    phone: '',
+    company_name: '',
+    address_line1: '',
+    address_line2: '',
+    city: '',
+    state: '',
+    postal_code: '',
+    country: 'US'
   });
 
   const handleChange = (e) => {
@@ -103,7 +111,7 @@ function AuthModal({ mode, onClose, onSwitchMode }) {
       />
 
       {/* Modal */}
-      <div className="relative bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-md animate-scale-in">
+      <div className={`relative bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full ${mode === 'register' ? 'max-w-2xl max-h-[90vh] overflow-y-auto' : 'max-w-md'} animate-scale-in`}>
         {/* Close button */}
         <button
           onClick={onClose}
@@ -186,36 +194,176 @@ function AuthModal({ mode, onClose, onSwitchMode }) {
 
           {mode === 'register' && (
             <>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Username
-                </label>
-                <input
-                  type="text"
-                  name="username"
-                  value={formData.username}
-                  onChange={handleChange}
-                  required
-                  minLength={3}
-                  maxLength={30}
-                  pattern="[a-zA-Z0-9_]+"
-                  className="input"
-                  placeholder="your_username"
-                />
+              {/* Account Info Section */}
+              <div className="grid sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Username <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    name="username"
+                    value={formData.username}
+                    onChange={handleChange}
+                    required
+                    minLength={3}
+                    maxLength={30}
+                    pattern="[a-zA-Z0-9_]+"
+                    className="input"
+                    placeholder="your_username"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Full Name <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    name="full_name"
+                    value={formData.full_name}
+                    onChange={handleChange}
+                    required
+                    className="input"
+                    placeholder="John Doe"
+                  />
+                </div>
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Full Name
-                </label>
-                <input
-                  type="text"
-                  name="full_name"
-                  value={formData.full_name}
-                  onChange={handleChange}
-                  className="input"
-                  placeholder="John Doe"
-                />
+              <div className="grid sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Phone <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="tel"
+                    name="phone"
+                    value={formData.phone}
+                    onChange={handleChange}
+                    required
+                    className="input"
+                    placeholder="+1.5551234567"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Company <span className="text-slate-400 text-xs">(optional)</span>
+                  </label>
+                  <input
+                    type="text"
+                    name="company_name"
+                    value={formData.company_name}
+                    onChange={handleChange}
+                    className="input"
+                    placeholder="Company name"
+                  />
+                </div>
+              </div>
+
+              {/* Address Section */}
+              <div className="border-t border-slate-200 dark:border-slate-700 pt-4 mt-2">
+                <p className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">Billing Address</p>
+
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                      Street Address <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      name="address_line1"
+                      value={formData.address_line1}
+                      onChange={handleChange}
+                      required
+                      className="input"
+                      placeholder="123 Main Street"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                      Address Line 2 <span className="text-slate-400 text-xs">(optional)</span>
+                    </label>
+                    <input
+                      type="text"
+                      name="address_line2"
+                      value={formData.address_line2}
+                      onChange={handleChange}
+                      className="input"
+                      placeholder="Apt, Suite, Unit"
+                    />
+                  </div>
+
+                  <div className="grid sm:grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                        City <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        name="city"
+                        value={formData.city}
+                        onChange={handleChange}
+                        required
+                        className="input"
+                        placeholder="City"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                        State <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        name="state"
+                        value={formData.state}
+                        onChange={handleChange}
+                        required
+                        className="input"
+                        placeholder="CA"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                        ZIP <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        name="postal_code"
+                        value={formData.postal_code}
+                        onChange={handleChange}
+                        required
+                        className="input"
+                        placeholder="12345"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                      Country <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      name="country"
+                      value={formData.country}
+                      onChange={handleChange}
+                      required
+                      className="input"
+                    >
+                      <option value="US">United States</option>
+                      <option value="CA">Canada</option>
+                      <option value="GB">United Kingdom</option>
+                      <option value="AU">Australia</option>
+                      <option value="DE">Germany</option>
+                      <option value="FR">France</option>
+                      <option value="NL">Netherlands</option>
+                      <option value="IN">India</option>
+                    </select>
+                  </div>
+                </div>
               </div>
             </>
           )}
@@ -276,7 +424,7 @@ function AuthModal({ mode, onClose, onSwitchMode }) {
         </form>
 
         {/* Footer */}
-        <div className="px-6 pb-6 text-center">
+        <div className="px-6 pb-6 text-center space-y-2">
           <p className="text-sm text-slate-600 dark:text-slate-400">
             {mode === 'login' ? (
               <>
@@ -300,6 +448,16 @@ function AuthModal({ mode, onClose, onSwitchMode }) {
               </>
             )}
           </p>
+          {mode === 'login' && (
+            <p className="text-sm">
+              <a
+                href="/forgot-password"
+                className="text-slate-500 dark:text-slate-400 hover:text-primary-600 dark:hover:text-primary-400"
+              >
+                Forgot your password?
+              </a>
+            </p>
+          )}
         </div>
         </>
         )}

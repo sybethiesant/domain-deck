@@ -129,6 +129,16 @@ function Login() {
               )}
             </button>
           </form>
+
+          {/* Forgot Password Link */}
+          <div className="mt-4 text-center">
+            <a
+              href="/forgot-password"
+              className="text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400"
+            >
+              Forgot your password?
+            </a>
+          </div>
         </div>
       </div>
     </div>

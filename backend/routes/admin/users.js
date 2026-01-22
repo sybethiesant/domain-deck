@@ -274,6 +274,79 @@ router.post('/users/:id/toggle-status', async (req, res) => {
   }
 });
 
+// Send password reset email to user (for migrations)
+router.post('/users/:id/send-reset', async (req, res) => {
+  const { id } = req.params;
+  const pool = req.app.locals.pool;
+
+  try {
+    const userResult = await pool.query(
+      'SELECT id, username, email FROM users WHERE id = $1',
+      [id]
+    );
+
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const user = userResult.rows[0];
+
+    // Generate reset token
+    const crypto = require('crypto');
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const resetExpires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days for migrations
+
+    // Store token
+    await pool.query(
+      `UPDATE users SET
+        password_reset_token = $1,
+        password_reset_expires = $2
+       WHERE id = $3`,
+      [resetToken, resetExpires, user.id]
+    );
+
+    // Send password reset email
+    const emailService = require('../../services/email');
+    const resetLink = `${process.env.FRONTEND_URL || 'https://worxtech.biz'}/reset-password?token=${resetToken}`;
+
+    await emailService.sendPasswordReset(user.email, {
+      username: user.username,
+      resetLink,
+      expiresIn: '7 days'
+    });
+
+    await logAudit(pool, req.user.id, 'send_password_reset', 'user', parseInt(id), null, { email: user.email }, req);
+
+    res.json({ success: true, message: 'Password reset email sent' });
+  } catch (error) {
+    console.error('Error sending password reset:', error);
+    res.status(500).json({ error: 'Failed to send password reset email' });
+  }
+});
+
+// Get user's saved contacts (for admin to use when editing domain WHOIS)
+router.get('/users/:id/contacts', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const userId = parseInt(req.params.id);
+
+  try {
+    const result = await pool.query(
+      `SELECT id, contact_type, first_name, last_name, organization, email, phone,
+              phone_ext, fax, address_line1, address_line2, city, state, postal_code,
+              country, is_default, created_at
+       FROM domain_contacts
+       WHERE user_id = $1
+       ORDER BY is_default DESC, created_at DESC`,
+      [userId]
+    );
+
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching user contacts:', error);
+    res.status(500).json({ error: 'Failed to fetch contacts' });
+  }
+});
+
 // Impersonate user (super admin only)
 router.post('/users/:id/impersonate', async (req, res) => {
   const pool = req.app.locals.pool;
@@ -315,6 +388,86 @@ router.post('/users/:id/impersonate', async (req, res) => {
   } catch (error) {
     console.error('Error impersonating user:', error);
     res.status(500).json({ error: 'Failed to impersonate user' });
+  }
+});
+
+// Delete user (super admin only)
+router.delete('/users/:id', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const userId = parseInt(req.params.id);
+
+  // Require super admin (role_level >= 4)
+  if (req.user.role_level < 4 && !req.user.is_admin) {
+    return res.status(403).json({ error: 'Super admin access required' });
+  }
+
+  // Cannot delete yourself
+  if (userId === req.user.id) {
+    return res.status(403).json({ error: 'Cannot delete your own account' });
+  }
+
+  try {
+    // Get user to be deleted
+    const userResult = await pool.query(
+      'SELECT id, username, email, role_level FROM users WHERE id = $1',
+      [userId]
+    );
+
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const targetUser = userResult.rows[0];
+
+    // Cannot delete users with equal or higher role level
+    if (targetUser.role_level >= req.user.role_level) {
+      return res.status(403).json({ error: 'Cannot delete users with equal or higher role level' });
+    }
+
+    // Check for domains owned by this user
+    const domainsResult = await pool.query(
+      'SELECT COUNT(*) as count FROM domains WHERE user_id = $1',
+      [userId]
+    );
+
+    if (parseInt(domainsResult.rows[0].count) > 0) {
+      return res.status(400).json({
+        error: `Cannot delete user with ${domainsResult.rows[0].count} domain(s). Transfer or delete domains first.`
+      });
+    }
+
+    // Check for unpaid orders
+    const ordersResult = await pool.query(
+      "SELECT COUNT(*) as count FROM orders WHERE user_id = $1 AND payment_status != 'paid'",
+      [userId]
+    );
+
+    if (parseInt(ordersResult.rows[0].count) > 0) {
+      return res.status(400).json({
+        error: `Cannot delete user with ${ordersResult.rows[0].count} unpaid order(s).`
+      });
+    }
+
+    // Delete related data (cascade should handle most, but be explicit)
+    await pool.query('DELETE FROM domain_contacts WHERE user_id = $1', [userId]);
+    await pool.query('DELETE FROM saved_payment_methods WHERE user_id = $1', [userId]);
+    await pool.query('DELETE FROM cart_items WHERE user_id = $1', [userId]);
+
+    // Delete the user
+    await pool.query('DELETE FROM users WHERE id = $1', [userId]);
+
+    // Audit log
+    const { logAudit } = require('../../middleware/auth');
+    await logAudit(pool, req.user.id, 'delete_user', 'user', userId,
+      { username: targetUser.username, email: targetUser.email }, null, req);
+
+    res.json({
+      success: true,
+      message: `User ${targetUser.username} (${targetUser.email}) has been deleted`
+    });
+  } catch (error) {
+    console.error('Error deleting user:', error);
+    res.status(500).json({ error: 'Failed to delete user' });
   }
 });
 

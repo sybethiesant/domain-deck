@@ -910,31 +910,211 @@ class EnomAPI {
       }
 
       const accounts = [];
-      const subAccounts = response.SubAccounts?.SubAccount || response.subaccounts?.subaccount || [];
 
-      // Handle single item vs array response from eNom
-      const accountArray = Array.isArray(subAccounts) ? subAccounts : (subAccounts ? [subAccounts] : []);
+      // eNom returns sub-accounts with numbered keys: Account1, LoginID1, Account2, etc.
+      // Check for the count field to know how many sub-accounts exist
+      const count = parseInt(response.Count || '0', 10);
 
-      for (const sa of accountArray) {
-        // Ensure we have a valid sub-account object with required fields
-        if (sa && typeof sa === 'object' && sa.LoginID) {
-          accounts.push({
-            accountId: sa.Account || null,
-            loginId: sa.LoginID,
-            partyId: sa.PartyID || null,
-            firstName: sa.FName || '',
-            lastName: sa.LName || '',
-            email: sa.EmailAddress || '',
-            domainCount: parseInt(sa.DomainCount || '0', 10) || 0
-          });
+      if (count > 0) {
+        for (let i = 1; i <= count; i++) {
+          const loginId = response[`LoginID${i}`];
+          if (loginId) {
+            accounts.push({
+              accountId: response[`Account${i}`] || null,
+              loginId: loginId,
+              partyId: response[`PartyID${i}`] || null,
+              firstName: response[`FName${i}`] || '',
+              lastName: response[`LName${i}`] || '',
+              email: response[`EmailAddress${i}`] || '',
+              domainCount: parseInt(response[`DomainCount${i}`] || '0', 10) || 0
+            });
+          }
         }
       }
 
+      // Also try the nested structure format in case eNom changes their API
+      if (accounts.length === 0) {
+        const subAccounts = response.SubAccounts?.SubAccount || response.subaccounts?.subaccount || [];
+        const accountArray = Array.isArray(subAccounts) ? subAccounts : (subAccounts ? [subAccounts] : []);
+
+        for (const sa of accountArray) {
+          if (sa && typeof sa === 'object' && sa.LoginID) {
+            accounts.push({
+              accountId: sa.Account || null,
+              loginId: sa.LoginID,
+              partyId: sa.PartyID || null,
+              firstName: sa.FName || '',
+              lastName: sa.LName || '',
+              email: sa.EmailAddress || '',
+              domainCount: parseInt(sa.DomainCount || '0', 10) || 0
+            });
+          }
+        }
+      }
+
+      console.log(`[eNom getSubAccounts] Found ${accounts.length} sub-accounts`);
       return accounts;
     } catch (error) {
       console.error('eNom get sub-accounts error:', error.message);
       throw error;
     }
+  }
+
+  /**
+   * Get domains for a specific sub-account
+   * @param {string} accountId - The sub-account login ID
+   * @returns {Promise<Array>} - Array of domain objects
+   */
+  async getSubAccountDomains(accountId, subAccountEmail = null) {
+    const domains = [];
+
+    try {
+      // First try: GetDomains with Account parameter
+      const response = await this.request('GetDomains', {
+        Account: accountId,
+        Tab: 'All'
+      });
+
+      if (response) {
+        const count = parseInt(response.DomainCount || '0', 10);
+        console.log(`[eNom getSubAccountDomains] GetDomains returned DomainCount: ${count}`);
+
+        // Parse numbered key-value pairs
+        for (let i = 1; i <= Math.max(count, 50); i++) {
+          const sld = response[`sld${i}`] || response[`SLD${i}`];
+          const tld = response[`tld${i}`] || response[`TLD${i}`];
+          if (sld && tld) {
+            domains.push({
+              domain_name: sld,
+              tld: tld,
+              full_domain: `${sld}.${tld}`
+            });
+          } else if (i > count && count > 0) {
+            break;
+          }
+        }
+      }
+    } catch (error) {
+      console.log('[eNom getSubAccountDomains] GetDomains failed:', error.message);
+    }
+
+    // Second try: If no domains found and we have email, infer domain from email
+    if (domains.length === 0 && subAccountEmail) {
+      console.log(`[eNom getSubAccountDomains] Trying to infer domain from email: ${subAccountEmail}`);
+      const emailDomain = subAccountEmail.split('@')[1];
+      if (emailDomain && !['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'aol.com', 'icloud.com'].includes(emailDomain.toLowerCase())) {
+        const parts = emailDomain.split('.');
+        if (parts.length >= 2) {
+          const tld = parts.pop();
+          const sld = parts.join('.');
+
+          // Verify this domain exists in our eNom account
+          try {
+            const info = await this.getDomainInfo(sld, tld);
+            if (info && info.status) {
+              console.log(`[eNom getSubAccountDomains] Found domain - sld: "${sld}", tld: "${tld}", full: "${sld}.${tld}"`);
+              domains.push({
+                domain_name: sld,
+                tld: tld,
+                full_domain: `${sld}.${tld}`
+              });
+            }
+          } catch (err) {
+            console.log(`[eNom getSubAccountDomains] Domain ${sld}.${tld} not found or not accessible`);
+          }
+        }
+      }
+    }
+
+    console.log(`[eNom getSubAccountDomains] Total domains found: ${domains.length}`);
+    return domains;
+  }
+
+  /**
+   * Get detailed info for a sub-account domain (to import it)
+   * @param {string} sld - Second-level domain
+   * @param {string} tld - Top-level domain
+   * @param {string} accountId - Sub-account login ID
+   * @returns {Promise<object>} - Domain details
+   */
+  async getSubAccountDomainInfo(sld, tld, accountId) {
+    try {
+      // Get domain info using the sub-account context
+      const response = await this.request('GetDomainInfo', {
+        sld,
+        tld,
+        Account: accountId
+      });
+
+      return {
+        sld,
+        tld,
+        domain_name: sld,
+        full_domain: `${sld}.${tld}`,
+        status: response.status || 'active',
+        expiration_date: response.expiration || response['status-date'] || null,
+        registration_date: response.registration || null,
+        auto_renew: response['auto-renew'] === '1' || response.AutoRenew === '1',
+        lock_status: response['RegistrarLock'] === 'REGISTRAR-LOCK',
+        nameservers: this.parseNameservers(response),
+        whois_info: {
+          registrant: this.parseContactFromResponse(response, 'Registrant'),
+          admin: this.parseContactFromResponse(response, 'Admin'),
+          tech: this.parseContactFromResponse(response, 'Tech'),
+          billing: this.parseContactFromResponse(response, 'AuxBilling')
+        }
+      };
+    } catch (error) {
+      console.error('eNom get sub-account domain info error:', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Parse nameservers from response
+   * @param {object} response - eNom response
+   * @returns {Array} - Array of nameserver strings
+   */
+  parseNameservers(response) {
+    const nameservers = [];
+    for (let i = 1; i <= 12; i++) {
+      const ns = response[`dns${i}`] || response[`DNS${i}`] || response[`ns${i}`] || response[`NS${i}`];
+      if (ns) {
+        nameservers.push(ns);
+      }
+    }
+    return nameservers;
+  }
+
+  /**
+   * Parse contact info from GetDomainInfo response
+   * @param {object} response - eNom response
+   * @param {string} prefix - Contact type prefix (Registrant, Admin, Tech, AuxBilling)
+   * @returns {object|null} - Contact info or null
+   */
+  parseContactFromResponse(response, prefix) {
+    const firstName = response[`${prefix}FirstName`] || response[`${prefix}FName`];
+    const lastName = response[`${prefix}LastName`] || response[`${prefix}LName`];
+
+    if (!firstName && !lastName) {
+      return null;
+    }
+
+    return {
+      first_name: firstName || '',
+      last_name: lastName || '',
+      organization: response[`${prefix}OrganizationName`] || response[`${prefix}Organization`] || '',
+      email: response[`${prefix}EmailAddress`] || response[`${prefix}Email`] || '',
+      phone: response[`${prefix}Phone`] || '',
+      phone_ext: response[`${prefix}PhoneExt`] || '',
+      fax: response[`${prefix}Fax`] || '',
+      address_line1: response[`${prefix}Address1`] || '',
+      address_line2: response[`${prefix}Address2`] || '',
+      city: response[`${prefix}City`] || '',
+      state: response[`${prefix}StateProvince`] || response[`${prefix}State`] || '',
+      postal_code: response[`${prefix}PostalCode`] || '',
+      country: response[`${prefix}Country`] || 'US'
+    };
   }
 
   /**

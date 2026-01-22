@@ -73,6 +73,31 @@ router.post('/register', async (req, res) => {
     return res.status(400).json({ error: passwordError });
   }
 
+  // Validate required personal info fields
+  if (!full_name || full_name.trim().length < 2) {
+    return res.status(400).json({ error: 'Full name is required' });
+  }
+
+  if (!phone || phone.trim().length < 7) {
+    return res.status(400).json({ error: 'Phone number is required' });
+  }
+
+  if (!address_line1 || address_line1.trim().length < 3) {
+    return res.status(400).json({ error: 'Street address is required' });
+  }
+
+  if (!city || city.trim().length < 2) {
+    return res.status(400).json({ error: 'City is required' });
+  }
+
+  if (!state || state.trim().length < 2) {
+    return res.status(400).json({ error: 'State/Province is required' });
+  }
+
+  if (!postal_code || postal_code.trim().length < 3) {
+    return res.status(400).json({ error: 'Postal code is required' });
+  }
+
   const normalizedEmail = email.toLowerCase().trim();
 
   try {
@@ -517,6 +542,165 @@ router.put('/password', authMiddleware, async (req, res) => {
   } catch (error) {
     console.error('Error changing password:', error);
     res.status(500).json({ error: 'Failed to change password' });
+  }
+});
+
+// Request password reset (forgot password)
+router.post('/forgot-password', async (req, res) => {
+  const { email } = req.body;
+  const pool = req.app.locals.pool;
+
+  if (!email) {
+    return res.status(400).json({ error: 'Email is required' });
+  }
+
+  const normalizedEmail = email.toLowerCase().trim();
+
+  try {
+    // Find user by email
+    const result = await pool.query(
+      'SELECT id, username, email FROM users WHERE LOWER(email) = $1',
+      [normalizedEmail]
+    );
+
+    // Always return success to prevent email enumeration
+    if (result.rows.length === 0) {
+      return res.json({ message: 'If an account exists with this email, a password reset link has been sent.' });
+    }
+
+    const user = result.rows[0];
+
+    // Generate reset token
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const resetExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+
+    // Store token in database
+    await pool.query(
+      `UPDATE users SET
+        password_reset_token = $1,
+        password_reset_expires = $2
+       WHERE id = $3`,
+      [resetToken, resetExpires, user.id]
+    );
+
+    // Send password reset email
+    const resetLink = `${process.env.FRONTEND_URL || 'https://worxtech.biz'}/reset-password?token=${resetToken}`;
+
+    try {
+      await emailService.sendPasswordReset(user.email, {
+        username: user.username,
+        resetLink,
+        expiresIn: '1 hour'
+      });
+    } catch (emailError) {
+      console.error('Failed to send password reset email:', emailError.message);
+    }
+
+    res.json({ message: 'If an account exists with this email, a password reset link has been sent.' });
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    res.status(500).json({ error: 'Failed to process password reset request' });
+  }
+});
+
+// Reset password with token
+router.post('/reset-password', async (req, res) => {
+  const { token, new_password } = req.body;
+  const pool = req.app.locals.pool;
+
+  if (!token || !new_password) {
+    return res.status(400).json({ error: 'Token and new password are required' });
+  }
+
+  const passwordError = validatePassword(new_password);
+  if (passwordError) {
+    return res.status(400).json({ error: passwordError });
+  }
+
+  try {
+    // Find user with this reset token
+    const result = await pool.query(
+      `SELECT id, username, email, password_reset_expires, password_needs_reset
+       FROM users WHERE password_reset_token = $1`,
+      [token]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(400).json({ error: 'Invalid or expired reset token' });
+    }
+
+    const user = result.rows[0];
+
+    // Check if token has expired
+    if (user.password_reset_expires && new Date(user.password_reset_expires) < new Date()) {
+      return res.status(400).json({ error: 'Reset token has expired. Please request a new one.' });
+    }
+
+    // Hash new password
+    const password_hash = await bcrypt.hash(new_password, 10);
+
+    // Update password and clear reset token
+    // Also mark email as verified (password reset verifies email ownership)
+    await pool.query(
+      `UPDATE users SET
+        password_hash = $1,
+        password_reset_token = NULL,
+        password_reset_expires = NULL,
+        password_needs_reset = false,
+        email_verified = true,
+        email_verified_at = COALESCE(email_verified_at, CURRENT_TIMESTAMP),
+        updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2`,
+      [password_hash, user.id]
+    );
+
+    // Generate JWT token so user can log in immediately
+    const authToken = jwt.sign(
+      { id: user.id, username: user.username },
+      process.env.JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    res.json({
+      message: 'Password has been reset successfully. You are now logged in.',
+      token: authToken
+    });
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({ error: 'Failed to reset password' });
+  }
+});
+
+// Check reset token validity (for frontend to verify before showing form)
+router.get('/verify-reset-token', async (req, res) => {
+  const { token } = req.query;
+  const pool = req.app.locals.pool;
+
+  if (!token) {
+    return res.status(400).json({ error: 'Token is required', valid: false });
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT id, email, password_reset_expires
+       FROM users WHERE password_reset_token = $1`,
+      [token]
+    );
+
+    if (result.rows.length === 0) {
+      return res.json({ valid: false, error: 'Invalid reset token' });
+    }
+
+    const user = result.rows[0];
+
+    if (user.password_reset_expires && new Date(user.password_reset_expires) < new Date()) {
+      return res.json({ valid: false, error: 'Reset token has expired' });
+    }
+
+    res.json({ valid: true, email: user.email });
+  } catch (error) {
+    console.error('Verify reset token error:', error);
+    res.status(500).json({ valid: false, error: 'Failed to verify token' });
   }
 });
 

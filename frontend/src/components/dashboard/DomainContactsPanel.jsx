@@ -11,18 +11,21 @@ const CONTACT_TYPES = [
   { key: 'billing', label: 'Billing', description: 'Billing contact', required: false }
 ];
 
-export default function DomainContactsPanel({ domainId, domainName }) {
+export default function DomainContactsPanel({ domainId, domainName, adminMode = false, ownerUserId = null }) {
   const { token } = useAuth();
   const [contacts, setContacts] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [editingType, setEditingType] = useState(null);
 
+  // Use admin endpoint if in admin mode
+  const apiBasePath = adminMode ? `${API_URL}/admin/domains` : `${API_URL}/domains`;
+
   const fetchContacts = async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_URL}/domains/${domainId}/contacts`, {
+      const res = await fetch(`${apiBasePath}/${domainId}/contacts`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
 
@@ -198,6 +201,8 @@ export default function DomainContactsPanel({ domainId, domainName }) {
           registrantContact={contacts?.registrant}
           onClose={() => setEditingType(null)}
           onSaved={handleEditSaved}
+          adminMode={adminMode}
+          ownerUserId={ownerUserId}
         />
       )}
     </div>

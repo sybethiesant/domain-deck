@@ -974,8 +974,18 @@ router.delete('/payment-methods/:pmId', authMiddleware, async (req, res) => {
       return res.status(404).json({ error: 'Payment method not found' });
     }
 
-    // Detach from Stripe customer
-    await stripeService.detachPaymentMethod(pmId);
+    // Detach from Stripe customer (ignore errors if already deleted from Stripe)
+    try {
+      await stripeService.detachPaymentMethod(pmId);
+    } catch (stripeError) {
+      // If payment method doesn't exist in Stripe, that's fine - still delete from our DB
+      // This can happen if the card was removed directly in Stripe dashboard
+      // or if it was created on a different Stripe account
+      if (stripeError.code !== 'resource_missing') {
+        throw stripeError; // Re-throw other errors
+      }
+      console.log(`Payment method ${pmId} not found in Stripe, removing from database only`);
+    }
 
     // Delete from database
     await pool.query(
