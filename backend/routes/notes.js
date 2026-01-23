@@ -124,7 +124,7 @@ router.put('/:noteId', async (req, res) => {
 
     // Only allow edit if they created it or are admin (level 3+)
     const noteRow = existing.rows[0];
-    if (noteRow.staff_user_id !== req.user.id && req.user.role_level < 3) {
+    if (noteRow.staff_user_id !== req.user.id && req.user.role_level < 3 && !req.user.is_admin) {
       return res.status(403).json({ error: 'You can only edit your own notes' });
     }
 
@@ -175,7 +175,7 @@ router.delete('/:noteId', async (req, res) => {
     }
 
     // Only allow delete if they created it or are admin (level 3+)
-    if (existing.rows[0].staff_user_id !== req.user.id && req.user.role_level < 3) {
+    if (existing.rows[0].staff_user_id !== req.user.id && req.user.role_level < 3 && !req.user.is_admin) {
       return res.status(403).json({ error: 'You can only delete your own notes' });
     }
 
@@ -209,7 +209,7 @@ router.post('/:noteId/toggle-pin', async (req, res) => {
     }
 
     // Only allow toggle if they created it or are admin (level 3+)
-    if (existing.rows[0].staff_user_id !== req.user.id && req.user.role_level < 3) {
+    if (existing.rows[0].staff_user_id !== req.user.id && req.user.role_level < 3 && !req.user.is_admin) {
       return res.status(403).json({ error: 'You can only toggle pin on your own notes' });
     }
 

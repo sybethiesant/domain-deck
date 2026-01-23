@@ -1,14 +1,29 @@
 /**
  * Admin eNom Integration Routes
  * eNom sync, import, and account management
+ *
+ * Access Levels:
+ * - Level 1+: View sub-accounts, balance, transfers, pricing (read-only)
+ * - Level 3+: Sync domains, import domains, manage transfers
  */
 const express = require('express');
 const router = express.Router();
-const { logAudit } = require('../../middleware/auth');
+const { logAudit, ROLE_LEVELS } = require('../../middleware/auth');
 const enom = require('../../services/enom');
 
+// Helper to check admin level (3+)
+function requireAdminLevel(req, res) {
+  if (req.user.role_level < ROLE_LEVELS.ADMIN && !req.user.is_admin) {
+    res.status(403).json({ error: 'Admin access required' });
+    return false;
+  }
+  return true;
+}
+
 // Sync domains from eNom
+// Requires level 3+ (Admin)
 router.post('/sync-enom', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
   const pool = req.app.locals.pool;
   const user_id = req.body?.user_id || 1;
 
@@ -151,7 +166,9 @@ router.get('/enom/subaccounts/:accountId/domains', async (req, res) => {
 });
 
 // Import a sub-account (create user and import domains)
+// Requires level 3+ (Admin)
 router.post('/enom/subaccounts/:accountId/import', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
   const { accountId } = req.params;
   const pool = req.app.locals.pool;
   const adminId = req.user.id;
@@ -432,7 +449,9 @@ router.get('/enom/balance', async (req, res) => {
 });
 
 // Import specific domain by name
+// Requires level 3+ (Admin)
 router.post('/enom/import-domain', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
   const pool = req.app.locals.pool;
   const { domain, user_id = 1, enom_account = 'main' } = req.body;
 
@@ -525,7 +544,9 @@ router.get('/enom/transfers/:transferOrderId', async (req, res) => {
 });
 
 // Resend transfer auth email
+// Requires level 3+ (Admin)
 router.post('/enom/transfers/:transferOrderId/resend', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
   const pool = req.app.locals.pool;
   const { transferOrderId } = req.params;
 
@@ -542,7 +563,9 @@ router.post('/enom/transfers/:transferOrderId/resend', async (req, res) => {
 });
 
 // Cancel pending transfer
+// Requires level 3+ (Admin)
 router.post('/enom/transfers/:transferOrderId/cancel', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
   const pool = req.app.locals.pool;
   const { transferOrderId } = req.params;
 
@@ -580,7 +603,9 @@ router.get('/enom/check/:domain', async (req, res) => {
 });
 
 // Sync TLD pricing from eNom costs
+// Requires level 3+ (Admin)
 router.post('/enom/sync-pricing', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
   const pool = req.app.locals.pool;
   const { tlds, markup = 1.3, roundTo = 0.99 } = req.body;
 

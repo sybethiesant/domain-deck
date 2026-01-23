@@ -24,8 +24,18 @@ const COUNTRY_OPTIONS = [
   { code: 'IN', name: 'India' }
 ];
 
+// Role level constants (mirror backend)
+const ROLE_LEVELS = {
+  CUSTOMER: 0,
+  SUPPORT: 1,
+  SALES: 2,
+  ADMIN: 3,
+  SUPER_ADMIN: 4
+};
+
 function AdminUserDetail({ userId, onClose }) {
   const { token, user: currentUser, impersonate } = useAuth();
+  const isAdmin = (currentUser?.role_level || 0) >= ROLE_LEVELS.ADMIN || currentUser?.is_admin;
   const [impersonating, setImpersonating] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [user, setUser] = useState(null);
@@ -277,14 +287,16 @@ function AdminUserDetail({ userId, onClose }) {
                   Impersonate
                 </button>
               )}
-              <button
-                onClick={handleSave}
-                disabled={!hasChanges || saving}
-                className="btn-primary disabled:opacity-50"
-              >
-                {saving ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Save className="w-4 h-4 mr-2" />}
-                Save Changes
-              </button>
+              {isAdmin && (
+                <button
+                  onClick={handleSave}
+                  disabled={!hasChanges || saving}
+                  className="btn-primary disabled:opacity-50"
+                >
+                  {saving ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Save className="w-4 h-4 mr-2" />}
+                  Save Changes
+                </button>
+              )}
             </div>
           </div>
 
@@ -318,6 +330,13 @@ function AdminUserDetail({ userId, onClose }) {
         {/* Profile Tab */}
         {activeTab === 'profile' && (
           <div className="space-y-6">
+            {!isAdmin && (
+              <div className="p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl">
+                <p className="text-sm text-amber-700 dark:text-amber-300">
+                  <strong>View Only:</strong> Admin access required to edit user profiles.
+                </p>
+              </div>
+            )}
             {/* Account Info */}
             <div className="card p-6">
               <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100 mb-4">Account Information</h3>
@@ -339,6 +358,7 @@ function AdminUserDetail({ userId, onClose }) {
                     value={getFieldValue('email')}
                     onChange={(e) => handleFieldChange('email', e.target.value)}
                     className="input"
+                    disabled={!isAdmin}
                   />
                 </div>
                 <div>
@@ -352,7 +372,7 @@ function AdminUserDetail({ userId, onClose }) {
                       handleFieldChange('role_name', role?.name || 'customer');
                     }}
                     className="input"
-                    disabled={currentUser?.role_level <= user.role_level && !currentUser?.is_admin}
+                    disabled={!isAdmin || (currentUser?.role_level <= user.role_level && !currentUser?.is_admin)}
                   >
                     {ROLE_OPTIONS.map(role => (
                       <option key={role.level} value={role.level}>{role.label}</option>
@@ -362,12 +382,13 @@ function AdminUserDetail({ userId, onClose }) {
                 <div>
                   <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Email Verified</label>
                   <div className="flex items-center gap-3 mt-2">
-                    <label className="relative inline-flex items-center cursor-pointer">
+                    <label className={`relative inline-flex items-center ${isAdmin ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}>
                       <input
                         type="checkbox"
                         checked={getFieldValue('email_verified')}
                         onChange={(e) => handleFieldChange('email_verified', e.target.checked)}
                         className="sr-only peer"
+                        disabled={!isAdmin}
                       />
                       <div className="w-11 h-6 bg-slate-200 peer-focus:ring-4 peer-focus:ring-primary-300 rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600"></div>
                     </label>
@@ -391,6 +412,7 @@ function AdminUserDetail({ userId, onClose }) {
                     onChange={(e) => handleFieldChange('full_name', e.target.value)}
                     className="input"
                     placeholder="John Doe"
+                    disabled={!isAdmin}
                   />
                 </div>
                 <div>
@@ -401,6 +423,7 @@ function AdminUserDetail({ userId, onClose }) {
                     onChange={(e) => handleFieldChange('phone', e.target.value)}
                     className="input"
                     placeholder="+1.555.123.4567"
+                    disabled={!isAdmin}
                   />
                 </div>
                 <div className="md:col-span-2">
@@ -411,6 +434,7 @@ function AdminUserDetail({ userId, onClose }) {
                     onChange={(e) => handleFieldChange('company_name', e.target.value)}
                     className="input"
                     placeholder="Acme Inc."
+                    disabled={!isAdmin}
                   />
                 </div>
               </div>
@@ -428,6 +452,7 @@ function AdminUserDetail({ userId, onClose }) {
                     onChange={(e) => handleFieldChange('address_line1', e.target.value)}
                     className="input"
                     placeholder="123 Main Street"
+                    disabled={!isAdmin}
                   />
                 </div>
                 <div className="md:col-span-2">
@@ -438,6 +463,7 @@ function AdminUserDetail({ userId, onClose }) {
                     onChange={(e) => handleFieldChange('address_line2', e.target.value)}
                     className="input"
                     placeholder="Apt 4B"
+                    disabled={!isAdmin}
                   />
                 </div>
                 <div>
@@ -447,6 +473,7 @@ function AdminUserDetail({ userId, onClose }) {
                     value={getFieldValue('city')}
                     onChange={(e) => handleFieldChange('city', e.target.value)}
                     className="input"
+                    disabled={!isAdmin}
                   />
                 </div>
                 <div>
@@ -456,6 +483,7 @@ function AdminUserDetail({ userId, onClose }) {
                     value={getFieldValue('state')}
                     onChange={(e) => handleFieldChange('state', e.target.value)}
                     className="input"
+                    disabled={!isAdmin}
                   />
                 </div>
                 <div>
@@ -465,6 +493,7 @@ function AdminUserDetail({ userId, onClose }) {
                     value={getFieldValue('postal_code')}
                     onChange={(e) => handleFieldChange('postal_code', e.target.value)}
                     className="input"
+                    disabled={!isAdmin}
                   />
                 </div>
                 <div>
@@ -473,6 +502,7 @@ function AdminUserDetail({ userId, onClose }) {
                     value={getFieldValue('country')}
                     onChange={(e) => handleFieldChange('country', e.target.value)}
                     className="input"
+                    disabled={!isAdmin}
                   >
                     <option value="">Select country...</option>
                     {COUNTRY_OPTIONS.map(c => (
@@ -605,6 +635,7 @@ function AdminUserDetail({ userId, onClose }) {
                 onSave={() => { setSelectedDomain(null); fetchUser(); }}
                 onRefresh={fetchUser}
                 token={token}
+                isAdmin={isAdmin}
               />
             )}
           </div>

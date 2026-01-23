@@ -1,6 +1,22 @@
+/**
+ * Admin Balance Management Routes
+ * eNom account balance and refill management
+ *
+ * Access Levels:
+ * - Level 3+: Full access to balance management
+ */
 const express = require('express');
 const router = express.Router();
 const enom = require('../../services/enom');
+const { ROLE_LEVELS } = require('../../middleware/auth');
+
+// Apply admin level check to all balance routes
+router.use((req, res, next) => {
+  if (req.user.role_level < ROLE_LEVELS.ADMIN && !req.user.is_admin) {
+    return res.status(403).json({ error: 'Admin access required for balance management' });
+  }
+  next();
+});
 
 // Get current balance
 router.get('/', async (req, res) => {

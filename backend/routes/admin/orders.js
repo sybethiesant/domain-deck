@@ -1,10 +1,14 @@
 /**
  * Admin Order Management Routes
  * Order listing, details, status updates, and retry functionality
+ *
+ * Access Levels:
+ * - Level 1+: View orders and details
+ * - Level 3+: Update orders, retry registrations, process refunds
  */
 const express = require('express');
 const router = express.Router();
-const { logAudit } = require('../../middleware/auth');
+const { logAudit, ROLE_LEVELS } = require('../../middleware/auth');
 const enom = require('../../services/enom');
 const stripeService = require('../../services/stripe');
 
@@ -71,8 +75,8 @@ router.get('/orders', async (req, res) => {
 
     const result = await pool.query(query, params);
 
-    // Get total count
-    let countQuery = 'SELECT COUNT(*) FROM orders o WHERE 1=1';
+    // Get total count (with all filters applied)
+    let countQuery = 'SELECT COUNT(DISTINCT o.id) FROM orders o LEFT JOIN users u ON o.user_id = u.id WHERE 1=1';
     const countParams = [];
     if (status) {
       countParams.push(status);
@@ -81,6 +85,18 @@ router.get('/orders', async (req, res) => {
     if (payment_status) {
       countParams.push(payment_status);
       countQuery += ` AND o.payment_status = $${countParams.length}`;
+    }
+    if (search) {
+      countParams.push(`%${search}%`);
+      countQuery += ` AND (o.order_number ILIKE $${countParams.length} OR u.email ILIKE $${countParams.length} OR u.username ILIKE $${countParams.length})`;
+    }
+    if (start_date) {
+      countParams.push(start_date);
+      countQuery += ` AND o.created_at >= $${countParams.length}`;
+    }
+    if (end_date) {
+      countParams.push(end_date);
+      countQuery += ` AND o.created_at <= $${countParams.length}`;
     }
     const countResult = await pool.query(countQuery, countParams);
 
@@ -159,7 +175,13 @@ router.get('/orders/:id', async (req, res) => {
 });
 
 // Update order status
+// Requires level 3+ (Admin)
 router.put('/orders/:id', async (req, res) => {
+  // Check admin level
+  if (req.user.role_level < ROLE_LEVELS.ADMIN && !req.user.is_admin) {
+    return res.status(403).json({ error: 'Admin access required to update orders' });
+  }
+
   const pool = req.app.locals.pool;
   const orderId = parseInt(req.params.id);
   const { status, payment_status, notes } = req.body;
@@ -196,7 +218,13 @@ router.put('/orders/:id', async (req, res) => {
 });
 
 // Retry failed registration for an order item
+// Requires level 3+ (Admin)
 router.post('/orders/:orderId/items/:itemId/retry', async (req, res) => {
+  // Check admin level
+  if (req.user.role_level < ROLE_LEVELS.ADMIN && !req.user.is_admin) {
+    return res.status(403).json({ error: 'Admin access required to retry registrations' });
+  }
+
   const pool = req.app.locals.pool;
   const { orderId, itemId } = req.params;
 
@@ -346,7 +374,13 @@ router.post('/orders/:orderId/items/:itemId/retry', async (req, res) => {
 });
 
 // Refund order (requires Stripe)
+// Requires level 3+ (Admin)
 router.post('/orders/:id/refund', async (req, res) => {
+  // Check admin level
+  if (req.user.role_level < ROLE_LEVELS.ADMIN && !req.user.is_admin) {
+    return res.status(403).json({ error: 'Admin access required to process refunds' });
+  }
+
   const pool = req.app.locals.pool;
   const orderId = parseInt(req.params.id);
   const { amount, reason } = req.body;

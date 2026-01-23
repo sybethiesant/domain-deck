@@ -1,10 +1,15 @@
 /**
  * Admin User Management Routes
  * User listing, details, and role management
+ *
+ * Access Levels:
+ * - Level 1+: View users and details, add notes
+ * - Level 3+: Edit users, change roles, send password resets
+ * - Level 4: Delete users, impersonate
  */
 const express = require('express');
 const router = express.Router();
-const { logAudit } = require('../../middleware/auth');
+const { logAudit, ROLE_LEVELS } = require('../../middleware/auth');
 
 // List all users with pagination and search
 router.get('/users', async (req, res) => {
@@ -145,7 +150,13 @@ router.get('/users/:id', async (req, res) => {
 });
 
 // Update user (full profile editing for admins)
+// Requires level 3+ (Admin)
 router.put('/users/:id', async (req, res) => {
+  // Check admin level
+  if (req.user.role_level < ROLE_LEVELS.ADMIN && !req.user.is_admin) {
+    return res.status(403).json({ error: 'Admin access required to edit users' });
+  }
+
   const pool = req.app.locals.pool;
   const userId = parseInt(req.params.id);
   const {
@@ -234,7 +245,13 @@ router.put('/users/:id', async (req, res) => {
 });
 
 // Disable/Enable user account
+// Requires level 3+ (Admin)
 router.post('/users/:id/toggle-status', async (req, res) => {
+  // Check admin level
+  if (req.user.role_level < ROLE_LEVELS.ADMIN && !req.user.is_admin) {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+
   const pool = req.app.locals.pool;
   const userId = parseInt(req.params.id);
   const { disabled, reason } = req.body;
@@ -275,7 +292,13 @@ router.post('/users/:id/toggle-status', async (req, res) => {
 });
 
 // Send password reset email to user (for migrations)
+// Requires level 3+ (Admin)
 router.post('/users/:id/send-reset', async (req, res) => {
+  // Check admin level
+  if (req.user.role_level < ROLE_LEVELS.ADMIN && !req.user.is_admin) {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+
   const { id } = req.params;
   const pool = req.app.locals.pool;
 

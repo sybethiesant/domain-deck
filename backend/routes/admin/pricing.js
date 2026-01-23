@@ -1,11 +1,23 @@
 /**
  * Admin TLD Pricing Routes
  * TLD pricing management
+ *
+ * Access Levels:
+ * - Level 3+: Full access to pricing management
  */
 const express = require('express');
 const router = express.Router();
-const { logAudit } = require('../../middleware/auth');
+const { logAudit, ROLE_LEVELS } = require('../../middleware/auth');
 const { PRICING } = require('../../config/constants');
+
+// Helper to check admin level (3+)
+function requireAdminLevel(req, res) {
+  if (req.user.role_level < ROLE_LEVELS.ADMIN && !req.user.is_admin) {
+    res.status(403).json({ error: 'Admin access required' });
+    return false;
+  }
+  return true;
+}
 
 // Get all TLD pricing (including costs)
 router.get('/pricing', async (req, res) => {
@@ -50,7 +62,9 @@ router.get('/pricing/:tld', async (req, res) => {
 });
 
 // Update TLD pricing
+// Requires level 3+ (Admin)
 router.put('/pricing/:tld', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
   const pool = req.app.locals.pool;
   const { tld } = req.params;
   const {
@@ -105,7 +119,9 @@ router.put('/pricing/:tld', async (req, res) => {
 });
 
 // Add new TLD
+// Requires level 3+ (Admin)
 router.post('/pricing', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
   const pool = req.app.locals.pool;
   const {
     tld, cost_register, cost_renew, cost_transfer,
@@ -157,7 +173,9 @@ router.post('/pricing', async (req, res) => {
 });
 
 // Delete TLD (soft delete by deactivating)
+// Requires level 3+ (Admin)
 router.delete('/pricing/:tld', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
   const pool = req.app.locals.pool;
   const { tld } = req.params;
   const { hard_delete } = req.query;
@@ -188,7 +206,9 @@ router.delete('/pricing/:tld', async (req, res) => {
 });
 
 // Bulk import TLD pricing
+// Requires level 3+ (Admin)
 router.post('/pricing/import', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
   const pool = req.app.locals.pool;
   const { tlds } = req.body;
 

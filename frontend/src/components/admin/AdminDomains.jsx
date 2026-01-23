@@ -44,7 +44,8 @@ const ToggleSwitch = ({ enabled, onChange, disabled }) => (
 );
 
 // Domain detail/edit modal - exported for use in other admin components
-export function DomainDetailModal({ domain, onClose, onSave, onRefresh, token }) {
+// isAdmin prop controls whether editing features are shown (default true for backwards compatibility)
+export function DomainDetailModal({ domain, onClose, onSave, onRefresh, token, isAdmin = true }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -480,27 +481,29 @@ export function DomainDetailModal({ domain, onClose, onSave, onRefresh, token })
                 </div>
               )}
 
-              {/* Quick Actions */}
-              <div className="flex flex-wrap gap-3">
-                <button onClick={handleSync} disabled={syncing} className="btn-secondary text-sm">
-                  {syncing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
-                  Sync from eNom
-                </button>
-                <button onClick={handleGetAuthCode} className="btn-secondary text-sm">
-                  <Key className="w-4 h-4 mr-2" />
-                  Get Auth Code
-                </button>
-                <button
-                  onClick={() => handleToggleLock(!details.lock_status)}
-                  className="btn-secondary text-sm"
-                >
-                  {details.lock_status ? (
-                    <><Unlock className="w-4 h-4 mr-2" />Unlock Domain</>
-                  ) : (
-                    <><Lock className="w-4 h-4 mr-2" />Lock Domain</>
-                  )}
-                </button>
-              </div>
+              {/* Quick Actions - Admin only */}
+              {isAdmin && (
+                <div className="flex flex-wrap gap-3">
+                  <button onClick={handleSync} disabled={syncing} className="btn-secondary text-sm">
+                    {syncing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+                    Sync from eNom
+                  </button>
+                  <button onClick={handleGetAuthCode} className="btn-secondary text-sm">
+                    <Key className="w-4 h-4 mr-2" />
+                    Get Auth Code
+                  </button>
+                  <button
+                    onClick={() => handleToggleLock(!details.lock_status)}
+                    className="btn-secondary text-sm"
+                  >
+                    {details.lock_status ? (
+                      <><Unlock className="w-4 h-4 mr-2" />Unlock Domain</>
+                    ) : (
+                      <><Lock className="w-4 h-4 mr-2" />Lock Domain</>
+                    )}
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
@@ -512,7 +515,7 @@ export function DomainDetailModal({ domain, onClose, onSave, onRefresh, token })
                   <Server className="w-5 h-5 text-indigo-600" />
                   Nameservers
                 </h3>
-                {!editingNameservers && (
+                {!editingNameservers && isAdmin && (
                   <button
                     onClick={() => setEditingNameservers(true)}
                     className="btn-secondary text-sm"
@@ -627,7 +630,7 @@ export function DomainDetailModal({ domain, onClose, onSave, onRefresh, token })
                   (typeof details.nameservers === 'string' ? JSON.parse(details.nameservers) : details.nameservers)
                   : []
                 }
-                isAdmin={true}
+                isAdmin={isAdmin}
                 onNameserversUpdated={(newNs) => {
                   // Update local state when nameservers are restored via DNS panel
                   setDetails(prev => ({ ...prev, nameservers: newNs }));
@@ -639,6 +642,13 @@ export function DomainDetailModal({ domain, onClose, onSave, onRefresh, token })
 
           {activeSection === 'settings' && (
             <div className="space-y-6">
+              {!isAdmin && (
+                <div className="p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl">
+                  <p className="text-sm text-amber-700 dark:text-amber-300">
+                    <strong>View Only:</strong> You don't have permission to edit domain settings.
+                  </p>
+                </div>
+              )}
               <div className="grid gap-6">
                 {/* Status */}
                 <div>
@@ -649,6 +659,7 @@ export function DomainDetailModal({ domain, onClose, onSave, onRefresh, token })
                     value={formData.status || ''}
                     onChange={(e) => setFormData({ ...formData, status: e.target.value })}
                     className="input w-full"
+                    disabled={!isAdmin}
                   >
                     <option value="active">Active</option>
                     <option value="pending">Pending</option>
@@ -684,7 +695,7 @@ export function DomainDetailModal({ domain, onClose, onSave, onRefresh, token })
                   <ToggleSwitch
                     enabled={details?.auto_renew}
                     onChange={handleToggleAutoRenew}
-                    disabled={!details?.auto_renew_payment_method_id}
+                    disabled={!isAdmin || !details?.auto_renew_payment_method_id}
                   />
                 </div>
 
@@ -704,7 +715,7 @@ export function DomainDetailModal({ domain, onClose, onSave, onRefresh, token })
                   <ToggleSwitch
                     enabled={details?.privacy_enabled}
                     onChange={handleTogglePrivacy}
-                    disabled={togglingPrivacy}
+                    disabled={!isAdmin || togglingPrivacy}
                   />
                 </div>
 
@@ -719,16 +730,19 @@ export function DomainDetailModal({ domain, onClose, onSave, onRefresh, token })
                   <ToggleSwitch
                     enabled={details?.lock_status}
                     onChange={(lock) => handleToggleLock(lock)}
+                    disabled={!isAdmin}
                   />
                 </div>
               </div>
 
-              <div className="flex gap-3 pt-4 border-t border-slate-200 dark:border-slate-700">
-                <button onClick={handleSave} disabled={saving} className="btn-primary flex-1">
-                  {saving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
-                  Save Status Change
-                </button>
-              </div>
+              {isAdmin && (
+                <div className="flex gap-3 pt-4 border-t border-slate-200 dark:border-slate-700">
+                  <button onClick={handleSave} disabled={saving} className="btn-primary flex-1">
+                    {saving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
+                    Save Status Change
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
@@ -747,17 +761,25 @@ export function DomainDetailModal({ domain, onClose, onSave, onRefresh, token })
 
           {activeSection === 'transfer' && (
             <div className="space-y-6">
-              <div className="p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl">
-                <div className="flex gap-3">
-                  <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
-                  <div>
-                    <h4 className="font-medium text-amber-800 dark:text-amber-300">Transfer Domain Ownership</h4>
-                    <p className="text-sm text-amber-700 dark:text-amber-400 mt-1">
-                      This will transfer the domain to another user's account. The new owner will have full control over the domain.
-                    </p>
+              {!isAdmin ? (
+                <div className="p-4 bg-slate-50 dark:bg-slate-700/50 border border-slate-200 dark:border-slate-600 rounded-xl">
+                  <p className="text-sm text-slate-600 dark:text-slate-400">
+                    <strong>View Only:</strong> Admin access required to transfer domains.
+                  </p>
+                </div>
+              ) : (
+                <div className="p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl">
+                  <div className="flex gap-3">
+                    <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
+                    <div>
+                      <h4 className="font-medium text-amber-800 dark:text-amber-300">Transfer Domain Ownership</h4>
+                      <p className="text-sm text-amber-700 dark:text-amber-400 mt-1">
+                        This will transfer the domain to another user's account. The new owner will have full control over the domain.
+                      </p>
+                    </div>
                   </div>
                 </div>
-              </div>
+              )}
 
               <div>
                 <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
@@ -777,6 +799,7 @@ export function DomainDetailModal({ domain, onClose, onSave, onRefresh, token })
                   value={formData.user_id || ''}
                   onChange={(e) => setFormData({ ...formData, user_id: parseInt(e.target.value) })}
                   className="input w-full"
+                  disabled={!isAdmin}
                 >
                   <option value="">Select a user...</option>
                   {users.map(user => (
@@ -805,16 +828,18 @@ export function DomainDetailModal({ domain, onClose, onSave, onRefresh, token })
 
               <button
                 onClick={handlePushDomain}
-                disabled={saving || !formData.user_id || formData.user_id === details?.user_id}
+                disabled={!isAdmin || saving || !formData.user_id || formData.user_id === details?.user_id}
                 className="btn-primary w-full"
               >
                 {saving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Users className="w-4 h-4 mr-2" />}
                 Transfer Domain (Immediate)
               </button>
 
-              <p className="text-xs text-center text-slate-500 dark:text-slate-400 mt-2">
-                Admin transfers are immediate and don't require acceptance.
-              </p>
+              {isAdmin && (
+                <p className="text-xs text-center text-slate-500 dark:text-slate-400 mt-2">
+                  Admin transfers are immediate and don't require acceptance.
+                </p>
+              )}
             </div>
           )}
 
@@ -919,9 +944,19 @@ export function DomainDetailModal({ domain, onClose, onSave, onRefresh, token })
   );
 }
 
+// Role level constants (mirror backend)
+const ROLE_LEVELS = {
+  CUSTOMER: 0,
+  SUPPORT: 1,
+  SALES: 2,
+  ADMIN: 3,
+  SUPER_ADMIN: 4
+};
+
 // Main AdminDomains component
 export default function AdminDomains() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
+  const isAdmin = (user?.role_level || 0) >= ROLE_LEVELS.ADMIN || user?.is_admin;
   const [domains, setDomains] = useState([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
@@ -1015,10 +1050,12 @@ export default function AdminDomains() {
           </p>
         </div>
         <div className="flex gap-3">
-          <button onClick={handleSyncAll} disabled={syncing} className="btn-primary">
-            {syncing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
-            Sync All from eNom
-          </button>
+          {isAdmin && (
+            <button onClick={handleSyncAll} disabled={syncing} className="btn-primary">
+              {syncing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
+              Sync All from eNom
+            </button>
+          )}
           <button onClick={fetchDomains} disabled={loading} className="btn-secondary">
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
@@ -1227,6 +1264,7 @@ export default function AdminDomains() {
           onSave={() => { setSelectedDomain(null); fetchDomains(); }}
           onRefresh={fetchDomains}
           token={token}
+          isAdmin={isAdmin}
         />
       )}
     </div>

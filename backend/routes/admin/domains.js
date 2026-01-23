@@ -1,10 +1,14 @@
 /**
  * Admin Domain Management Routes
  * Domain listing, details, sync, and management
+ *
+ * Access Levels:
+ * - Level 1+: View domains and details
+ * - Level 3+: Edit domains, sync, manage settings
  */
 const express = require('express');
 const router = express.Router();
-const { logAudit } = require('../../middleware/auth');
+const { logAudit, ROLE_LEVELS } = require('../../middleware/auth');
 const enom = require('../../services/enom');
 
 /**
@@ -164,8 +168,20 @@ async function getSetting(pool, key, defaultValue) {
   return result.rows.length > 0 ? result.rows[0].value : defaultValue;
 }
 
+// Helper to check if user has admin level (3+)
+function requireAdminLevel(req, res) {
+  if (req.user.role_level < ROLE_LEVELS.ADMIN && !req.user.is_admin) {
+    res.status(403).json({ error: 'Admin access required' });
+    return false;
+  }
+  return true;
+}
+
 // Update domain (transfer between users, update settings)
+// Requires level 3+ (Admin)
 router.put('/domains/:id', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
+
   const pool = req.app.locals.pool;
   const domainId = parseInt(req.params.id);
   const { user_id, status, auto_renew, privacy_enabled } = req.body;
@@ -290,7 +306,9 @@ router.get('/domains/:id/contacts', async (req, res) => {
 });
 
 // Update WHOIS contacts for domain (admin - no ownership check)
+// Requires level 3+ (Admin)
 router.put('/domains/:id/contacts', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
   const pool = req.app.locals.pool;
   const domainId = parseInt(req.params.id);
   const { registrant, admin, tech, billing } = req.body;
@@ -352,7 +370,9 @@ router.put('/domains/:id/contacts', async (req, res) => {
 });
 
 // Force sync domain with eNom
+// Requires level 3+ (Admin)
 router.post('/domains/:id/sync', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
   const pool = req.app.locals.pool;
   const domainId = parseInt(req.params.id);
 
@@ -419,7 +439,9 @@ router.post('/domains/:id/sync', async (req, res) => {
 });
 
 // Bulk sync all domains
+// Requires level 3+ (Admin)
 router.post('/domains/sync-all', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
   const pool = req.app.locals.pool;
   const { limit = 100 } = req.body;
 
@@ -483,7 +505,9 @@ router.post('/domains/sync-all', async (req, res) => {
 });
 
 // Get domain auth code (EPP code)
+// Requires level 3+ (Admin)
 router.post('/domains/:id/auth-code', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
   const pool = req.app.locals.pool;
   const domainId = parseInt(req.params.id);
 
@@ -513,7 +537,9 @@ router.post('/domains/:id/auth-code', async (req, res) => {
 // Toggle auto-renew (dedicated endpoint for admin UI)
 // Note: Auto-renewal is handled by our system's background jobs, NOT eNom's auto-renew.
 // This flag controls whether our job scheduler will automatically renew expiring domains.
+// Requires level 3+ (Admin)
 router.put('/domains/:id/autorenew', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
   const pool = req.app.locals.pool;
   const domainId = parseInt(req.params.id);
   const { auto_renew } = req.body;
@@ -545,7 +571,9 @@ router.put('/domains/:id/autorenew', async (req, res) => {
 
 // Toggle WHOIS privacy (dedicated endpoint for admin UI - bypasses payment check)
 // Admin override: Can enable privacy without customer payment, but costs reseller money
+// Requires level 3+ (Admin)
 router.put('/domains/:id/privacy', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
   const pool = req.app.locals.pool;
   const domainId = parseInt(req.params.id);
   const { enabled, adminOverride } = req.body;
@@ -650,7 +678,9 @@ router.put('/domains/:id/privacy', async (req, res) => {
 });
 
 // Update nameservers (dedicated endpoint for admin UI)
+// Requires level 3+ (Admin)
 router.put('/domains/:id/nameservers', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
   const pool = req.app.locals.pool;
   const domainId = parseInt(req.params.id);
   const { nameservers } = req.body;
@@ -704,7 +734,9 @@ router.put('/domains/:id/nameservers', async (req, res) => {
 });
 
 // Lock/unlock domain
+// Requires level 3+ (Admin)
 router.post('/domains/:id/lock', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
   const pool = req.app.locals.pool;
   const domainId = parseInt(req.params.id);
   const { lock } = req.body;
@@ -764,7 +796,9 @@ router.get('/domains/:id/dns', async (req, res) => {
 });
 
 // Set all DNS records for any domain (admin)
+// Requires level 3+ (Admin)
 router.put('/domains/:id/dns', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
   const pool = req.app.locals.pool;
   const domainId = parseInt(req.params.id);
   const { records } = req.body;
@@ -794,7 +828,9 @@ router.put('/domains/:id/dns', async (req, res) => {
 });
 
 // Add DNS record for any domain (admin)
+// Requires level 3+ (Admin)
 router.post('/domains/:id/dns', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
   const pool = req.app.locals.pool;
   const domainId = parseInt(req.params.id);
   const { hostName, recordType, address, mxPref } = req.body;
@@ -829,7 +865,9 @@ router.post('/domains/:id/dns', async (req, res) => {
 });
 
 // Delete DNS record for any domain (admin)
+// Requires level 3+ (Admin)
 router.delete('/domains/:id/dns/:recordIndex', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
   const pool = req.app.locals.pool;
   const domainId = parseInt(req.params.id);
   const recordIndex = parseInt(req.params.recordIndex);
@@ -855,7 +893,9 @@ router.delete('/domains/:id/dns/:recordIndex', async (req, res) => {
 });
 
 // Update URL forwarding for any domain (admin)
+// Requires level 3+ (Admin)
 router.put('/domains/:id/url-forwarding', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
   const pool = req.app.locals.pool;
   const domainId = parseInt(req.params.id);
   const { forwardUrl, forwardType, cloak, cloakTitle } = req.body;
@@ -890,7 +930,9 @@ router.put('/domains/:id/url-forwarding', async (req, res) => {
 });
 
 // Disable URL forwarding for any domain (admin)
+// Requires level 3+ (Admin)
 router.delete('/domains/:id/url-forwarding', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
   const pool = req.app.locals.pool;
   const domainId = parseInt(req.params.id);
 
@@ -915,7 +957,9 @@ router.delete('/domains/:id/url-forwarding', async (req, res) => {
 });
 
 // Admin: Push domain to another user (immediate transfer, no acceptance needed)
+// Requires level 3+ (Admin)
 router.post('/domains/:id/push', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
   const pool = req.app.locals.pool;
   const domainId = parseInt(req.params.id);
   const { to_email, notes } = req.body;
@@ -1040,7 +1084,9 @@ router.get('/push-requests', async (req, res) => {
 });
 
 // Admin: Expire a pending push request
+// Requires level 3+ (Admin)
 router.post('/push-requests/:id/expire', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
   const pool = req.app.locals.pool;
   const requestId = parseInt(req.params.id);
 

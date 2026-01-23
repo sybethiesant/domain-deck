@@ -1,15 +1,20 @@
 /**
  * Admin Routes Index
  * Combines all admin sub-routes into a single router
- * All routes require authentication and admin status
+ *
+ * Access Levels:
+ * - Level 1+ (Support): Can view users, orders, domains and add notes
+ * - Level 3+ (Admin): Can edit users, orders, domains, pricing
+ * - Level 4 (Super Admin): Full access including settings, maintenance mode
  */
 const express = require('express');
 const router = express.Router();
-const { authMiddleware, adminMiddleware } = require('../../middleware/auth');
+const { authMiddleware, staffMiddleware } = require('../../middleware/auth');
 
-// Apply auth and admin middleware to all admin routes
+// Apply auth and staff middleware to all admin routes (level 1+)
+// Individual routes enforce higher levels as needed
 router.use(authMiddleware);
-router.use(adminMiddleware);
+router.use(staffMiddleware);
 
 // Import sub-routers
 const statsRoutes = require('./stats');
