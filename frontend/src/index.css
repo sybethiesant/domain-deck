@@ -57,7 +57,8 @@
   }
 
   .btn-ghost {
-    @apply btn bg-transparent hover:bg-slate-100 dark:hover:bg-slate-800;
+    @apply btn bg-transparent text-slate-700 hover:bg-slate-100 hover:text-slate-900
+           dark:text-slate-200 dark:hover:bg-slate-800 dark:hover:text-white;
   }
 
   .input {
