@@ -51,3 +51,4 @@ backend/scripts/store-card.js
 
 # Uploaded files (user content)
 backend/uploads/
+backups/
