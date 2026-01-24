@@ -232,7 +232,7 @@ router.put('/domains/:id', async (req, res) => {
 
     if (status === 'suspended' && domain.status !== 'suspended') {
       // Suspending: Save current nameservers and replace with suspended ones
-      const suspendedNsSetting = await getSetting(pool, 'suspended_nameservers', 'ns1.suspended.worxtech.biz,ns2.suspended.worxtech.biz');
+      const suspendedNsSetting = await getSetting(pool, 'suspended_nameservers', 'ns1.suspended.example.com,ns2.suspended.example.com');
       const suspendedNs = suspendedNsSetting.split(',').map(ns => ns.trim());
 
       // Save current nameservers (stringify for JSONB storage)

@@ -4,7 +4,7 @@ import { ShoppingCart, Sun, Moon, LogOut, Settings, LayoutDashboard, Package, Us
 import { useAuth, useCart, useTheme } from '../../App';
 import { API_URL } from '../../config/api';
 
-// Professional WorxTech Logo Component
+// Professional Logo Component
 function Logo({ className = '' }) {
   return (
     <svg
@@ -91,7 +91,7 @@ function Navbar() {
             {siteConfig?.logo_url ? (
               <img
                 src={`/api${siteConfig.logo_url}`}
-                alt={siteConfig?.site_name || 'WorxTech'}
+                alt={siteConfig?.site_name || 'Domain Store'}
                 style={{
                   maxWidth: `${siteConfig?.logo_width || 180}px`,
                   maxHeight: `${siteConfig?.logo_height || 50}px`,

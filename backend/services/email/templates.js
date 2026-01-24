@@ -3,6 +3,12 @@
  * HTML email templates for various notifications
  */
 
+// Site configuration - override these via database app_settings
+const SITE_NAME = process.env.SITE_NAME || 'Domain Store';
+const COMPANY_NAME = process.env.COMPANY_NAME || 'Your Company';
+const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || 'support@example.com';
+const SITE_URL = process.env.SITE_URL || 'https://example.com';
+
 // Base wrapper for all emails
 const baseWrapper = (content) => `
 <!DOCTYPE html>
@@ -10,7 +16,7 @@ const baseWrapper = (content) => `
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>WorxTech</title>
+  <title>${SITE_NAME}</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; color: #1e293b; margin: 0; padding: 0; background-color: #f1f5f9; }
     .container { max-width: 600px; margin: 0 auto; background: #ffffff; }
@@ -37,14 +43,14 @@ const baseWrapper = (content) => `
 <body>
   <div class="container">
     <div class="header">
-      <h1>WorxTech</h1>
+      <h1>${SITE_NAME}</h1>
     </div>
     <div class="content">
       ${content}
     </div>
     <div class="footer">
-      <p>&copy; ${new Date().getFullYear()} WorxTech Internet Services LLC. All rights reserved.</p>
-      <p>If you have any questions, contact us at support@worxtech.biz</p>
+      <p>&copy; ${new Date().getFullYear()} ${COMPANY_NAME}. All rights reserved.</p>
+      <p>If you have any questions, contact us at ${SUPPORT_EMAIL}</p>
     </div>
   </div>
 </body>
@@ -54,28 +60,28 @@ const baseWrapper = (content) => `
 module.exports = {
   // Welcome email
   welcome: ({ username }) => ({
-    subject: 'Welcome to WorxTech!',
+    subject: 'Welcome!',
     html: baseWrapper(`
       <h2>Welcome, ${username}!</h2>
-      <p>Thank you for creating an account with WorxTech. We're excited to help you find the perfect domain name for your next project.</p>
+      <p>Thank you for creating an account with us. We're excited to help you find the perfect domain name for your next project.</p>
       <div class="highlight">
         <strong>What you can do:</strong>
         <ul>
           <li>Search and register domains</li>
           <li>Manage your domain portfolio</li>
           <li>Configure nameservers and privacy</li>
-          <li>Transfer domains to WorxTech</li>
+          <li>Transfer your domains</li>
         </ul>
       </div>
       <p style="text-align: center;">
-        <a href="https://worxtech.biz" class="btn">Start Searching</a>
+        <a href="${SITE_URL}" class="btn">Start Searching</a>
       </p>
     `)
   }),
 
   // Email verification (uses snake_case key to match sendEmailVerification call)
   email_verification: ({ username, verificationUrl }) => ({
-    subject: 'Verify Your Email - WorxTech',
+    subject: 'Verify Your Email',
     html: baseWrapper(`
       <h2>Verify Your Email Address</h2>
       <p>Hi ${username},</p>
@@ -93,7 +99,7 @@ module.exports = {
 
   // Password reset
   password_reset: ({ username, resetLink, expiresIn }) => ({
-    subject: 'Reset Your Password - WorxTech',
+    subject: 'Reset Your Password',
     html: baseWrapper(`
       <h2>Password Reset Request</h2>
       <p>Hi ${username},</p>
@@ -108,7 +114,7 @@ module.exports = {
 
   // Temporary password set by admin
   temp_password: ({ username, tempPassword, loginUrl }) => ({
-    subject: 'Your Temporary Password - WorxTech',
+    subject: 'Your Temporary Password',
     html: baseWrapper(`
       <h2>Temporary Password</h2>
       <p>Hi ${username},</p>
@@ -123,7 +129,7 @@ module.exports = {
       <div class="highlight" style="background: #fef3c7; border: 1px solid #f59e0b;">
         <p style="color: #92400e; margin: 0;"><strong>Important:</strong> You will be required to change this password immediately after logging in. Please choose a strong, unique password.</p>
       </div>
-      <p><strong>Didn't expect this?</strong> Contact support immediately at support@worxtech.biz</p>
+      <p><strong>Didn't expect this?</strong> Contact support immediately at ${SUPPORT_EMAIL}</p>
     `)
   }),
 
@@ -163,7 +169,7 @@ module.exports = {
       </table>
       <p>You'll receive another email once your domains are ready.</p>
       <p style="text-align: center;">
-        <a href="https://worxtech.biz/orders" class="btn">View Order</a>
+        <a href="${SITE_URL}/orders" class="btn">View Order</a>
       </p>
     `)
   }),
@@ -187,7 +193,7 @@ module.exports = {
         <li>Point your domain to your website</li>
       </ul>
       <p style="text-align: center;">
-        <a href="https://worxtech.biz/dashboard" class="btn btn-success">Manage Domain</a>
+        <a href="${SITE_URL}/dashboard" class="btn btn-success">Manage Domain</a>
       </p>
     `)
   }),
@@ -234,7 +240,7 @@ module.exports = {
         ${items.map(item => `<li class="domain-name">${item.domain_name}</li>`).join('')}
       </ul>
       <p>No action is required from you at this time. We'll follow up within 24 hours.</p>
-      <p>If you have questions, please contact support@worxtech.biz</p>
+      <p>If you have questions, please contact ${SUPPORT_EMAIL}</p>
     `)
   }),
 
@@ -256,7 +262,7 @@ module.exports = {
       </ol>
       <p><strong>Important:</strong> Make sure to check your spam folder for the authorization email.</p>
       <p style="text-align: center;">
-        <a href="https://worxtech.biz/orders" class="btn">Track Transfer</a>
+        <a href="${SITE_URL}/orders" class="btn">Track Transfer</a>
       </p>
     `)
   }),
@@ -268,13 +274,13 @@ module.exports = {
       <h2><span class="status-badge status-success">Complete</span></h2>
       <h2>Domain Transfer Successful!</h2>
       <p>Hi ${username},</p>
-      <p>Your domain has been successfully transferred to WorxTech:</p>
+      <p>Your domain has been successfully transferred successfully:</p>
       <div class="highlight" style="text-align: center;">
         <span class="domain-name">${domain}</span>
       </div>
-      <p>You can now manage your domain from your WorxTech dashboard.</p>
+      <p>You can now manage your domain from your your dashboard.</p>
       <p style="text-align: center;">
-        <a href="https://worxtech.biz/dashboard" class="btn btn-success">Manage Domain</a>
+        <a href="${SITE_URL}/dashboard" class="btn btn-success">Manage Domain</a>
       </p>
     `)
   }),
@@ -291,7 +297,7 @@ module.exports = {
         <strong>Total:</strong> $${parseFloat(total).toFixed(2)}
       </div>
       <p style="text-align: center;">
-        <a href="https://worxtech.biz/admin/orders" class="btn">View in Admin</a>
+        <a href="${SITE_URL}/admin/orders" class="btn">View in Admin</a>
       </p>
     `)
   }),
@@ -310,7 +316,7 @@ module.exports = {
       </div>
       <p>Please investigate and retry or contact the customer.</p>
       <p style="text-align: center;">
-        <a href="https://worxtech.biz/admin/orders" class="btn">View in Admin</a>
+        <a href="${SITE_URL}/admin/orders" class="btn">View in Admin</a>
       </p>
     `)
   }),
@@ -348,7 +354,7 @@ module.exports = {
         </tr>
       </table>
       <p style="text-align: center;">
-        <a href="https://worxtech.biz/dashboard" class="btn btn-success">View Domain</a>
+        <a href="${SITE_URL}/dashboard" class="btn btn-success">View Domain</a>
       </p>
     `)
   }),
@@ -376,7 +382,7 @@ module.exports = {
         <li>Contact support if you need assistance</li>
       </ul>
       <p style="text-align: center;">
-        <a href="https://worxtech.biz/dashboard" class="btn btn-warning">Renew Manually</a>
+        <a href="${SITE_URL}/dashboard" class="btn btn-warning">Renew Manually</a>
       </p>
     `)
   })

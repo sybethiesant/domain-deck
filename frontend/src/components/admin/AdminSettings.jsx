@@ -983,7 +983,7 @@ function AdminSettings() {
                       value={settings.support_email || ''}
                       onChange={(e) => handleChange('support_email', e.target.value)}
                       className="input w-full"
-                      placeholder="support@worxtech.biz"
+                      placeholder="support@example.com"
                     />
                   </div>
                 </div>
@@ -1225,7 +1225,7 @@ function AdminSettings() {
                       value={settings.suspended_nameservers || ''}
                       onChange={(e) => handleChange('suspended_nameservers', e.target.value)}
                       className="input w-full font-mono text-sm"
-                      placeholder="ns1.suspended.worxtech.biz,ns2.suspended.worxtech.biz"
+                      placeholder="ns1.suspended.example.com,ns2.suspended.example.com"
                     />
                     <p className="text-xs text-slate-500 mt-1">Nameservers used for suspended domains</p>
                   </div>
@@ -1744,7 +1744,7 @@ function AdminSettings() {
                       value={settings.admin_notification_email || ''}
                       onChange={(e) => handleChange('admin_notification_email', e.target.value)}
                       className="input w-full"
-                      placeholder="admin@worxtech.biz"
+                      placeholder="admin@example.com"
                     />
                   </div>
                   <div>

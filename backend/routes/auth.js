@@ -170,7 +170,7 @@ router.post('/register', async (req, res) => {
     // Send verification email if required, otherwise send welcome email
     if (verificationRequired) {
       try {
-        const verificationUrl = `${process.env.FRONTEND_URL || 'https://worxtech.biz'}/verify-email?token=${verificationToken}`;
+        const verificationUrl = `${process.env.FRONTEND_URL || 'https://example.com'}/verify-email?token=${verificationToken}`;
         await emailService.sendEmailVerification(normalizedEmail, {
           username: result.rows[0].username,
           verificationUrl
@@ -469,7 +469,7 @@ router.post('/resend-verification', async (req, res) => {
     );
 
     // Send verification email
-    const verificationUrl = `${process.env.FRONTEND_URL || 'https://worxtech.biz'}/verify-email?token=${verificationToken}`;
+    const verificationUrl = `${process.env.FRONTEND_URL || 'https://example.com'}/verify-email?token=${verificationToken}`;
     await emailService.sendEmailVerification(user.email, {
       username: user.username,
       verificationUrl
@@ -645,7 +645,7 @@ router.post('/forgot-password', async (req, res) => {
     );
 
     // Send password reset email
-    const resetLink = `${process.env.FRONTEND_URL || 'https://worxtech.biz'}/reset-password?token=${resetToken}`;
+    const resetLink = `${process.env.FRONTEND_URL || 'https://example.com'}/reset-password?token=${resetToken}`;
 
     try {
       await emailService.sendPasswordReset(user.email, {

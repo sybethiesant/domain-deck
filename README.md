@@ -1,8 +1,10 @@
-# WorxTech - Domain Reseller Storefront
+# Domain Reseller Storefront
 
-A full-featured e-commerce domain reseller storefront powered by the eNom API. Built with React and Node.js.
+A full-featured, white-label e-commerce domain reseller storefront powered by the eNom API. Built with React and Node.js.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
+
+> **Official Deployment**: This project powers [worxtech.biz](https://worxtech.biz)
 
 ## Features
 
@@ -53,8 +55,8 @@ A full-featured e-commerce domain reseller storefront powered by the eNom API. B
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/sybethiesant/worxtech-store.git
-   cd worxtech-store
+   git clone https://github.com/sybethiesant/domain-reseller-storefront.git
+   cd domain-reseller-storefront
    ```
 
 2. **Configure environment**
@@ -129,8 +131,8 @@ services:
       - "3001:3001"
     environment:
       - DB_HOST=db
-      - DB_NAME=worxtech
-      - DB_USER=worxtech
+      - DB_NAME=domainstore
+      - DB_USER=domainstore
       - DB_PASSWORD=${DB_PASSWORD}
     depends_on:
       - db
@@ -140,8 +142,8 @@ services:
     volumes:
       - db-data:/var/lib/postgresql/data
     environment:
-      - POSTGRES_DB=worxtech
-      - POSTGRES_USER=worxtech
+      - POSTGRES_DB=domainstore
+      - POSTGRES_USER=domainstore
       - POSTGRES_PASSWORD=${DB_PASSWORD}
 
 volumes:
@@ -160,7 +162,7 @@ pm2 start ecosystem.config.js
 pm2 list
 
 # View logs
-pm2 logs worxtech-api
+pm2 logs domain-api
 ```
 
 ## Backup & Recovery
@@ -251,4 +253,4 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## Support
 
-For issues and feature requests, please use the [GitHub Issues](https://github.com/sybethiesant/worxtech-store/issues) page.
+For issues and feature requests, please use the [GitHub Issues](https://github.com/sybethiesant/domain-reseller-storefront/issues) page.

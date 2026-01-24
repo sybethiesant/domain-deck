@@ -49,9 +49,9 @@ const DEFAULT_SETTINGS = {
   // Site settings
   site_name: 'WorxTech',
   site_tagline: 'Domain Names Made Simple',
-  support_email: 'support@worxtech.biz',
+  support_email: 'support@example.com',
   company_name: 'WorxTech Internet Services LLC',
-  site_url: 'https://worxtech.biz',
+  site_url: 'https://example.com',
 
   // Logo settings
   logo_url: '',
@@ -95,7 +95,7 @@ const DEFAULT_SETTINGS = {
 
   // Domain settings
   default_nameservers: '["dns1.name-services.com","dns2.name-services.com","dns3.name-services.com","dns4.name-services.com"]',
-  suspended_nameservers: 'ns1.suspended.worxtech.biz,ns2.suspended.worxtech.biz',
+  suspended_nameservers: 'ns1.suspended.example.com,ns2.suspended.example.com',
   auto_sync_enabled: 'true',
   sync_interval_hours: '6',
   auto_renew_threshold_days: '30',
@@ -109,7 +109,7 @@ const DEFAULT_SETTINGS = {
   push_timeout_days: '7',
 
   // Notification settings
-  admin_notification_email: 'admin@worxtech.biz',
+  admin_notification_email: 'admin@example.com',
   admin_email_notifications: 'true',
   notify_on_new_order: 'true',
   notify_on_failed_order: 'true',
@@ -619,7 +619,7 @@ router.get('/email/status', async (req, res) => {
     const config = {
       host: process.env.SMTP_HOST || 'smtp.gmail.com',
       port: process.env.SMTP_PORT || '587',
-      user: process.env.SMTP_USER || 'support@worxtech.biz',
+      user: process.env.SMTP_USER || 'support@example.com',
       from: emailService.from,
       fromName: emailService.fromName,
       connected: hasTransporter

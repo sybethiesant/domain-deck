@@ -331,7 +331,7 @@ router.post('/users/:id/send-reset', async (req, res) => {
 
     // Send password reset email
     const emailService = require('../../services/email');
-    const resetLink = `${process.env.FRONTEND_URL || 'https://worxtech.biz'}/reset-password?token=${resetToken}`;
+    const resetLink = `${process.env.FRONTEND_URL || 'https://example.com'}/reset-password?token=${resetToken}`;
 
     await emailService.sendPasswordReset(user.email, {
       username: user.username,
@@ -433,7 +433,7 @@ router.post('/users/:id/set-temp-password', async (req, res) => {
         await emailService.sendTempPassword(targetUser.email, {
           username: targetUser.username,
           tempPassword,
-          loginUrl: process.env.FRONTEND_URL || 'https://worxtech.biz'
+          loginUrl: process.env.FRONTEND_URL || 'https://example.com'
         });
       } catch (emailErr) {
         console.error('Failed to send temp password email:', emailErr);

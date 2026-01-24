@@ -16,7 +16,7 @@ class EmailService {
   constructor() {
     this.transporter = null;
     this.pool = null;
-    this.from = process.env.SMTP_FROM || 'support@worxtech.biz';
+    this.from = process.env.SMTP_FROM || 'support@example.com';
     this.fromName = process.env.SMTP_FROM_NAME || 'WorxTech';
     this.templateCache = new Map();
     this.cacheExpiry = 5 * 60 * 1000; // 5 minutes cache
@@ -28,7 +28,7 @@ class EmailService {
    * Initialize the SMTP transporter
    */
   initTransporter() {
-    const smtpUser = process.env.SMTP_USER || 'support@worxtech.biz';
+    const smtpUser = process.env.SMTP_USER || 'support@example.com';
     const smtpPass = process.env.SMTP_PASS;
 
     if (smtpPass) {
@@ -80,8 +80,8 @@ class EmailService {
     const defaults = {
       site_name: 'WorxTech',
       company_name: 'WorxTech Internet Services LLC',
-      support_email: 'support@worxtech.biz',
-      site_url: process.env.FRONTEND_URL || 'https://worxtech.biz',
+      support_email: 'support@example.com',
+      site_url: process.env.FRONTEND_URL || 'https://example.com',
       email_logo_url: null,
       email_logo_background: '#4f46e5', // Default indigo gradient start
       email_header_style: 'gradient', // 'gradient', 'solid', 'logo'
@@ -158,7 +158,7 @@ class EmailService {
       // Ensure we have an absolute URL for emails (relative paths won't work)
       let logoUrl = branding.email_logo_url;
       if (logoUrl && !logoUrl.startsWith('http')) {
-        const baseUrl = (branding.site_url || 'https://worxtech.biz').replace(/\/$/, '');
+        const baseUrl = (branding.site_url || 'https://example.com').replace(/\/$/, '');
         // Handle /uploads/... paths - add /api prefix for the backend route
         if (logoUrl.startsWith('/uploads/')) {
           logoUrl = `${baseUrl}/api${logoUrl}`;
@@ -251,7 +251,7 @@ class EmailService {
     const branding = brandingCache || {
       site_name: 'WorxTech',
       company_name: 'WorxTech Internet Services LLC',
-      support_email: 'support@worxtech.biz',
+      support_email: 'support@example.com',
       email_header_color: '#4f46e5',
       email_header_gradient_end: '#6366f1',
       email_logo_url: null,

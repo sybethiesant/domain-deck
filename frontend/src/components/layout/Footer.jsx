@@ -6,10 +6,10 @@ import { API_URL } from '../../config/api';
 function Footer() {
   const currentYear = new Date().getFullYear();
   const [siteConfig, setSiteConfig] = useState({
-    site_name: 'WorxTech',
-    company_name: 'WorxTech Internet Services LLC',
-    support_email: 'support@worxtech.biz',
-    site_url: 'https://worxtech.biz'
+    site_name: 'Domain Store',
+    company_name: 'Your Company Name',
+    support_email: 'support@example.com',
+    site_url: 'https://example.com'
   });
 
   useEffect(() => {

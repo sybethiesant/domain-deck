@@ -93,7 +93,7 @@ function rateLimit(type = 'general') {
 // CORS configuration - restrict to allowed origins
 const corsOptions = {
   origin: process.env.NODE_ENV === 'production'
-    ? ['https://worxtech.biz', 'https://www.worxtech.biz']
+    ? ['https://example.com', 'https://www.example.com']
     : ['http://localhost:3000', 'http://localhost:3001'],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -374,8 +374,8 @@ app.get('/api/site-config', async (req, res) => {
       site_name: 'WorxTech',
       site_tagline: 'Domain Names Made Simple',
       company_name: 'WorxTech Internet Services LLC',
-      support_email: 'support@worxtech.biz',
-      site_url: 'https://worxtech.biz',
+      support_email: 'support@example.com',
+      site_url: 'https://example.com',
       default_theme: 'dark'
     };
     for (const row of result.rows) {

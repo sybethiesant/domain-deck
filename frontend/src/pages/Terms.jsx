@@ -8,8 +8,8 @@ function Terms() {
   const [siteConfig, setSiteConfig] = useState({
     site_name: 'WorxTech',
     company_name: 'WorxTech Internet Services LLC',
-    support_email: 'support@worxtech.biz',
-    site_url: 'https://worxtech.biz'
+    support_email: 'support@example.com',
+    site_url: 'https://example.com'
   });
 
   useEffect(() => {

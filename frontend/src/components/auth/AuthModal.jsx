@@ -303,7 +303,7 @@ function AuthModal({ mode, onClose, onSwitchMode }) {
           <p className="text-slate-600 dark:text-slate-400 mt-1">
             {mode === 'login'
               ? 'Sign in to manage your domains'
-              : 'Start your journey with WorxTech'}
+              : 'Start your domain journey'}
           </p>
         </div>
 
