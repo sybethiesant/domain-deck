@@ -38,9 +38,15 @@ Thumbs.db
 *.pem
 .cache/
 
-# Credentials
+# Credentials and local documentation
 CREDENTIALS.md
 CLAUDE.md
+
+# Local audit and progress files
+AUDIT*.md
+CODE_AUDIT*.md
+PROGRESS.md
+ROLES.md
 
 # Encrypted sensitive data - NEVER commit
 backend/.credentials
