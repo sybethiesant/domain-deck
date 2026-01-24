@@ -1,12 +1,28 @@
 /**
  * Admin Statistics Routes
  * Dashboard statistics and metrics
+ *
+ * Access Level: Admin (Level 3+) required for all routes
+ * Revenue and business metrics are sensitive data
  */
 const express = require('express');
 const router = express.Router();
+const { ROLE_LEVELS } = require('../../middleware/auth');
+
+// Helper to check admin level
+const requireAdminLevel = (req, res) => {
+  if (req.user.role_level < ROLE_LEVELS.ADMIN && !req.user.is_admin) {
+    res.status(403).json({ error: 'Admin access required to view statistics' });
+    return false;
+  }
+  return true;
+};
 
 // Dashboard statistics
+// Requires Admin (Level 3+) - contains sensitive revenue data
 router.get('/stats', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
+
   const pool = req.app.locals.pool;
 
   try {
@@ -58,7 +74,10 @@ router.get('/stats', async (req, res) => {
 });
 
 // Revenue breakdown by period
+// Requires Admin (Level 3+)
 router.get('/stats/revenue', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
+
   const pool = req.app.locals.pool;
   const { period = '30d' } = req.query;
 
@@ -95,7 +114,10 @@ router.get('/stats/revenue', async (req, res) => {
 });
 
 // Domain statistics breakdown
+// Requires Admin (Level 3+)
 router.get('/stats/domains', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
+
   const pool = req.app.locals.pool;
 
   try {

@@ -476,7 +476,7 @@ router.get('/email-templates/:id', async (req, res) => {
 // Update email template
 // Requires Super Admin (level 4+)
 router.put('/email-templates/:id', async (req, res) => {
-  if (req.user.role_level < ROLE_LEVELS.SUPER_ADMIN && !req.user.is_admin) {
+  if (req.user.role_level < ROLE_LEVELS.SUPERADMIN && !req.user.is_admin) {
     return res.status(403).json({ error: 'Super admin access required to modify email templates' });
   }
   const pool = req.app.locals.pool;
@@ -596,7 +596,7 @@ router.get('/email/status', async (req, res) => {
 // Upload logo
 // Requires Super Admin (level 4+)
 router.post('/logo', logoUpload.single('logo'), async (req, res) => {
-  if (req.user.role_level < ROLE_LEVELS.SUPER_ADMIN && !req.user.is_admin) {
+  if (req.user.role_level < ROLE_LEVELS.SUPERADMIN && !req.user.is_admin) {
     // Delete the uploaded file if unauthorized
     if (req.file) {
       fs.unlinkSync(req.file.path);
@@ -672,7 +672,7 @@ router.post('/logo', logoUpload.single('logo'), async (req, res) => {
 // Update logo dimensions
 // Requires Super Admin (level 4+)
 router.put('/logo/dimensions', async (req, res) => {
-  if (req.user.role_level < ROLE_LEVELS.SUPER_ADMIN && !req.user.is_admin) {
+  if (req.user.role_level < ROLE_LEVELS.SUPERADMIN && !req.user.is_admin) {
     return res.status(403).json({ error: 'Super admin access required to update logo dimensions' });
   }
   const pool = req.app.locals.pool;
@@ -711,7 +711,7 @@ router.put('/logo/dimensions', async (req, res) => {
 // Delete logo
 // Requires Super Admin (level 4+)
 router.delete('/logo', async (req, res) => {
-  if (req.user.role_level < ROLE_LEVELS.SUPER_ADMIN && !req.user.is_admin) {
+  if (req.user.role_level < ROLE_LEVELS.SUPERADMIN && !req.user.is_admin) {
     return res.status(403).json({ error: 'Super admin access required to delete logo' });
   }
 
@@ -778,7 +778,7 @@ router.get('/logo', async (req, res) => {
 // Upload email logo
 // Requires Super Admin (level 4+)
 router.post('/settings/email-logo', logoUpload.single('logo'), async (req, res) => {
-  if (req.user.role_level < ROLE_LEVELS.SUPER_ADMIN && !req.user.is_admin) {
+  if (req.user.role_level < ROLE_LEVELS.SUPERADMIN && !req.user.is_admin) {
     if (req.file) {
       fs.unlinkSync(req.file.path);
     }
@@ -838,7 +838,7 @@ router.post('/settings/email-logo', logoUpload.single('logo'), async (req, res) 
 // Delete email logo
 // Requires Super Admin (level 4+)
 router.delete('/settings/email-logo', async (req, res) => {
-  if (req.user.role_level < ROLE_LEVELS.SUPER_ADMIN && !req.user.is_admin) {
+  if (req.user.role_level < ROLE_LEVELS.SUPERADMIN && !req.user.is_admin) {
     return res.status(403).json({ error: 'Super admin access required to delete email logo' });
   }
   const pool = req.app.locals.pool;
@@ -921,7 +921,7 @@ router.get('/legal-pages/:pageKey', async (req, res) => {
 // Update legal page
 // Requires Super Admin (level 4+)
 router.put('/legal-pages/:pageKey', async (req, res) => {
-  if (req.user.role_level < ROLE_LEVELS.SUPER_ADMIN && !req.user.is_admin) {
+  if (req.user.role_level < ROLE_LEVELS.SUPERADMIN && !req.user.is_admin) {
     return res.status(403).json({ error: 'Super admin access required to modify legal pages' });
   }
   const pool = req.app.locals.pool;
@@ -972,7 +972,7 @@ router.put('/legal-pages/:pageKey', async (req, res) => {
 // Delete legal page (reset to default)
 // Requires Super Admin (level 4+)
 router.delete('/legal-pages/:pageKey', async (req, res) => {
-  if (req.user.role_level < ROLE_LEVELS.SUPER_ADMIN && !req.user.is_admin) {
+  if (req.user.role_level < ROLE_LEVELS.SUPERADMIN && !req.user.is_admin) {
     return res.status(403).json({ error: 'Super admin access required to reset legal pages' });
   }
   const pool = req.app.locals.pool;

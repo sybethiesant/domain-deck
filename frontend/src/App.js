@@ -202,7 +202,7 @@ function AppContent() {
   }, [theme]);
 
   // Fetch user - always fetch fresh data
-  const fetchUser = useCallback(async () => {
+  const fetchUser = useCallback(async (signal) => {
     if (!token) {
       setAuthLoading(false);
       return;
@@ -213,7 +213,8 @@ function AppContent() {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Cache-Control': 'no-cache'
-        }
+        },
+        signal
       });
 
       if (res.ok) {
@@ -227,7 +228,10 @@ function AppContent() {
         logout();
       }
     } catch (error) {
-      console.error('Error fetching user:', error.name || 'Error');
+      // Ignore abort errors
+      if (error.name !== 'AbortError') {
+        console.error('Error fetching user:', error.name || 'Error');
+      }
     } finally {
       setAuthLoading(false);
     }
