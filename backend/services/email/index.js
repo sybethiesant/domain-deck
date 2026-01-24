@@ -544,6 +544,10 @@ class EmailService {
     return this.sendTemplate('email_verification', to, { username, verificationUrl });
   }
 
+  async sendTempPassword(to, { username, tempPassword, loginUrl }) {
+    return this.sendTemplate('temp_password', to, { username, tempPassword, loginUrl });
+  }
+
   // Admin notifications
   async sendAdminNewOrder(to, { orderNumber, customerEmail, total, itemCount }) {
     return this.sendTemplate('admin_new_order', to, { orderNumber, customerEmail, total: parseFloat(total).toFixed(2), itemCount });

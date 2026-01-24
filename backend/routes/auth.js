@@ -287,6 +287,22 @@ router.post('/login', async (req, res) => {
       });
     }
 
+    // Check if admin requires 2FA and user hasn't set it up yet
+    if (user.require_2fa && !user.totp_enabled) {
+      // Generate a temporary token for 2FA setup requirement
+      const setupToken = jwt.sign(
+        { id: user.id, purpose: '2fa_setup_required' },
+        process.env.JWT_SECRET,
+        { expiresIn: '15m' }
+      );
+
+      return res.json({
+        message: 'Two-factor authentication setup required',
+        requires2FASetup: true,
+        setupToken
+      });
+    }
+
     // Check if 2FA is enabled
     if (user.totp_enabled) {
       // Generate a temporary token for 2FA verification (short-lived)
@@ -332,9 +348,11 @@ router.post('/login', async (req, res) => {
         role_level: user.role_level || 0,
         role_name: user.role_name || 'customer',
         theme_preference: user.theme_preference || 'system',
-        totp_enabled: user.totp_enabled || false
+        totp_enabled: user.totp_enabled || false,
+        force_password_change: user.force_password_change || false
       },
-      token
+      token,
+      forcePasswordChange: user.force_password_change || false
     });
   } catch (error) {
     console.error('Login error:', error);
@@ -572,11 +590,16 @@ router.put('/password', authMiddleware, async (req, res) => {
     const new_hash = await bcrypt.hash(new_password, 10);
 
     await pool.query(
-      'UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      `UPDATE users SET
+        password_hash = $1,
+        force_password_change = false,
+        password_changed_at = CURRENT_TIMESTAMP,
+        updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2`,
       [new_hash, req.user.id]
     );
 
-    res.json({ message: 'Password updated successfully' });
+    res.json({ message: 'Password updated successfully', forcePasswordChange: false });
   } catch (error) {
     console.error('Error changing password:', error);
     res.status(500).json({ error: 'Failed to change password' });
@@ -999,9 +1022,11 @@ router.post('/2fa/authenticate', async (req, res) => {
         role_level: user.role_level || 0,
         role_name: user.role_name || 'customer',
         theme_preference: user.theme_preference || 'system',
-        totp_enabled: user.totp_enabled || false
+        totp_enabled: user.totp_enabled || false,
+        force_password_change: user.force_password_change || false
       },
-      token
+      token,
+      forcePasswordChange: user.force_password_change || false
     });
   } catch (error) {
     console.error('2FA authenticate error:', error);

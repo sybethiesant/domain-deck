@@ -106,6 +106,27 @@ module.exports = {
     `)
   }),
 
+  // Temporary password set by admin
+  temp_password: ({ username, tempPassword, loginUrl }) => ({
+    subject: 'Your Temporary Password - WorxTech',
+    html: baseWrapper(`
+      <h2>Temporary Password</h2>
+      <p>Hi ${username},</p>
+      <p>An administrator has set a temporary password for your account. Please use it to log in and then create a new password.</p>
+      <div class="highlight" style="text-align: center;">
+        <p><strong>Your temporary password:</strong></p>
+        <p style="font-family: monospace; font-size: 24px; letter-spacing: 2px; color: #4f46e5; margin: 16px 0;">${tempPassword}</p>
+      </div>
+      <p style="text-align: center;">
+        <a href="${loginUrl}" class="btn">Log In Now</a>
+      </p>
+      <div class="highlight" style="background: #fef3c7; border: 1px solid #f59e0b;">
+        <p style="color: #92400e; margin: 0;"><strong>Important:</strong> You will be required to change this password immediately after logging in. Please choose a strong, unique password.</p>
+      </div>
+      <p><strong>Didn't expect this?</strong> Contact support immediately at support@worxtech.biz</p>
+    `)
+  }),
+
   // Order confirmation
   order_confirmation: ({ orderNumber, items, total, username }) => ({
     subject: `Order Confirmed - ${orderNumber}`,

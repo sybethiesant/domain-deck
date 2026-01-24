@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { ArrowLeft, Save, Loader2, User, Globe, ShoppingCart, Users, MessageSquare, Activity, Check, X, Edit2, Pin, Trash2, Plus, Shield, Lock, Unlock, Eye } from 'lucide-react';
+import { ArrowLeft, Save, Loader2, User, Globe, ShoppingCart, Users, MessageSquare, Activity, Check, X, Edit2, Pin, Trash2, Plus, Shield, ShieldOff, Lock, Unlock, Eye, Key, RefreshCw, AlertTriangle, Copy } from 'lucide-react';
 import { useAuth } from '../../App';
 import { API_URL } from '../../config/api';
 import { toast } from 'react-hot-toast';
@@ -51,6 +51,12 @@ function AdminUserDetail({ userId, onClose }) {
 
   // Domain management state
   const [selectedDomain, setSelectedDomain] = useState(null);
+
+  // Security controls state
+  const [securityLoading, setSecurityLoading] = useState(null);
+  const [showTempPasswordModal, setShowTempPasswordModal] = useState(false);
+  const [tempPassword, setTempPassword] = useState('');
+  const [generatedPassword, setGeneratedPassword] = useState('');
 
   const fetchUser = useCallback(async () => {
     try {
@@ -169,6 +175,120 @@ function AdminUserDetail({ userId, onClose }) {
     } catch (err) {
       toast.error('Failed to delete note');
     }
+  };
+
+  // Security control functions
+  const handleForcePasswordChange = async (enabled) => {
+    setSecurityLoading('password');
+    try {
+      const res = await fetch(`${API_URL}/admin/users/${userId}/force-password-change`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ enabled })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        toast.success(data.message);
+        fetchUser();
+      } else {
+        toast.error(data.error || 'Failed to update');
+      }
+    } catch (err) {
+      toast.error('Failed to update');
+    }
+    setSecurityLoading(null);
+  };
+
+  const handleRequire2FA = async (enabled) => {
+    setSecurityLoading('2fa-require');
+    try {
+      const res = await fetch(`${API_URL}/admin/users/${userId}/require-2fa`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ enabled })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        toast.success(data.message);
+        fetchUser();
+      } else {
+        toast.error(data.error || 'Failed to update');
+      }
+    } catch (err) {
+      toast.error('Failed to update');
+    }
+    setSecurityLoading(null);
+  };
+
+  const handleReset2FA = async () => {
+    if (!window.confirm('Are you sure you want to disable 2FA for this user? They will need to set it up again.')) {
+      return;
+    }
+    setSecurityLoading('2fa-reset');
+    try {
+      const res = await fetch(`${API_URL}/admin/users/${userId}/reset-2fa`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ reason: 'Admin reset' })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        toast.success(data.message);
+        fetchUser();
+      } else {
+        toast.error(data.error || 'Failed to reset 2FA');
+      }
+    } catch (err) {
+      toast.error('Failed to reset 2FA');
+    }
+    setSecurityLoading(null);
+  };
+
+  const handleSetTempPassword = async (sendEmail) => {
+    setSecurityLoading('temp-password');
+    try {
+      const res = await fetch(`${API_URL}/admin/users/${userId}/set-temp-password`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          password: tempPassword || undefined,
+          sendEmail
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        if (data.tempPassword) {
+          setGeneratedPassword(data.tempPassword);
+        } else {
+          toast.success(data.message);
+          setShowTempPasswordModal(false);
+          setTempPassword('');
+          fetchUser();
+        }
+      } else {
+        toast.error(data.error || 'Failed to set password');
+      }
+    } catch (err) {
+      toast.error('Failed to set password');
+    }
+    setSecurityLoading(null);
+  };
+
+  const copyToClipboard = (text) => {
+    navigator.clipboard.writeText(text);
+    toast.success('Copied to clipboard');
   };
 
   const StatusBadge = ({ status, type = 'default' }) => {
@@ -538,6 +658,196 @@ function AdminUserDetail({ userId, onClose }) {
                   <p className="text-sm text-slate-500">Last Login</p>
                 </div>
               </div>
+            </div>
+
+            {/* Security Controls - Admin only */}
+            {isAdmin && user?.id !== currentUser?.id && user?.role_level < currentUser?.role_level && (
+              <div className="card p-6">
+                <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100 mb-4 flex items-center gap-2">
+                  <Shield className="w-5 h-5 text-primary-600" />
+                  Security Controls
+                </h3>
+
+                <div className="space-y-4">
+                  {/* 2FA Status */}
+                  <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
+                    <div className="flex items-center gap-3">
+                      {user.totp_enabled ? (
+                        <Shield className="w-5 h-5 text-green-500" />
+                      ) : (
+                        <ShieldOff className="w-5 h-5 text-slate-400" />
+                      )}
+                      <div>
+                        <p className="font-medium text-slate-900 dark:text-slate-100">Two-Factor Authentication</p>
+                        <p className="text-sm text-slate-500">
+                          {user.totp_enabled
+                            ? `Enabled since ${new Date(user.totp_verified_at).toLocaleDateString()}`
+                            : user.require_2fa
+                              ? 'Required on next login'
+                              : 'Not enabled'}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {user.totp_enabled ? (
+                        <button
+                          onClick={handleReset2FA}
+                          disabled={securityLoading === '2fa-reset'}
+                          className="px-3 py-1.5 text-sm border border-red-300 dark:border-red-800 text-red-600 dark:text-red-400 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50"
+                        >
+                          {securityLoading === '2fa-reset' ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Reset 2FA'}
+                        </button>
+                      ) : (
+                        <label className="relative inline-flex items-center cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={user.require_2fa || false}
+                            onChange={(e) => handleRequire2FA(e.target.checked)}
+                            disabled={securityLoading === '2fa-require'}
+                            className="sr-only peer"
+                          />
+                          <div className="w-11 h-6 bg-slate-200 peer-focus:ring-4 peer-focus:ring-primary-300 rounded-full peer dark:bg-slate-600 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600"></div>
+                          <span className="ml-2 text-sm text-slate-600 dark:text-slate-400">Require</span>
+                        </label>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Password Controls */}
+                  <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
+                    <div className="flex items-center gap-3">
+                      <Key className="w-5 h-5 text-slate-500" />
+                      <div>
+                        <p className="font-medium text-slate-900 dark:text-slate-100">Password</p>
+                        <p className="text-sm text-slate-500">
+                          {user.force_password_change
+                            ? 'Change required on next login'
+                            : user.password_changed_at
+                              ? `Last changed ${new Date(user.password_changed_at).toLocaleDateString()}`
+                              : 'No recent changes'}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setShowTempPasswordModal(true)}
+                        className="px-3 py-1.5 text-sm border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700"
+                      >
+                        Set Temp Password
+                      </button>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={user.force_password_change || false}
+                          onChange={(e) => handleForcePasswordChange(e.target.checked)}
+                          disabled={securityLoading === 'password'}
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-slate-200 peer-focus:ring-4 peer-focus:ring-primary-300 rounded-full peer dark:bg-slate-600 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-500"></div>
+                        <span className="ml-2 text-sm text-slate-600 dark:text-slate-400">Force Change</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Warning */}
+                  <div className="flex items-start gap-2 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 mt-0.5 flex-shrink-0" />
+                    <p className="text-sm text-amber-700 dark:text-amber-300">
+                      Changes to security settings take effect on the user's next login attempt.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Temp Password Modal */}
+        {showTempPasswordModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white dark:bg-slate-800 rounded-xl max-w-md w-full p-6">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="p-2 bg-primary-100 dark:bg-primary-900/30 rounded-lg">
+                  <Key className="w-5 h-5 text-primary-600 dark:text-primary-400" />
+                </div>
+                <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Set Temporary Password</h3>
+              </div>
+
+              {generatedPassword ? (
+                <>
+                  <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
+                    The temporary password has been set. The user must change it on their next login.
+                  </p>
+                  <div className="p-4 bg-slate-50 dark:bg-slate-700/50 rounded-lg mb-4">
+                    <p className="text-xs text-slate-500 mb-1">Temporary Password:</p>
+                    <div className="flex items-center gap-2">
+                      <code className="flex-1 font-mono text-lg tracking-wide">{generatedPassword}</code>
+                      <button
+                        onClick={() => copyToClipboard(generatedPassword)}
+                        className="p-2 text-slate-400 hover:text-primary-600 hover:bg-primary-50 dark:hover:bg-primary-900/20 rounded"
+                      >
+                        <Copy className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setShowTempPasswordModal(false);
+                      setGeneratedPassword('');
+                      setTempPassword('');
+                      fetchUser();
+                    }}
+                    className="btn-primary w-full"
+                  >
+                    Done
+                  </button>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
+                    Set a temporary password for this user. They will be required to change it on next login.
+                  </p>
+                  <div className="mb-4">
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                      Password (leave blank to generate)
+                    </label>
+                    <input
+                      type="text"
+                      value={tempPassword}
+                      onChange={(e) => setTempPassword(e.target.value)}
+                      className="input w-full font-mono"
+                      placeholder="Auto-generate if empty"
+                    />
+                  </div>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => {
+                        setShowTempPasswordModal(false);
+                        setTempPassword('');
+                      }}
+                      className="flex-1 px-4 py-2 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={() => handleSetTempPassword(false)}
+                      disabled={securityLoading === 'temp-password'}
+                      className="flex-1 btn-secondary"
+                    >
+                      {securityLoading === 'temp-password' ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                      Set & Show
+                    </button>
+                    <button
+                      onClick={() => handleSetTempPassword(true)}
+                      disabled={securityLoading === 'temp-password'}
+                      className="flex-1 btn-primary"
+                    >
+                      {securityLoading === 'temp-password' ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                      Set & Email
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         )}

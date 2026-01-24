@@ -87,7 +87,8 @@ router.get('/users/:id', async (req, res) => {
               address_line1, address_line2, city, state, postal_code, country,
               is_admin, role_level, role_name, email_verified, email_verified_at,
               stripe_customer_id, theme_preference,
-              created_at, last_login_at, updated_at
+              totp_enabled, totp_verified_at, force_password_change, require_2fa,
+              password_changed_at, created_at, last_login_at, updated_at
        FROM users WHERE id = $1`,
       [userId]
     );
@@ -367,6 +368,262 @@ router.get('/users/:id/contacts', async (req, res) => {
   } catch (error) {
     console.error('Error fetching user contacts:', error);
     res.status(500).json({ error: 'Failed to fetch contacts' });
+  }
+});
+
+// Set temporary password for user
+// Requires level 3+ (Admin)
+router.post('/users/:id/set-temp-password', async (req, res) => {
+  if (req.user.role_level < ROLE_LEVELS.ADMIN && !req.user.is_admin) {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+
+  const pool = req.app.locals.pool;
+  const userId = parseInt(req.params.id);
+  const { password, sendEmail = false, reason } = req.body;
+
+  try {
+    const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const targetUser = userResult.rows[0];
+
+    // Cannot set password on users with equal or higher role level
+    if (targetUser.role_level >= req.user.role_level && !req.user.is_admin) {
+      return res.status(403).json({ error: 'Cannot modify users with equal or higher role level' });
+    }
+
+    // Generate random password if not provided
+    const crypto = require('crypto');
+    const tempPassword = password || crypto.randomBytes(8).toString('base64').replace(/[+/=]/g, '').substring(0, 12);
+
+    // Validate password length
+    if (tempPassword.length < 8) {
+      return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    }
+
+    // Hash the password
+    const bcrypt = require('bcrypt');
+    const hashedPassword = await bcrypt.hash(tempPassword, 10);
+
+    // Update password and force change on next login
+    await pool.query(
+      `UPDATE users SET
+        password = $1,
+        force_password_change = true,
+        password_changed_at = CURRENT_TIMESTAMP,
+        updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2`,
+      [hashedPassword, userId]
+    );
+
+    // Add staff note
+    await pool.query(
+      `INSERT INTO staff_notes (entity_type, entity_id, staff_user_id, note, is_pinned)
+       VALUES ('user', $1, $2, $3, true)`,
+      [userId, req.user.id, `Temporary password set by admin${reason ? ': ' + reason : ''}. Password change required on next login.`]
+    );
+
+    // Optionally send email with temp password
+    if (sendEmail) {
+      try {
+        const emailService = require('../../services/email');
+        await emailService.sendTempPassword(targetUser.email, {
+          username: targetUser.username,
+          tempPassword,
+          loginUrl: process.env.FRONTEND_URL || 'https://worxtech.biz'
+        });
+      } catch (emailErr) {
+        console.error('Failed to send temp password email:', emailErr);
+        // Don't fail the request if email fails
+      }
+    }
+
+    await logAudit(pool, req.user.id, 'set_temp_password', 'user', userId,
+      null, { force_password_change: true, email_sent: sendEmail }, req);
+
+    res.json({
+      success: true,
+      tempPassword: sendEmail ? undefined : tempPassword, // Only return if not emailed
+      message: sendEmail
+        ? 'Temporary password set and emailed to user'
+        : 'Temporary password set. User must change it on next login.'
+    });
+  } catch (error) {
+    console.error('Error setting temp password:', error);
+    res.status(500).json({ error: 'Failed to set temporary password' });
+  }
+});
+
+// Force password change for user
+// Requires level 3+ (Admin)
+router.post('/users/:id/force-password-change', async (req, res) => {
+  if (req.user.role_level < ROLE_LEVELS.ADMIN && !req.user.is_admin) {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+
+  const pool = req.app.locals.pool;
+  const userId = parseInt(req.params.id);
+  const { enabled = true, reason } = req.body;
+
+  try {
+    const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const targetUser = userResult.rows[0];
+
+    // Cannot force password change on users with equal or higher role level
+    if (targetUser.role_level >= req.user.role_level && !req.user.is_admin) {
+      return res.status(403).json({ error: 'Cannot modify users with equal or higher role level' });
+    }
+
+    await pool.query(
+      'UPDATE users SET force_password_change = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      [enabled, userId]
+    );
+
+    // Add staff note
+    if (reason) {
+      await pool.query(
+        `INSERT INTO staff_notes (entity_type, entity_id, staff_user_id, note, is_pinned)
+         VALUES ('user', $1, $2, $3, false)`,
+        [userId, req.user.id, `Password change ${enabled ? 'required' : 'cleared'}: ${reason}`]
+      );
+    }
+
+    await logAudit(pool, req.user.id, enabled ? 'force_password_change' : 'clear_password_change', 'user', userId,
+      { force_password_change: targetUser.force_password_change },
+      { force_password_change: enabled }, req);
+
+    res.json({
+      success: true,
+      message: enabled ? 'User must change password on next login' : 'Password change requirement cleared'
+    });
+  } catch (error) {
+    console.error('Error setting force password change:', error);
+    res.status(500).json({ error: 'Failed to update user' });
+  }
+});
+
+// Require 2FA setup for user
+// Requires level 3+ (Admin)
+router.post('/users/:id/require-2fa', async (req, res) => {
+  if (req.user.role_level < ROLE_LEVELS.ADMIN && !req.user.is_admin) {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+
+  const pool = req.app.locals.pool;
+  const userId = parseInt(req.params.id);
+  const { enabled = true, reason } = req.body;
+
+  try {
+    const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const targetUser = userResult.rows[0];
+
+    // Cannot require 2FA on users with equal or higher role level
+    if (targetUser.role_level >= req.user.role_level && !req.user.is_admin) {
+      return res.status(403).json({ error: 'Cannot modify users with equal or higher role level' });
+    }
+
+    // If user already has 2FA enabled, no need to require it
+    if (enabled && targetUser.totp_enabled) {
+      return res.json({ success: true, message: 'User already has 2FA enabled' });
+    }
+
+    await pool.query(
+      'UPDATE users SET require_2fa = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      [enabled, userId]
+    );
+
+    // Add staff note
+    if (reason) {
+      await pool.query(
+        `INSERT INTO staff_notes (entity_type, entity_id, staff_user_id, note, is_pinned)
+         VALUES ('user', $1, $2, $3, false)`,
+        [userId, req.user.id, `2FA ${enabled ? 'required' : 'requirement cleared'}: ${reason}`]
+      );
+    }
+
+    await logAudit(pool, req.user.id, enabled ? 'require_2fa' : 'clear_2fa_requirement', 'user', userId,
+      { require_2fa: targetUser.require_2fa },
+      { require_2fa: enabled }, req);
+
+    res.json({
+      success: true,
+      message: enabled ? 'User must enable 2FA on next login' : '2FA requirement cleared'
+    });
+  } catch (error) {
+    console.error('Error setting require 2FA:', error);
+    res.status(500).json({ error: 'Failed to update user' });
+  }
+});
+
+// Reset/disable 2FA for user (help locked out users)
+// Requires level 3+ (Admin)
+router.post('/users/:id/reset-2fa', async (req, res) => {
+  if (req.user.role_level < ROLE_LEVELS.ADMIN && !req.user.is_admin) {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+
+  const pool = req.app.locals.pool;
+  const userId = parseInt(req.params.id);
+  const { reason } = req.body;
+
+  try {
+    const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const targetUser = userResult.rows[0];
+
+    // Cannot reset 2FA on users with equal or higher role level
+    if (targetUser.role_level >= req.user.role_level && !req.user.is_admin) {
+      return res.status(403).json({ error: 'Cannot modify users with equal or higher role level' });
+    }
+
+    if (!targetUser.totp_enabled) {
+      return res.json({ success: true, message: 'User does not have 2FA enabled' });
+    }
+
+    // Disable 2FA completely
+    await pool.query(
+      `UPDATE users SET
+        totp_enabled = false,
+        totp_secret = NULL,
+        totp_verified_at = NULL,
+        backup_codes = NULL,
+        updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1`,
+      [userId]
+    );
+
+    // Add staff note
+    await pool.query(
+      `INSERT INTO staff_notes (entity_type, entity_id, staff_user_id, note, is_pinned)
+       VALUES ('user', $1, $2, $3, true)`,
+      [userId, req.user.id, `2FA disabled by admin${reason ? ': ' + reason : ''}`]
+    );
+
+    await logAudit(pool, req.user.id, 'admin_reset_2fa', 'user', userId,
+      { totp_enabled: true },
+      { totp_enabled: false, reason }, req);
+
+    res.json({
+      success: true,
+      message: '2FA has been disabled for this user. They can set it up again from their settings.'
+    });
+  } catch (error) {
+    console.error('Error resetting 2FA:', error);
+    res.status(500).json({ error: 'Failed to reset 2FA' });
   }
 });
 
