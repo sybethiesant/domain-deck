@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { authMiddleware } = require('../middleware/auth');
+const { authMiddleware, ROLE_LEVELS } = require('../middleware/auth');
 const enom = require('../services/enom');
 const stripeService = require('../services/stripe');
 const emailService = require('../services/email');
@@ -1106,7 +1106,7 @@ router.post('/process-order/:orderId', authMiddleware, async (req, res) => {
     [req.user.id]
   );
 
-  if (!userResult.rows[0]?.is_admin && userResult.rows[0]?.role_level < 3) {
+  if (!userResult.rows[0]?.is_admin && userResult.rows[0]?.role_level < ROLE_LEVELS.ADMIN) {
     return res.status(403).json({ error: 'Admin access required' });
   }
 

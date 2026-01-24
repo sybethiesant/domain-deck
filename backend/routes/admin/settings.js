@@ -57,6 +57,7 @@ const DEFAULT_SETTINGS = {
   logo_url: '',
   logo_width: '180',
   logo_height: '50',
+  logo_max_file_size_mb: '5',
 
   // Appearance settings
   default_theme: 'dark',
@@ -74,6 +75,19 @@ const DEFAULT_SETTINGS = {
 
   // Security settings
   lockout_duration_minutes: '15',
+  lockout_attempts: '5',
+  min_password_length: '12',
+  password_require_uppercase: 'true',
+  password_require_lowercase: 'true',
+  password_require_number: 'true',
+  password_require_special: 'false',
+
+  // Rate limiting settings
+  rate_limit_window_seconds: '60',
+  rate_limit_auth: '20',
+  rate_limit_domain_check: '50',
+  rate_limit_checkout: '5',
+  rate_limit_general: '100',
 
   // API Mode settings
   enom_test_mode: 'true',
@@ -83,11 +97,13 @@ const DEFAULT_SETTINGS = {
   default_nameservers: '["dns1.name-services.com","dns2.name-services.com","dns3.name-services.com","dns4.name-services.com"]',
   suspended_nameservers: 'ns1.suspended.worxtech.biz,ns2.suspended.worxtech.biz',
   auto_sync_enabled: 'true',
-  sync_interval_hours: '24',
+  sync_interval_hours: '6',
+  auto_renew_threshold_days: '30',
 
   // Order settings
   order_expiration_hours: '24',
   require_contact_for_checkout: 'true',
+  cc_fee_percent: '5',
 
   // Domain transfer settings
   push_timeout_days: '7',
@@ -99,6 +115,30 @@ const DEFAULT_SETTINGS = {
   notify_on_failed_order: 'true',
   notify_on_expiring_domains: 'true',
   expiring_domain_days: '30',
+  expiration_notification_days: '[30,14,7,3,1]',
+
+  // Background job schedules (cron expressions)
+  system_timezone: 'America/New_York',
+  job_domain_sync_schedule: '0 0,6,12,18 * * *',
+  job_expiration_notify_schedule: '0 0 * * *',
+  job_clean_cart_schedule: '0 * * * *',
+  job_sync_transfers_schedule: '0 */2 * * *',
+  job_auto_renew_schedule: '0 3 * * *',
+  job_expire_push_schedule: '30 * * * *',
+
+  // Cart settings
+  cart_item_expiry_hours: '24',
+  cart_max_items: '20',
+
+  // Pricing defaults
+  default_privacy_price: '9.99',
+  default_price_markup: '1.30',
+
+  // Tax settings
+  tax_enabled: 'false',
+  tax_rate: '0',
+  tax_label: 'Tax',
+  tax_inclusive: 'false',
 
   // Maintenance
   maintenance_mode: 'false',

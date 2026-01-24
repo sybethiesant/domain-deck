@@ -79,17 +79,39 @@ router.get('/domains', async (req, res) => {
 
     const result = await pool.query(query, params);
 
-    // Get total count
-    let countQuery = 'SELECT COUNT(*) FROM domains d WHERE 1=1';
+    // Get total count (must match main query filters exactly)
+    let countQuery = `
+      SELECT COUNT(*) FROM domains d
+      LEFT JOIN users u ON d.user_id = u.id
+      WHERE 1=1
+    `;
     const countParams = [];
+
     if (status) {
       countParams.push(status);
       countQuery += ` AND d.status = $${countParams.length}`;
     }
+
+    if (expiring === 'true') {
+      countQuery += ` AND d.expiration_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'`;
+    } else if (expiring === '7') {
+      countQuery += ` AND d.expiration_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days'`;
+    } else if (expiring === '90') {
+      countQuery += ` AND d.expiration_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '90 days'`;
+    } else if (expiring === 'expired') {
+      countQuery += ` AND d.expiration_date < CURRENT_DATE`;
+    }
+
     if (search) {
       countParams.push(`%${search}%`);
-      countQuery += ` AND d.domain_name ILIKE $${countParams.length}`;
+      countQuery += ` AND (d.domain_name ILIKE $${countParams.length} OR u.email ILIKE $${countParams.length})`;
     }
+
+    if (tld) {
+      countParams.push(tld);
+      countQuery += ` AND d.tld = $${countParams.length}`;
+    }
+
     const countResult = await pool.query(countQuery, countParams);
 
     res.json({

@@ -73,6 +73,7 @@ function Navbar() {
 
   const navLinks = [
     { path: '/', label: 'Domains', public: true },
+    { path: '/transfer', label: 'Transfer', public: true },
     { path: '/dashboard', label: 'My Domains', public: false },
     { path: '/orders', label: 'Orders', public: false },
     { path: '/contacts', label: 'Contacts', public: false },

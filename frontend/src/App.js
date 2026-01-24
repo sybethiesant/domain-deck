@@ -19,6 +19,7 @@ import VerifyEmailPage from './pages/VerifyEmail';
 import LoginPage from './pages/Login';
 import ForgotPasswordPage from './pages/ForgotPassword';
 import ResetPasswordPage from './pages/ResetPassword';
+import TransferPage from './pages/Transfer';
 import { API_URL } from './config/api';
 
 // Error Boundary for catching React rendering errors
@@ -553,6 +554,7 @@ function AppContent() {
                     </ProtectedRoute>
                   }
                 />
+                <Route path="/transfer" element={<TransferPage />} />
                 <Route path="/terms" element={<TermsPage />} />
                 <Route path="/privacy" element={<PrivacyPage />} />
                 <Route path="/refund" element={<RefundPage />} />

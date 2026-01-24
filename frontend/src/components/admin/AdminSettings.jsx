@@ -64,10 +64,13 @@ function AdminSettings() {
   const tabs = [
     { id: 'general', label: 'General', icon: Globe },
     { id: 'appearance', label: 'Appearance', icon: Palette },
+    { id: 'security', label: 'Security', icon: Shield },
     { id: 'domains', label: 'Domains', icon: Server },
+    { id: 'orders', label: 'Orders', icon: ShoppingCart },
     { id: 'api', label: 'API & Services', icon: Zap },
     { id: 'email', label: 'Email', icon: Mail },
     { id: 'legal', label: 'Legal Pages', icon: FileText },
+    { id: 'system', label: 'System', icon: Settings },
     { id: 'maintenance', label: 'Maintenance', icon: Wrench },
     { id: 'migration', label: 'Migration', icon: Users },
   ];
@@ -1260,6 +1263,341 @@ function AdminSettings() {
             </div>
           )}
 
+          {/* Security Tab */}
+          {activeTab === 'security' && (
+            <div className="space-y-6">
+              {/* Password Requirements */}
+              <div>
+                <h3 className="font-semibold text-slate-900 dark:text-slate-100 mb-4">Password Requirements</h3>
+                <div className="grid md:grid-cols-2 gap-6">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                      Minimum Password Length
+                    </label>
+                    <input
+                      type="number"
+                      min="8"
+                      max="32"
+                      value={settings.min_password_length || '12'}
+                      onChange={(e) => handleChange('min_password_length', e.target.value)}
+                      className="input w-full"
+                    />
+                  </div>
+                  <div className="space-y-3">
+                    <label className="flex items-center gap-3">
+                      <input
+                        type="checkbox"
+                        checked={settings.password_require_uppercase === 'true'}
+                        onChange={(e) => handleChange('password_require_uppercase', e.target.checked ? 'true' : 'false')}
+                        className="w-4 h-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500"
+                      />
+                      <span className="text-slate-700 dark:text-slate-300">Require uppercase letter</span>
+                    </label>
+                    <label className="flex items-center gap-3">
+                      <input
+                        type="checkbox"
+                        checked={settings.password_require_lowercase === 'true'}
+                        onChange={(e) => handleChange('password_require_lowercase', e.target.checked ? 'true' : 'false')}
+                        className="w-4 h-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500"
+                      />
+                      <span className="text-slate-700 dark:text-slate-300">Require lowercase letter</span>
+                    </label>
+                    <label className="flex items-center gap-3">
+                      <input
+                        type="checkbox"
+                        checked={settings.password_require_number === 'true'}
+                        onChange={(e) => handleChange('password_require_number', e.target.checked ? 'true' : 'false')}
+                        className="w-4 h-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500"
+                      />
+                      <span className="text-slate-700 dark:text-slate-300">Require number</span>
+                    </label>
+                    <label className="flex items-center gap-3">
+                      <input
+                        type="checkbox"
+                        checked={settings.password_require_special === 'true'}
+                        onChange={(e) => handleChange('password_require_special', e.target.checked ? 'true' : 'false')}
+                        className="w-4 h-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500"
+                      />
+                      <span className="text-slate-700 dark:text-slate-300">Require special character</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              {/* Account Lockout */}
+              <div className="border-t border-slate-200 dark:border-slate-700 pt-6">
+                <h3 className="font-semibold text-slate-900 dark:text-slate-100 mb-4">Account Lockout</h3>
+                <div className="grid md:grid-cols-2 gap-6">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                      Failed Attempts Before Lockout
+                    </label>
+                    <input
+                      type="number"
+                      min="3"
+                      max="10"
+                      value={settings.lockout_attempts || '5'}
+                      onChange={(e) => handleChange('lockout_attempts', e.target.value)}
+                      className="input w-full"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                      Lockout Duration (minutes)
+                    </label>
+                    <input
+                      type="number"
+                      min="5"
+                      max="60"
+                      value={settings.lockout_duration_minutes || '15'}
+                      onChange={(e) => handleChange('lockout_duration_minutes', e.target.value)}
+                      className="input w-full"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Rate Limiting */}
+              <div className="border-t border-slate-200 dark:border-slate-700 pt-6">
+                <h3 className="font-semibold text-slate-900 dark:text-slate-100 mb-4">Rate Limiting</h3>
+                <p className="text-sm text-slate-500 mb-4">Maximum requests per minute by type</p>
+                <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                      Auth Endpoints
+                    </label>
+                    <input
+                      type="number"
+                      min="5"
+                      max="100"
+                      value={settings.rate_limit_auth || '20'}
+                      onChange={(e) => handleChange('rate_limit_auth', e.target.value)}
+                      className="input w-full"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                      Domain Checks
+                    </label>
+                    <input
+                      type="number"
+                      min="10"
+                      max="200"
+                      value={settings.rate_limit_domain_check || '50'}
+                      onChange={(e) => handleChange('rate_limit_domain_check', e.target.value)}
+                      className="input w-full"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                      Checkout
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="20"
+                      value={settings.rate_limit_checkout || '5'}
+                      onChange={(e) => handleChange('rate_limit_checkout', e.target.value)}
+                      className="input w-full"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                      General API
+                    </label>
+                    <input
+                      type="number"
+                      min="50"
+                      max="500"
+                      value={settings.rate_limit_general || '100'}
+                      onChange={(e) => handleChange('rate_limit_general', e.target.value)}
+                      className="input w-full"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Orders Tab */}
+          {activeTab === 'orders' && (
+            <div className="space-y-6">
+              <div>
+                <h3 className="font-semibold text-slate-900 dark:text-slate-100 mb-4">Order Settings</h3>
+                <div className="grid md:grid-cols-2 gap-6">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                      Order Expiration (hours)
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="168"
+                      value={settings.order_expiration_hours || '24'}
+                      onChange={(e) => handleChange('order_expiration_hours', e.target.value)}
+                      className="input w-full"
+                    />
+                    <p className="text-xs text-slate-500 mt-1">Time before unpaid orders expire</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                      Credit Card Fee (%)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      max="10"
+                      step="0.1"
+                      value={settings.cc_fee_percent || '5'}
+                      onChange={(e) => handleChange('cc_fee_percent', e.target.value)}
+                      className="input w-full"
+                    />
+                    <p className="text-xs text-slate-500 mt-1">eNom CC refill fee percentage</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="border-t border-slate-200 dark:border-slate-700 pt-6">
+                <h3 className="font-semibold text-slate-900 dark:text-slate-100 mb-4">Checkout Requirements</h3>
+                <label className="flex items-center gap-3">
+                  <input
+                    type="checkbox"
+                    checked={settings.require_contact_for_checkout === 'true'}
+                    onChange={(e) => handleChange('require_contact_for_checkout', e.target.checked ? 'true' : 'false')}
+                    className="w-4 h-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500"
+                  />
+                  <span className="text-slate-700 dark:text-slate-300">Require contact information for checkout</span>
+                </label>
+              </div>
+
+              <div className="border-t border-slate-200 dark:border-slate-700 pt-6">
+                <h3 className="font-semibold text-slate-900 dark:text-slate-100 mb-4">Cart Settings</h3>
+                <div className="grid md:grid-cols-2 gap-6">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                      Cart Item Expiry (hours)
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="168"
+                      value={settings.cart_item_expiry_hours || '24'}
+                      onChange={(e) => handleChange('cart_item_expiry_hours', e.target.value)}
+                      className="input w-full"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                      Maximum Cart Items
+                    </label>
+                    <input
+                      type="number"
+                      min="5"
+                      max="50"
+                      value={settings.cart_max_items || '20'}
+                      onChange={(e) => handleChange('cart_max_items', e.target.value)}
+                      className="input w-full"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="border-t border-slate-200 dark:border-slate-700 pt-6">
+                <h3 className="font-semibold text-slate-900 dark:text-slate-100 mb-4">Pricing Defaults</h3>
+                <div className="grid md:grid-cols-2 gap-6">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                      Default Privacy Price ($)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={settings.default_privacy_price || '9.99'}
+                      onChange={(e) => handleChange('default_privacy_price', e.target.value)}
+                      className="input w-full"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                      Default Price Markup (multiplier)
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="3"
+                      step="0.01"
+                      value={settings.default_price_markup || '1.30'}
+                      onChange={(e) => handleChange('default_price_markup', e.target.value)}
+                      className="input w-full"
+                    />
+                    <p className="text-xs text-slate-500 mt-1">e.g., 1.30 = 30% markup on cost</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="border-t border-slate-200 dark:border-slate-700 pt-6">
+                <h3 className="font-semibold text-slate-900 dark:text-slate-100 mb-4">Tax Settings</h3>
+                <div className="space-y-4">
+                  <label className="flex items-center gap-3">
+                    <input
+                      type="checkbox"
+                      checked={settings.tax_enabled === 'true'}
+                      onChange={(e) => handleChange('tax_enabled', e.target.checked ? 'true' : 'false')}
+                      className="w-4 h-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500"
+                    />
+                    <span className="text-slate-700 dark:text-slate-300">Enable tax calculation</span>
+                  </label>
+                  <div className="grid md:grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                        Tax Rate (%)
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        max="30"
+                        step="0.1"
+                        value={settings.tax_rate || '0'}
+                        onChange={(e) => handleChange('tax_rate', e.target.value)}
+                        className="input w-full"
+                        disabled={settings.tax_enabled !== 'true'}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                        Tax Label
+                      </label>
+                      <input
+                        type="text"
+                        value={settings.tax_label || 'Tax'}
+                        onChange={(e) => handleChange('tax_label', e.target.value)}
+                        className="input w-full"
+                        placeholder="Tax"
+                        disabled={settings.tax_enabled !== 'true'}
+                      />
+                    </div>
+                    <div className="flex items-end">
+                      <label className="flex items-center gap-3 pb-2">
+                        <input
+                          type="checkbox"
+                          checked={settings.tax_inclusive === 'true'}
+                          onChange={(e) => handleChange('tax_inclusive', e.target.checked ? 'true' : 'false')}
+                          className="w-4 h-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500"
+                          disabled={settings.tax_enabled !== 'true'}
+                        />
+                        <span className="text-slate-700 dark:text-slate-300">Tax inclusive pricing</span>
+                      </label>
+                    </div>
+                  </div>
+                  <p className="text-xs text-slate-500">
+                    When enabled, tax will be calculated on all orders. Tax inclusive means prices already include tax.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* API & Services Tab */}
           {activeTab === 'api' && (
             <div className="space-y-6">
@@ -1784,6 +2122,163 @@ function AdminSettings() {
                   <div className="text-sm text-blue-800 dark:text-blue-200">
                     <p className="font-medium">HTML Content Supported</p>
                     <p>You can use HTML tags to format your legal pages. The content will be sanitized before display for security.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* System Tab */}
+          {activeTab === 'system' && (
+            <div className="space-y-6">
+              {/* Timezone */}
+              <div>
+                <h3 className="font-semibold text-slate-900 dark:text-slate-100 mb-4">System Settings</h3>
+                <div className="grid md:grid-cols-2 gap-6">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                      System Timezone
+                    </label>
+                    <select
+                      value={settings.system_timezone || 'America/New_York'}
+                      onChange={(e) => handleChange('system_timezone', e.target.value)}
+                      className="input w-full"
+                    >
+                      <option value="America/New_York">Eastern (America/New_York)</option>
+                      <option value="America/Chicago">Central (America/Chicago)</option>
+                      <option value="America/Denver">Mountain (America/Denver)</option>
+                      <option value="America/Los_Angeles">Pacific (America/Los_Angeles)</option>
+                      <option value="UTC">UTC</option>
+                      <option value="Europe/London">London (Europe/London)</option>
+                    </select>
+                    <p className="text-xs text-slate-500 mt-1">Timezone for scheduled jobs and reports</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                      Logo Max File Size (MB)
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="20"
+                      value={settings.logo_max_file_size_mb || '5'}
+                      onChange={(e) => handleChange('logo_max_file_size_mb', e.target.value)}
+                      className="input w-full"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Auto-Renew Settings */}
+              <div className="border-t border-slate-200 dark:border-slate-700 pt-6">
+                <h3 className="font-semibold text-slate-900 dark:text-slate-100 mb-4">Auto-Renewal Settings</h3>
+                <div className="grid md:grid-cols-2 gap-6">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                      Auto-Renew Threshold (days)
+                    </label>
+                    <input
+                      type="number"
+                      min="7"
+                      max="90"
+                      value={settings.auto_renew_threshold_days || '30'}
+                      onChange={(e) => handleChange('auto_renew_threshold_days', e.target.value)}
+                      className="input w-full"
+                    />
+                    <p className="text-xs text-slate-500 mt-1">Domains expiring within this many days will be auto-renewed</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                      Expiration Notification Days
+                    </label>
+                    <input
+                      type="text"
+                      value={settings.expiration_notification_days || '[30,14,7,3,1]'}
+                      onChange={(e) => handleChange('expiration_notification_days', e.target.value)}
+                      className="input w-full font-mono text-sm"
+                      placeholder="[30,14,7,3,1]"
+                    />
+                    <p className="text-xs text-slate-500 mt-1">JSON array of days before expiration to send notifications</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Background Job Schedules */}
+              <div className="border-t border-slate-200 dark:border-slate-700 pt-6">
+                <h3 className="font-semibold text-slate-900 dark:text-slate-100 mb-4">Background Job Schedules</h3>
+                <p className="text-sm text-slate-500 mb-4">Cron expressions for scheduled tasks. Changes require server restart.</p>
+                <div className="grid md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                      Domain Sync
+                    </label>
+                    <input
+                      type="text"
+                      value={settings.job_domain_sync_schedule || '0 0,6,12,18 * * *'}
+                      onChange={(e) => handleChange('job_domain_sync_schedule', e.target.value)}
+                      className="input w-full font-mono text-sm"
+                    />
+                    <p className="text-xs text-slate-500 mt-1">Default: Every 6 hours</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                      Expiration Notifications
+                    </label>
+                    <input
+                      type="text"
+                      value={settings.job_expiration_notify_schedule || '0 0 * * *'}
+                      onChange={(e) => handleChange('job_expiration_notify_schedule', e.target.value)}
+                      className="input w-full font-mono text-sm"
+                    />
+                    <p className="text-xs text-slate-500 mt-1">Default: Daily at midnight</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                      Cart Cleanup
+                    </label>
+                    <input
+                      type="text"
+                      value={settings.job_clean_cart_schedule || '0 * * * *'}
+                      onChange={(e) => handleChange('job_clean_cart_schedule', e.target.value)}
+                      className="input w-full font-mono text-sm"
+                    />
+                    <p className="text-xs text-slate-500 mt-1">Default: Every hour</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                      Transfer Sync
+                    </label>
+                    <input
+                      type="text"
+                      value={settings.job_sync_transfers_schedule || '0 */2 * * *'}
+                      onChange={(e) => handleChange('job_sync_transfers_schedule', e.target.value)}
+                      className="input w-full font-mono text-sm"
+                    />
+                    <p className="text-xs text-slate-500 mt-1">Default: Every 2 hours</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                      Auto-Renew
+                    </label>
+                    <input
+                      type="text"
+                      value={settings.job_auto_renew_schedule || '0 3 * * *'}
+                      onChange={(e) => handleChange('job_auto_renew_schedule', e.target.value)}
+                      className="input w-full font-mono text-sm"
+                    />
+                    <p className="text-xs text-slate-500 mt-1">Default: Daily at 3 AM</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                      Push Request Expiry
+                    </label>
+                    <input
+                      type="text"
+                      value={settings.job_expire_push_schedule || '30 * * * *'}
+                      onChange={(e) => handleChange('job_expire_push_schedule', e.target.value)}
+                      className="input w-full font-mono text-sm"
+                    />
+                    <p className="text-xs text-slate-500 mt-1">Default: Every hour at :30</p>
                   </div>
                 </div>
               </div>

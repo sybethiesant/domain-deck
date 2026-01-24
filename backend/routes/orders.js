@@ -119,8 +119,34 @@ router.post('/checkout', authMiddleware, async (req, res) => {
 
     const items = cartResult.rows;
     const subtotal = items.reduce((sum, item) => sum + parseFloat(item.price), 0);
-    const tax = 0; // TODO: Calculate tax if applicable
-    const total = subtotal + tax;
+
+    // Calculate tax from settings
+    let tax = 0;
+    try {
+      const taxSettingsResult = await pool.query(
+        "SELECT key, value FROM app_settings WHERE key IN ('tax_enabled', 'tax_rate', 'tax_inclusive')"
+      );
+      const taxSettings = {};
+      for (const row of taxSettingsResult.rows) {
+        taxSettings[row.key] = row.value;
+      }
+
+      if (taxSettings.tax_enabled === 'true') {
+        const taxRate = parseFloat(taxSettings.tax_rate || 0) / 100;
+        if (taxSettings.tax_inclusive === 'true') {
+          // Tax is included in price, calculate it out for display
+          tax = subtotal - (subtotal / (1 + taxRate));
+        } else {
+          // Tax is added on top
+          tax = subtotal * taxRate;
+        }
+        tax = Math.round(tax * 100) / 100; // Round to 2 decimal places
+      }
+    } catch (taxError) {
+      console.error('Error calculating tax:', taxError.message);
+    }
+
+    const total = subtotal + (tax > 0 ? tax : 0);
 
     // Create order with registrant_contact, auto_renew preference, and extended attributes for ccTLDs
     const orderResult = await pool.query(
