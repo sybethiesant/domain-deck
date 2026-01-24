@@ -180,11 +180,13 @@ function AppContent() {
   const [showCart, setShowCart] = useState(false);
   const [pendingCartItem, setPendingCartItem] = useState(null); // Item waiting for auth
 
-  // Check for maintenance mode on API errors
+  // Global fetch interceptor for maintenance mode and session expiration
   useEffect(() => {
     const originalFetch = window.fetch;
     window.fetch = async (...args) => {
       const response = await originalFetch(...args);
+
+      // Check for maintenance mode (503)
       if (response.status === 503) {
         const data = await response.clone().json().catch(() => ({}));
         if (data.maintenance) {
@@ -192,6 +194,32 @@ function AppContent() {
           setMaintenanceMessage(data.message || 'We are currently performing maintenance.');
         }
       }
+
+      // Check for session expiration (401 Unauthorized)
+      // Only handle for API requests when we have a token stored
+      if (response.status === 401) {
+        const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
+        const isApiRequest = url.includes('/api/');
+        const hasStoredToken = localStorage.getItem('token');
+
+        // If we have a stored token and got 401 on an API request, session expired
+        if (isApiRequest && hasStoredToken) {
+          // Clear auth state immediately
+          localStorage.removeItem('token');
+          localStorage.removeItem('originalAdminToken');
+          localStorage.removeItem('originalAdminUser');
+
+          // Show expiration message
+          toast.error('Your session has expired. Please log in again.', {
+            duration: 5000,
+            id: 'session-expired' // Prevent duplicate toasts
+          });
+
+          // Force reload to reset all state cleanly
+          window.location.href = '/';
+        }
+      }
+
       return response;
     };
     return () => { window.fetch = originalFetch; };

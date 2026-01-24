@@ -411,7 +411,7 @@ router.post('/users/:id/set-temp-password', async (req, res) => {
     // Update password and force change on next login
     await pool.query(
       `UPDATE users SET
-        password = $1,
+        password_hash = $1,
         force_password_change = true,
         password_changed_at = CURRENT_TIMESTAMP,
         updated_at = CURRENT_TIMESTAMP
