@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Loader2, Eye, EyeOff, Globe, Mail, CheckCircle } from 'lucide-react';
+import { X, Loader2, Eye, EyeOff, Globe, Mail, CheckCircle, Shield, ArrowLeft } from 'lucide-react';
 import { useAuth } from '../../App';
 import { API_URL } from '../../config/api';
 
@@ -32,6 +32,12 @@ function AuthModal({ mode, onClose, onSwitchMode }) {
   const [verificationSent, setVerificationSent] = useState(false);
   const [verificationEmail, setVerificationEmail] = useState('');
 
+  // 2FA state
+  const [requires2FA, setRequires2FA] = useState(false);
+  const [twoFactorToken, setTwoFactorToken] = useState('');
+  const [twoFactorCode, setTwoFactorCode] = useState('');
+  const [useBackupCode, setUseBackupCode] = useState(false);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -61,6 +67,14 @@ function AuthModal({ mode, onClose, onSwitchMode }) {
           return;
         }
         setError(data.error || 'Something went wrong');
+        setLoading(false);
+        return;
+      }
+
+      // Handle 2FA required
+      if (data.requires2FA) {
+        setTwoFactorToken(data.twoFactorToken);
+        setRequires2FA(true);
         setLoading(false);
         return;
       }
@@ -102,6 +116,51 @@ function AuthModal({ mode, onClose, onSwitchMode }) {
     setLoading(false);
   };
 
+  const handle2FASubmit = async (e) => {
+    e.preventDefault();
+    if (!twoFactorCode) {
+      setError('Please enter your verification code');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const res = await fetch(`${API_URL}/auth/2fa/authenticate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          twoFactorToken,
+          code: twoFactorCode,
+          isBackupCode: useBackupCode
+        })
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.error || 'Invalid verification code');
+        setLoading(false);
+        return;
+      }
+
+      login(data.user, data.token);
+      setLoading(false);
+    } catch (err) {
+      setError('Connection error. Please try again.');
+      setLoading(false);
+    }
+  };
+
+  const back2FAToLogin = () => {
+    setRequires2FA(false);
+    setTwoFactorToken('');
+    setTwoFactorCode('');
+    setUseBackupCode(false);
+    setError(null);
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       {/* Backdrop */}
@@ -120,8 +179,82 @@ function AuthModal({ mode, onClose, onSwitchMode }) {
           <X className="w-5 h-5" />
         </button>
 
-        {/* Verification Sent View */}
-        {verificationSent && !error ? (
+        {/* 2FA Verification View */}
+        {requires2FA ? (
+          <div className="p-6">
+            <button
+              onClick={back2FAToLogin}
+              className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 mb-4"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              Back to login
+            </button>
+
+            <div className="text-center mb-6">
+              <div className="w-16 h-16 bg-primary-100 dark:bg-primary-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
+                <Shield className="w-8 h-8 text-primary-600 dark:text-primary-400" />
+              </div>
+              <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-2">
+                Two-Factor Authentication
+              </h2>
+              <p className="text-slate-600 dark:text-slate-400">
+                {useBackupCode
+                  ? 'Enter one of your backup codes'
+                  : 'Enter the 6-digit code from your authenticator app'}
+              </p>
+            </div>
+
+            <form onSubmit={handle2FASubmit} className="space-y-4">
+              {error && (
+                <div className="bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 px-4 py-3 rounded-lg text-sm">
+                  {error}
+                </div>
+              )}
+
+              <div>
+                <input
+                  type="text"
+                  inputMode={useBackupCode ? 'text' : 'numeric'}
+                  pattern={useBackupCode ? undefined : '[0-9]*'}
+                  maxLength={useBackupCode ? 12 : 6}
+                  value={twoFactorCode}
+                  onChange={(e) => setTwoFactorCode(useBackupCode ? e.target.value : e.target.value.replace(/\D/g, ''))}
+                  placeholder={useBackupCode ? 'XXXX-XXXX' : '000000'}
+                  className="w-full px-4 py-3 text-center text-2xl font-mono tracking-widest border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-primary-500"
+                  autoFocus
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading || (!useBackupCode && twoFactorCode.length !== 6) || (useBackupCode && !twoFactorCode)}
+                className="btn-primary w-full py-3 text-base"
+              >
+                {loading ? (
+                  <Loader2 className="w-5 h-5 animate-spin mx-auto" />
+                ) : (
+                  'Verify'
+                )}
+              </button>
+
+              <div className="text-center">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUseBackupCode(!useBackupCode);
+                    setTwoFactorCode('');
+                    setError(null);
+                  }}
+                  className="text-sm text-primary-600 dark:text-primary-400 hover:underline"
+                >
+                  {useBackupCode
+                    ? 'Use authenticator app instead'
+                    : "Can't access your authenticator? Use a backup code"}
+                </button>
+              </div>
+            </form>
+          </div>
+        ) : verificationSent && !error ? (
           <div className="p-6 text-center">
             <div className="w-16 h-16 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
               <CheckCircle className="w-8 h-8 text-green-600 dark:text-green-400" />

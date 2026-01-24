@@ -7,6 +7,7 @@ import AdminDomains from './AdminDomains';
 import AdminSettings from './AdminSettings';
 import AdminUserDetail from './AdminUserDetail';
 import AdminAuditLogs from './AdminAuditLogs';
+import AdminRoles from './AdminRoles';
 
 // Role level constants (mirror backend)
 const ROLE_LEVELS = {
@@ -293,7 +294,7 @@ function AdminDashboard() {
           {/* Base tabs for all staff (level 1+) */}
           {['overview', 'users', 'orders', 'domains'].map((tab) => (<button key={tab} onClick={() => setActiveTab(tab)} className={'pb-4 px-1 border-b-2 font-medium text-sm capitalize transition-colors whitespace-nowrap ' + (activeTab === tab ? 'border-primary-500 text-primary-600 dark:text-primary-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300')}>{tab}</button>))}
           {/* Admin-only tabs (level 3+) */}
-          {isAdmin && ['pricing', 'balance', 'audit', 'settings'].map((tab) => (<button key={tab} onClick={() => setActiveTab(tab)} className={'pb-4 px-1 border-b-2 font-medium text-sm capitalize transition-colors whitespace-nowrap ' + (activeTab === tab ? 'border-primary-500 text-primary-600 dark:text-primary-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300')}>{tab}</button>))}
+          {isAdmin && ['pricing', 'balance', 'roles', 'audit', 'settings'].map((tab) => (<button key={tab} onClick={() => setActiveTab(tab)} className={'pb-4 px-1 border-b-2 font-medium text-sm capitalize transition-colors whitespace-nowrap ' + (activeTab === tab ? 'border-primary-500 text-primary-600 dark:text-primary-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300')}>{tab}</button>))}
         </nav>
       </div>
 
@@ -540,6 +541,7 @@ function AdminDashboard() {
       )}
 
       {activeTab === 'audit' && <AdminAuditLogs />}
+      {activeTab === 'roles' && <AdminRoles />}
 
       {activeTab === 'settings' && <AdminSettings />}
     </div>

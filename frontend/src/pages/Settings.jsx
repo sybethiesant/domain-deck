@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, Lock, Bell, Palette, Save, Loader2, CreditCard, Trash2, Star } from 'lucide-react';
+import { User, Lock, Palette, Save, Loader2, CreditCard, Trash2, Star, Shield, ShieldCheck, ShieldOff, Copy, RefreshCw } from 'lucide-react';
 import { useAuth, useTheme } from '../App';
 import { API_URL } from '../config/api';
 import toast from 'react-hot-toast';
@@ -34,6 +34,18 @@ export default function SettingsPage() {
   // Payment methods state
   const [paymentMethods, setPaymentMethods] = useState([]);
   const [loadingPaymentMethods, setLoadingPaymentMethods] = useState(false);
+
+  // 2FA state
+  const [twoFactorEnabled, setTwoFactorEnabled] = useState(false);
+  const [twoFactorLoading, setTwoFactorLoading] = useState(false);
+  const [setupMode, setSetupMode] = useState(false);
+  const [qrCode, setQrCode] = useState('');
+  const [totpSecret, setTotpSecret] = useState('');
+  const [verificationCode, setVerificationCode] = useState('');
+  const [backupCodes, setBackupCodes] = useState([]);
+  const [showBackupCodes, setShowBackupCodes] = useState(false);
+  const [disablePassword, setDisablePassword] = useState('');
+  const [showDisableModal, setShowDisableModal] = useState(false);
 
   // Fetch payment methods
   const fetchPaymentMethods = async () => {
@@ -78,6 +90,155 @@ export default function SettingsPage() {
       fetchPaymentMethods();
     }
   }, [activeTab, token]);
+
+  // Fetch 2FA status when security tab is active
+  useEffect(() => {
+    if (activeTab === 'security' && token) {
+      fetch2FAStatus();
+    }
+  }, [activeTab, token]);
+
+  // Fetch 2FA status
+  const fetch2FAStatus = async () => {
+    try {
+      const res = await fetch(`${API_URL}/auth/2fa/status`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setTwoFactorEnabled(data.enabled);
+      }
+    } catch (error) {
+      console.error('Failed to fetch 2FA status:', error);
+    }
+  };
+
+  // Start 2FA setup
+  const start2FASetup = async () => {
+    setTwoFactorLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/auth/2fa/setup`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setQrCode(data.qrCode);
+        setTotpSecret(data.secret);
+        setSetupMode(true);
+      } else {
+        const error = await res.json();
+        toast.error(error.error || 'Failed to start 2FA setup');
+      }
+    } catch (error) {
+      toast.error('Failed to start 2FA setup');
+    } finally {
+      setTwoFactorLoading(false);
+    }
+  };
+
+  // Verify and enable 2FA
+  const verify2FA = async () => {
+    if (verificationCode.length !== 6) {
+      toast.error('Please enter a 6-digit code');
+      return;
+    }
+
+    setTwoFactorLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/auth/2fa/verify`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ code: verificationCode })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setBackupCodes(data.backupCodes);
+        setShowBackupCodes(true);
+        setSetupMode(false);
+        setTwoFactorEnabled(true);
+        setVerificationCode('');
+        toast.success('Two-factor authentication enabled');
+      } else {
+        const error = await res.json();
+        toast.error(error.error || 'Invalid verification code');
+      }
+    } catch (error) {
+      toast.error('Failed to verify 2FA code');
+    } finally {
+      setTwoFactorLoading(false);
+    }
+  };
+
+  // Disable 2FA
+  const disable2FA = async () => {
+    if (!disablePassword) {
+      toast.error('Please enter your password');
+      return;
+    }
+
+    setTwoFactorLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/auth/2fa/disable`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ password: disablePassword })
+      });
+
+      if (res.ok) {
+        setTwoFactorEnabled(false);
+        setShowDisableModal(false);
+        setDisablePassword('');
+        toast.success('Two-factor authentication disabled');
+      } else {
+        const error = await res.json();
+        toast.error(error.error || 'Failed to disable 2FA');
+      }
+    } catch (error) {
+      toast.error('Failed to disable 2FA');
+    } finally {
+      setTwoFactorLoading(false);
+    }
+  };
+
+  // Regenerate backup codes
+  const regenerateBackupCodes = async () => {
+    setTwoFactorLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/auth/2fa/regenerate-backup-codes`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setBackupCodes(data.backupCodes);
+        setShowBackupCodes(true);
+        toast.success('New backup codes generated');
+      } else {
+        const error = await res.json();
+        toast.error(error.error || 'Failed to regenerate backup codes');
+      }
+    } catch (error) {
+      toast.error('Failed to regenerate backup codes');
+    } finally {
+      setTwoFactorLoading(false);
+    }
+  };
+
+  // Copy backup codes to clipboard
+  const copyBackupCodes = () => {
+    const codesText = backupCodes.join('\n');
+    navigator.clipboard.writeText(codesText);
+    toast.success('Backup codes copied to clipboard');
+  };
 
   const handleProfileSave = async (e) => {
     e.preventDefault();
@@ -398,56 +559,265 @@ export default function SettingsPage() {
 
           {/* Security Tab */}
           {activeTab === 'security' && (
-            <form onSubmit={handlePasswordChange} className="max-w-md space-y-6">
+            <div className="space-y-8">
+              {/* Two-Factor Authentication Section */}
+              <div className="pb-8 border-b border-slate-200 dark:border-slate-700">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className={`p-2 rounded-lg ${twoFactorEnabled ? 'bg-green-100 dark:bg-green-900/30' : 'bg-slate-100 dark:bg-slate-700'}`}>
+                    {twoFactorEnabled ? (
+                      <ShieldCheck className="w-5 h-5 text-green-600 dark:text-green-400" />
+                    ) : (
+                      <Shield className="w-5 h-5 text-slate-500 dark:text-slate-400" />
+                    )}
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-medium text-slate-900 dark:text-white">Two-Factor Authentication</h3>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">
+                      {twoFactorEnabled
+                        ? 'Your account is protected with 2FA'
+                        : 'Add an extra layer of security to your account'}
+                    </p>
+                  </div>
+                </div>
+
+                {/* 2FA Status & Actions */}
+                {!setupMode && !showBackupCodes && (
+                  <div className="max-w-md">
+                    {twoFactorEnabled ? (
+                      <div className="space-y-4">
+                        <div className="flex items-center gap-2 p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
+                          <ShieldCheck className="w-5 h-5 text-green-600 dark:text-green-400" />
+                          <span className="text-sm text-green-700 dark:text-green-300">Two-factor authentication is enabled</span>
+                        </div>
+                        <div className="flex gap-3">
+                          <button
+                            onClick={regenerateBackupCodes}
+                            disabled={twoFactorLoading}
+                            className="flex items-center gap-2 px-4 py-2 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700"
+                          >
+                            <RefreshCw className={`w-4 h-4 ${twoFactorLoading ? 'animate-spin' : ''}`} />
+                            New Backup Codes
+                          </button>
+                          <button
+                            onClick={() => setShowDisableModal(true)}
+                            className="flex items-center gap-2 px-4 py-2 border border-red-300 dark:border-red-800 text-red-600 dark:text-red-400 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20"
+                          >
+                            <ShieldOff className="w-4 h-4" />
+                            Disable 2FA
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        <p className="text-sm text-slate-600 dark:text-slate-400">
+                          Use an authenticator app like Google Authenticator, Authy, or 1Password to generate one-time codes.
+                        </p>
+                        <button
+                          onClick={start2FASetup}
+                          disabled={twoFactorLoading}
+                          className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+                        >
+                          {twoFactorLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Shield className="w-4 h-4" />}
+                          Enable Two-Factor Authentication
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* 2FA Setup Mode */}
+                {setupMode && (
+                  <div className="max-w-md space-y-6">
+                    <div className="p-4 bg-slate-50 dark:bg-slate-700/50 rounded-lg">
+                      <h4 className="font-medium text-slate-900 dark:text-white mb-2">Step 1: Scan QR Code</h4>
+                      <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
+                        Scan this QR code with your authenticator app
+                      </p>
+                      <div className="flex justify-center mb-4">
+                        <img src={qrCode} alt="2FA QR Code" className="w-48 h-48 rounded-lg border border-slate-200 dark:border-slate-600" />
+                      </div>
+                      <div className="text-center">
+                        <p className="text-xs text-slate-500 dark:text-slate-400 mb-1">Can't scan? Enter this code manually:</p>
+                        <code className="text-sm font-mono bg-slate-200 dark:bg-slate-600 px-2 py-1 rounded select-all">
+                          {totpSecret}
+                        </code>
+                      </div>
+                    </div>
+
+                    <div className="p-4 bg-slate-50 dark:bg-slate-700/50 rounded-lg">
+                      <h4 className="font-medium text-slate-900 dark:text-white mb-2">Step 2: Enter Verification Code</h4>
+                      <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
+                        Enter the 6-digit code from your authenticator app
+                      </p>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        maxLength={6}
+                        value={verificationCode}
+                        onChange={(e) => setVerificationCode(e.target.value.replace(/\D/g, ''))}
+                        placeholder="000000"
+                        className="w-full px-4 py-3 text-center text-2xl font-mono tracking-widest border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+
+                    <div className="flex gap-3">
+                      <button
+                        onClick={() => {
+                          setSetupMode(false);
+                          setVerificationCode('');
+                        }}
+                        className="flex-1 px-4 py-2 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={verify2FA}
+                        disabled={twoFactorLoading || verificationCode.length !== 6}
+                        className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+                      >
+                        {twoFactorLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />}
+                        Verify & Enable
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Backup Codes Display */}
+                {showBackupCodes && (
+                  <div className="max-w-md space-y-4">
+                    <div className="p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
+                      <h4 className="font-medium text-amber-800 dark:text-amber-200 mb-2">Save Your Backup Codes</h4>
+                      <p className="text-sm text-amber-700 dark:text-amber-300">
+                        Store these codes in a safe place. Each code can only be used once if you lose access to your authenticator app.
+                      </p>
+                    </div>
+
+                    <div className="p-4 bg-slate-50 dark:bg-slate-700/50 rounded-lg">
+                      <div className="grid grid-cols-2 gap-2 mb-4">
+                        {backupCodes.map((code, index) => (
+                          <code key={index} className="text-sm font-mono bg-white dark:bg-slate-600 px-3 py-2 rounded border border-slate-200 dark:border-slate-500 text-center">
+                            {code}
+                          </code>
+                        ))}
+                      </div>
+                      <button
+                        onClick={copyBackupCodes}
+                        className="w-full flex items-center justify-center gap-2 px-4 py-2 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-600"
+                      >
+                        <Copy className="w-4 h-4" />
+                        Copy All Codes
+                      </button>
+                    </div>
+
+                    <button
+                      onClick={() => setShowBackupCodes(false)}
+                      className="w-full px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+                    >
+                      I've Saved My Backup Codes
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Password Change Section */}
               <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Current Password
-                </label>
+                <h3 className="text-lg font-medium text-slate-900 dark:text-white mb-4">Change Password</h3>
+                <form onSubmit={handlePasswordChange} className="max-w-md space-y-6">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                      Current Password
+                    </label>
+                    <input
+                      type="password"
+                      value={passwords.current_password}
+                      onChange={(e) => setPasswords({ ...passwords, current_password: e.target.value })}
+                      required
+                      className="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                      New Password
+                    </label>
+                    <input
+                      type="password"
+                      value={passwords.new_password}
+                      onChange={(e) => setPasswords({ ...passwords, new_password: e.target.value })}
+                      required
+                      minLength={8}
+                      className="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                      Confirm New Password
+                    </label>
+                    <input
+                      type="password"
+                      value={passwords.confirm_password}
+                      onChange={(e) => setPasswords({ ...passwords, confirm_password: e.target.value })}
+                      required
+                      minLength={8}
+                      className="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                  <div className="flex justify-end">
+                    <button
+                      type="submit"
+                      disabled={saving}
+                      className="flex items-center gap-2 px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+                    >
+                      {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
+                      Change Password
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* Disable 2FA Modal */}
+          {showDisableModal && (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+              <div className="bg-white dark:bg-slate-800 rounded-xl max-w-md w-full p-6">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="p-2 bg-red-100 dark:bg-red-900/30 rounded-lg">
+                    <ShieldOff className="w-5 h-5 text-red-600 dark:text-red-400" />
+                  </div>
+                  <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Disable Two-Factor Authentication</h3>
+                </div>
+                <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
+                  This will remove the extra security from your account. Enter your password to confirm.
+                </p>
                 <input
                   type="password"
-                  value={passwords.current_password}
-                  onChange={(e) => setPasswords({ ...passwords, current_password: e.target.value })}
-                  required
-                  className="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
+                  value={disablePassword}
+                  onChange={(e) => setDisablePassword(e.target.value)}
+                  placeholder="Enter your password"
+                  className="w-full px-4 py-2 mb-4 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
                 />
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => {
+                      setShowDisableModal(false);
+                      setDisablePassword('');
+                    }}
+                    className="flex-1 px-4 py-2 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={disable2FA}
+                    disabled={twoFactorLoading || !disablePassword}
+                    className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"
+                  >
+                    {twoFactorLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                    Disable 2FA
+                  </button>
+                </div>
               </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  New Password
-                </label>
-                <input
-                  type="password"
-                  value={passwords.new_password}
-                  onChange={(e) => setPasswords({ ...passwords, new_password: e.target.value })}
-                  required
-                  minLength={8}
-                  className="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Confirm New Password
-                </label>
-                <input
-                  type="password"
-                  value={passwords.confirm_password}
-                  onChange={(e) => setPasswords({ ...passwords, confirm_password: e.target.value })}
-                  required
-                  minLength={8}
-                  className="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
-                />
-              </div>
-              <div className="flex justify-end">
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="flex items-center gap-2 px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
-                >
-                  {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
-                  Change Password
-                </button>
-              </div>
-            </form>
+            </div>
           )}
 
           {/* Billing Tab */}
