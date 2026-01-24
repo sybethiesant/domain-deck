@@ -1,9 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Save, Loader2, RefreshCw, Globe, Mail, Bell, Server, ShoppingCart, Shield, AlertTriangle, Zap, CreditCard, Send, Eye, Edit2, X, Check, Upload, Trash2, Image, Users, Download, ArrowRight, KeyRound, Palette, Wrench, Settings, FileText } from 'lucide-react';
+import { Save, Loader2, RefreshCw, Globe, Mail, Server, ShoppingCart, Shield, AlertTriangle, Zap, CreditCard, Send, Eye, Edit2, X, Upload, Trash2, Image, Users, Download, ArrowRight, KeyRound, Palette, Wrench, Settings, FileText } from 'lucide-react';
 import { useAuth } from '../../App';
 import { API_URL } from '../../config/api';
 import { toast } from 'react-hot-toast';
-import DOMPurify from 'dompurify';
 
 function AdminSettings() {
   const { token } = useAuth();

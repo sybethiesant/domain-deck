@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Search, RefreshCw, Loader2, ChevronLeft, ChevronRight, Filter, Calendar, User, Activity, Eye, X, Download, Clock } from 'lucide-react';
+import { Search, RefreshCw, Loader2, ChevronLeft, ChevronRight, Filter, User, Activity, Eye, X, Download, Clock } from 'lucide-react';
 import { useAuth } from '../../App';
 import { API_URL } from '../../config/api';
 import { toast } from 'react-hot-toast';
@@ -29,7 +29,6 @@ function AdminAuditLogs() {
 
   // Activity summary
   const [summary, setSummary] = useState(null);
-  const [summaryLoading, setSummaryLoading] = useState(false);
 
   const fetchLogs = useCallback(async () => {
     setLoading(true);
@@ -75,7 +74,6 @@ function AdminAuditLogs() {
   }, [token]);
 
   const fetchSummary = useCallback(async () => {
-    setSummaryLoading(true);
     try {
       const res = await fetch(`${API_URL}/admin/activity/summary?days=7`, {
         headers: { 'Authorization': `Bearer ${token}` }
@@ -86,7 +84,6 @@ function AdminAuditLogs() {
     } catch (err) {
       console.error('Error fetching summary:', err);
     }
-    setSummaryLoading(false);
   }, [token]);
 
   useEffect(() => {

@@ -11,7 +11,6 @@ function Transfer() {
   const { refreshCart } = useCart();
   const [domain, setDomain] = useState('');
   const [authCode, setAuthCode] = useState('');
-  const [loading, setLoading] = useState(false);
   const [checking, setChecking] = useState(false);
   const [transferInfo, setTransferInfo] = useState(null);
   const [error, setError] = useState('');
