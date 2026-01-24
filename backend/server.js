@@ -190,6 +190,7 @@ app.use(async (req, res, next) => {
         [decoded.id]
       );
 
+      // ROLE_LEVELS.ADMIN = 3 - allow admins to bypass maintenance mode
       if (userResult.rows.length > 0 && (userResult.rows[0].is_admin || userResult.rows[0].role_level >= 3)) {
         return next(); // Allow admins through
       }

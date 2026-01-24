@@ -7,7 +7,7 @@ import { toast } from 'react-hot-toast';
 
 function Transfer() {
   const navigate = useNavigate();
-  const { token, user } = useAuth();
+  const { token } = useAuth();
   const { refreshCart } = useCart();
   const [domain, setDomain] = useState('');
   const [authCode, setAuthCode] = useState('');
@@ -71,7 +71,7 @@ function Transfer() {
         available: false,
         sld: parsed.sld,
         tld: parsed.tld,
-        price: parseFloat(tldPricing.transfer),
+        price: parseFloat(tldPricing.price_transfer),
         registrar: checkData.registrar || 'Current Registrar'
       });
     } catch (err) {

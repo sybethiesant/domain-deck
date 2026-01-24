@@ -376,7 +376,7 @@ router.post('/users/:id/impersonate', async (req, res) => {
   const userId = parseInt(req.params.id);
 
   // Require super admin
-  if (req.user.role_level < 4 && !req.user.is_admin) {
+  if (req.user.role_level < ROLE_LEVELS.SUPERADMIN && !req.user.is_admin) {
     return res.status(403).json({ error: 'Super admin access required' });
   }
 
@@ -420,7 +420,7 @@ router.delete('/users/:id', async (req, res) => {
   const userId = parseInt(req.params.id);
 
   // Require super admin (role_level >= 4)
-  if (req.user.role_level < 4 && !req.user.is_admin) {
+  if (req.user.role_level < ROLE_LEVELS.SUPERADMIN && !req.user.is_admin) {
     return res.status(403).json({ error: 'Super admin access required' });
   }
 
