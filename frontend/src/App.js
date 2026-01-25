@@ -21,6 +21,7 @@ import ForgotPasswordPage from './pages/ForgotPassword';
 import ResetPasswordPage from './pages/ResetPassword';
 import TransferPage from './pages/Transfer';
 import { API_URL } from './config/api';
+import { ThemeConfigProvider } from './context/ThemeConfigContext';
 
 // Error Boundary for catching React rendering errors
 class ErrorBoundary extends React.Component {
@@ -649,9 +650,11 @@ function AppContent() {
 function App() {
   return (
     <ErrorBoundary>
-    <Router>
-      <AppContent />
-    </Router>
+      <ThemeConfigProvider>
+        <Router>
+          <AppContent />
+        </Router>
+      </ThemeConfigProvider>
     </ErrorBoundary>
   );
 }

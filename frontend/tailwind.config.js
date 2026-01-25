@@ -7,36 +7,63 @@ module.exports = {
   theme: {
     extend: {
       fontFamily: {
-        'display': ['Inter', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
-        'sans': ['Inter', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
-        'mono': ['JetBrains Mono', 'Fira Code', 'monospace'],
+        // CSS variables with fallbacks for dynamic theming
+        'display': ['var(--font-heading, Inter)', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
+        'sans': ['var(--font-body, Inter)', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
+        'mono': ['var(--font-mono, "JetBrains Mono")', 'Fira Code', 'monospace'],
       },
       colors: {
-        // Brand Colors - Professional Tech Theme
+        // Primary palette - CSS variables with fallbacks
         primary: {
-          50: '#EEF2FF',
-          100: '#E0E7FF',
-          200: '#C7D2FE',
-          300: '#A5B4FC',
-          400: '#818CF8',
-          500: '#6366F1',
-          600: '#4F46E5',
-          700: '#4338CA',
-          800: '#3730A3',
-          900: '#312E81',
+          50: 'var(--color-primary-50, #EEF2FF)',
+          100: 'var(--color-primary-100, #E0E7FF)',
+          200: 'var(--color-primary-200, #C7D2FE)',
+          300: 'var(--color-primary-300, #A5B4FC)',
+          400: 'var(--color-primary-400, #818CF8)',
+          500: 'var(--color-primary-500, #6366F1)',
+          600: 'var(--color-primary-600, #4F46E5)',
+          700: 'var(--color-primary-700, #4338CA)',
+          800: 'var(--color-primary-800, #3730A3)',
+          900: 'var(--color-primary-900, #312E81)',
         },
+        // Accent palette - CSS variables with fallbacks
         accent: {
-          50: '#ECFDF5',
-          100: '#D1FAE5',
-          200: '#A7F3D0',
-          300: '#6EE7B7',
-          400: '#34D399',
-          500: '#10B981',
-          600: '#059669',
-          700: '#047857',
-          800: '#065F46',
-          900: '#064E3B',
+          50: 'var(--color-accent-50, #ECFDF5)',
+          100: 'var(--color-accent-100, #D1FAE5)',
+          200: 'var(--color-accent-200, #A7F3D0)',
+          300: 'var(--color-accent-300, #6EE7B7)',
+          400: 'var(--color-accent-400, #34D399)',
+          500: 'var(--color-accent-500, #10B981)',
+          600: 'var(--color-accent-600, #059669)',
+          700: 'var(--color-accent-700, #047857)',
+          800: 'var(--color-accent-800, #065F46)',
+          900: 'var(--color-accent-900, #064E3B)',
         },
+        // Success palette
+        success: {
+          50: 'var(--color-success-50, #F0FDF4)',
+          100: 'var(--color-success-100, #DCFCE7)',
+          500: 'var(--color-success-500, #22C55E)',
+          600: 'var(--color-success-600, #16A34A)',
+          700: 'var(--color-success-700, #15803D)',
+        },
+        // Warning palette
+        warning: {
+          50: 'var(--color-warning-50, #FFFBEB)',
+          100: 'var(--color-warning-100, #FEF3C7)',
+          500: 'var(--color-warning-500, #F59E0B)',
+          600: 'var(--color-warning-600, #D97706)',
+          700: 'var(--color-warning-700, #B45309)',
+        },
+        // Error palette
+        error: {
+          50: 'var(--color-error-50, #FEF2F2)',
+          100: 'var(--color-error-100, #FEE2E2)',
+          500: 'var(--color-error-500, #EF4444)',
+          600: 'var(--color-error-600, #DC2626)',
+          700: 'var(--color-error-700, #B91C1C)',
+        },
+        // Slate palette - kept as hardcoded for neutral colors
         slate: {
           50: '#F8FAFC',
           100: '#F1F5F9',

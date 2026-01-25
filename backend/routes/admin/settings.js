@@ -1,6 +1,10 @@
 /**
  * Admin Settings Routes
  * System settings management
+ *
+ * Access Levels:
+ * - Level 3+: View settings, email status
+ * - Level 4+: Modify settings, maintenance mode, API modes, theme
  */
 const express = require('express');
 const router = express.Router();
@@ -8,6 +12,25 @@ const { logAudit, ROLE_LEVELS } = require('../../middleware/auth');
 const enom = require('../../services/enom');
 const stripeService = require('../../services/stripe');
 const emailService = require('../../services/email');
+const colorUtils = require('../../utils/colorUtils');
+
+// Helper to check admin level (3+)
+function requireAdminLevel(req, res) {
+  if (req.user.role_level < ROLE_LEVELS.ADMIN && !req.user.is_admin) {
+    res.status(403).json({ error: 'Admin access required' });
+    return false;
+  }
+  return true;
+}
+
+// Helper to check super admin level (4+)
+function requireSuperAdminLevel(req, res) {
+  if (req.user.role_level < ROLE_LEVELS.SUPERADMIN && !req.user.is_admin) {
+    res.status(403).json({ error: 'Super admin access required' });
+    return false;
+  }
+  return true;
+}
 
 // File upload setup for logo
 const multer = require('multer');
@@ -61,6 +84,17 @@ const DEFAULT_SETTINGS = {
 
   // Appearance settings
   default_theme: 'dark',
+
+  // Theme customization
+  theme_preset: 'default',
+  theme_primary_base: '#4F46E5',
+  theme_accent_base: '#10B981',
+  theme_success_base: '#22C55E',
+  theme_warning_base: '#F59E0B',
+  theme_error_base: '#EF4444',
+  theme_font_heading: 'Inter',
+  theme_font_body: 'Inter',
+  theme_font_mono: 'JetBrains Mono',
 
   // Email branding settings
   email_logo_url: '',
@@ -146,7 +180,9 @@ const DEFAULT_SETTINGS = {
 };
 
 // Get system settings
+// Requires level 3+ (Admin) - contains sensitive info like SMTP creds
 router.get('/settings', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
   const pool = req.app.locals.pool;
 
   try {
@@ -165,7 +201,9 @@ router.get('/settings', async (req, res) => {
 });
 
 // Get single setting
+// Requires level 3+ (Admin) - may contain sensitive info
 router.get('/settings/:key', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
   const pool = req.app.locals.pool;
   const { key } = req.params;
 
@@ -613,7 +651,11 @@ router.post('/email-templates/:id/preview', async (req, res) => {
 });
 
 // Get email service status
+// Get email status
+// Requires level 3+ (Admin) - reveals SMTP configuration
 router.get('/email/status', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
+
   try {
     const hasTransporter = !!emailService.transporter;
     const config = {
@@ -1048,6 +1090,301 @@ router.post('/clear-email-cache', async (req, res) => {
   } catch (error) {
     console.error('Error clearing email cache:', error);
     res.status(500).json({ error: 'Failed to clear email cache' });
+  }
+});
+
+// ============ THEME MANAGEMENT ============
+
+// Get available theme presets
+// Get available theme presets
+// Requires level 3+ (Admin) - admin-only functionality
+router.get('/theme/presets', (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
+  res.json(colorUtils.THEME_PRESETS);
+});
+
+// Get current theme configuration
+// Requires level 3+ (Admin) - admin-only functionality
+router.get('/theme', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
+  const pool = req.app.locals.pool;
+
+  try {
+    // Fetch theme-related settings
+    const result = await pool.query(`
+      SELECT key, value FROM app_settings
+      WHERE key LIKE 'theme_%'
+    `);
+
+    const settings = {};
+    for (const row of result.rows) {
+      settings[row.key] = row.value;
+    }
+
+    // Merge with defaults
+    const themeSettings = {
+      theme_preset: settings.theme_preset || DEFAULT_SETTINGS.theme_preset,
+      theme_primary_base: settings.theme_primary_base || DEFAULT_SETTINGS.theme_primary_base,
+      theme_accent_base: settings.theme_accent_base || DEFAULT_SETTINGS.theme_accent_base,
+      theme_success_base: settings.theme_success_base || DEFAULT_SETTINGS.theme_success_base,
+      theme_warning_base: settings.theme_warning_base || DEFAULT_SETTINGS.theme_warning_base,
+      theme_error_base: settings.theme_error_base || DEFAULT_SETTINGS.theme_error_base,
+      theme_font_heading: settings.theme_font_heading || DEFAULT_SETTINGS.theme_font_heading,
+      theme_font_body: settings.theme_font_body || DEFAULT_SETTINGS.theme_font_body,
+      theme_font_mono: settings.theme_font_mono || DEFAULT_SETTINGS.theme_font_mono,
+    };
+
+    // Generate CSS variables
+    const cssVariables = colorUtils.generateThemeCssVariables(themeSettings);
+
+    // Generate Google Fonts URL
+    const googleFontsUrl = colorUtils.generateGoogleFontsUrl(themeSettings);
+
+    res.json({
+      settings: themeSettings,
+      cssVariables,
+      googleFontsUrl,
+      presets: colorUtils.THEME_PRESETS,
+    });
+  } catch (error) {
+    console.error('Error fetching theme:', error);
+    res.status(500).json({ error: 'Failed to fetch theme' });
+  }
+});
+
+// Update theme settings
+router.put('/theme', async (req, res) => {
+  const pool = req.app.locals.pool;
+
+  // Require super admin for theme changes
+  if (req.user.role_level < ROLE_LEVELS.SUPERADMIN && !req.user.is_admin) {
+    return res.status(403).json({ error: 'Super admin access required' });
+  }
+
+  const {
+    theme_preset,
+    theme_primary_base,
+    theme_accent_base,
+    theme_success_base,
+    theme_warning_base,
+    theme_error_base,
+    theme_font_heading,
+    theme_font_body,
+    theme_font_mono,
+  } = req.body;
+
+  try {
+    const updates = [];
+
+    // Validate and prepare updates
+    if (theme_preset !== undefined) {
+      updates.push({ key: 'theme_preset', value: theme_preset });
+    }
+
+    if (theme_primary_base !== undefined) {
+      if (!colorUtils.isValidHex(theme_primary_base)) {
+        return res.status(400).json({ error: 'Invalid primary color format' });
+      }
+      updates.push({ key: 'theme_primary_base', value: colorUtils.normalizeHex(theme_primary_base) });
+    }
+
+    if (theme_accent_base !== undefined) {
+      if (!colorUtils.isValidHex(theme_accent_base)) {
+        return res.status(400).json({ error: 'Invalid accent color format' });
+      }
+      updates.push({ key: 'theme_accent_base', value: colorUtils.normalizeHex(theme_accent_base) });
+    }
+
+    if (theme_success_base !== undefined) {
+      if (!colorUtils.isValidHex(theme_success_base)) {
+        return res.status(400).json({ error: 'Invalid success color format' });
+      }
+      updates.push({ key: 'theme_success_base', value: colorUtils.normalizeHex(theme_success_base) });
+    }
+
+    if (theme_warning_base !== undefined) {
+      if (!colorUtils.isValidHex(theme_warning_base)) {
+        return res.status(400).json({ error: 'Invalid warning color format' });
+      }
+      updates.push({ key: 'theme_warning_base', value: colorUtils.normalizeHex(theme_warning_base) });
+    }
+
+    if (theme_error_base !== undefined) {
+      if (!colorUtils.isValidHex(theme_error_base)) {
+        return res.status(400).json({ error: 'Invalid error color format' });
+      }
+      updates.push({ key: 'theme_error_base', value: colorUtils.normalizeHex(theme_error_base) });
+    }
+
+    if (theme_font_heading !== undefined) {
+      updates.push({ key: 'theme_font_heading', value: theme_font_heading.trim() });
+    }
+
+    if (theme_font_body !== undefined) {
+      updates.push({ key: 'theme_font_body', value: theme_font_body.trim() });
+    }
+
+    if (theme_font_mono !== undefined) {
+      updates.push({ key: 'theme_font_mono', value: theme_font_mono.trim() });
+    }
+
+    // Apply updates
+    for (const { key, value } of updates) {
+      await pool.query(`
+        INSERT INTO app_settings (key, value)
+        VALUES ($1, $2)
+        ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = CURRENT_TIMESTAMP
+      `, [key, value]);
+
+      await logAudit(pool, req.user.id, 'setting_updated', { key, value });
+    }
+
+    // Fetch updated theme and return
+    const result = await pool.query(`
+      SELECT key, value FROM app_settings
+      WHERE key LIKE 'theme_%'
+    `);
+
+    const settings = {};
+    for (const row of result.rows) {
+      settings[row.key] = row.value;
+    }
+
+    // Merge with defaults for complete settings
+    const themeSettings = {
+      theme_preset: settings.theme_preset || DEFAULT_SETTINGS.theme_preset,
+      theme_primary_base: settings.theme_primary_base || DEFAULT_SETTINGS.theme_primary_base,
+      theme_accent_base: settings.theme_accent_base || DEFAULT_SETTINGS.theme_accent_base,
+      theme_success_base: settings.theme_success_base || DEFAULT_SETTINGS.theme_success_base,
+      theme_warning_base: settings.theme_warning_base || DEFAULT_SETTINGS.theme_warning_base,
+      theme_error_base: settings.theme_error_base || DEFAULT_SETTINGS.theme_error_base,
+      theme_font_heading: settings.theme_font_heading || DEFAULT_SETTINGS.theme_font_heading,
+      theme_font_body: settings.theme_font_body || DEFAULT_SETTINGS.theme_font_body,
+      theme_font_mono: settings.theme_font_mono || DEFAULT_SETTINGS.theme_font_mono,
+    };
+
+    const cssVariables = colorUtils.generateThemeCssVariables(themeSettings);
+    const googleFontsUrl = colorUtils.generateGoogleFontsUrl(themeSettings);
+
+    res.json({
+      success: true,
+      settings: themeSettings,
+      cssVariables,
+      googleFontsUrl,
+    });
+  } catch (error) {
+    console.error('Error updating theme:', error);
+    res.status(500).json({ error: 'Failed to update theme' });
+  }
+});
+
+// Reset theme to defaults
+router.post('/theme/reset', async (req, res) => {
+  const pool = req.app.locals.pool;
+
+  // Require super admin
+  if (req.user.role_level < ROLE_LEVELS.SUPERADMIN && !req.user.is_admin) {
+    return res.status(403).json({ error: 'Super admin access required' });
+  }
+
+  try {
+    // Delete all theme settings
+    await pool.query(`DELETE FROM app_settings WHERE key LIKE 'theme_%'`);
+
+    await logAudit(pool, req.user.id, 'theme_reset', { action: 'reset_to_defaults' });
+
+    // Return default theme
+    const themeSettings = {
+      theme_preset: DEFAULT_SETTINGS.theme_preset,
+      theme_primary_base: DEFAULT_SETTINGS.theme_primary_base,
+      theme_accent_base: DEFAULT_SETTINGS.theme_accent_base,
+      theme_success_base: DEFAULT_SETTINGS.theme_success_base,
+      theme_warning_base: DEFAULT_SETTINGS.theme_warning_base,
+      theme_error_base: DEFAULT_SETTINGS.theme_error_base,
+      theme_font_heading: DEFAULT_SETTINGS.theme_font_heading,
+      theme_font_body: DEFAULT_SETTINGS.theme_font_body,
+      theme_font_mono: DEFAULT_SETTINGS.theme_font_mono,
+    };
+
+    const cssVariables = colorUtils.generateThemeCssVariables(themeSettings);
+    const googleFontsUrl = colorUtils.generateGoogleFontsUrl(themeSettings);
+
+    res.json({
+      success: true,
+      message: 'Theme reset to defaults',
+      settings: themeSettings,
+      cssVariables,
+      googleFontsUrl,
+    });
+  } catch (error) {
+    console.error('Error resetting theme:', error);
+    res.status(500).json({ error: 'Failed to reset theme' });
+  }
+});
+
+// Apply a theme preset
+router.post('/theme/apply-preset', async (req, res) => {
+  const pool = req.app.locals.pool;
+  const { preset } = req.body;
+
+  // Require super admin
+  if (req.user.role_level < ROLE_LEVELS.SUPERADMIN && !req.user.is_admin) {
+    return res.status(403).json({ error: 'Super admin access required' });
+  }
+
+  if (!preset || !colorUtils.THEME_PRESETS[preset]) {
+    return res.status(400).json({ error: 'Invalid preset name' });
+  }
+
+  try {
+    const presetData = colorUtils.THEME_PRESETS[preset];
+
+    // Apply preset colors
+    const updates = [
+      { key: 'theme_preset', value: preset },
+      { key: 'theme_primary_base', value: presetData.primary },
+      { key: 'theme_accent_base', value: presetData.accent },
+      { key: 'theme_success_base', value: presetData.success },
+      { key: 'theme_warning_base', value: presetData.warning },
+      { key: 'theme_error_base', value: presetData.error },
+    ];
+
+    for (const { key, value } of updates) {
+      await pool.query(`
+        INSERT INTO app_settings (key, value)
+        VALUES ($1, $2)
+        ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = CURRENT_TIMESTAMP
+      `, [key, value]);
+    }
+
+    await logAudit(pool, req.user.id, 'theme_preset_applied', { preset });
+
+    // Return updated theme
+    const themeSettings = {
+      theme_preset: preset,
+      theme_primary_base: presetData.primary,
+      theme_accent_base: presetData.accent,
+      theme_success_base: presetData.success,
+      theme_warning_base: presetData.warning,
+      theme_error_base: presetData.error,
+      theme_font_heading: DEFAULT_SETTINGS.theme_font_heading,
+      theme_font_body: DEFAULT_SETTINGS.theme_font_body,
+      theme_font_mono: DEFAULT_SETTINGS.theme_font_mono,
+    };
+
+    const cssVariables = colorUtils.generateThemeCssVariables(themeSettings);
+    const googleFontsUrl = colorUtils.generateGoogleFontsUrl(themeSettings);
+
+    res.json({
+      success: true,
+      preset: presetData,
+      settings: themeSettings,
+      cssVariables,
+      googleFontsUrl,
+    });
+  } catch (error) {
+    console.error('Error applying preset:', error);
+    res.status(500).json({ error: 'Failed to apply preset' });
   }
 });
 

@@ -438,7 +438,10 @@ router.post('/enom/subaccounts/:accountId/import', async (req, res) => {
 });
 
 // Get eNom balance
+// Requires level 3+ (Admin) - reveals sensitive account info
 router.get('/enom/balance', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
+
   try {
     const balance = await enom.getBalance();
     res.json(balance);

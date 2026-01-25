@@ -292,26 +292,7 @@ function Checkout({ onComplete }) {
     initStripe();
   }, []);
 
-  // Handle redirect callback from payment methods like Amazon Pay, etc.
-  useEffect(() => {
-    const urlParams = new URLSearchParams(window.location.search);
-    const paymentIntentId = urlParams.get('payment_intent');
-    const redirectStatus = urlParams.get('redirect_status');
-
-    if (paymentIntentId && redirectStatus) {
-      // Clear URL params
-      window.history.replaceState({}, '', window.location.pathname);
-
-      if (redirectStatus === 'succeeded') {
-        // Payment succeeded via redirect - complete the order
-        handleRedirectPaymentSuccess(paymentIntentId);
-      } else {
-        setError(`Payment ${redirectStatus}. Please try again.`);
-      }
-    }
-  }, [token, handleRedirectPaymentSuccess]);
-
-  // Handle payment success from redirect-based methods
+  // Handle payment success from redirect-based methods (defined before useEffect that uses it)
   const handleRedirectPaymentSuccess = useCallback(async (paymentIntentId) => {
     setLoading(true);
 
@@ -366,6 +347,25 @@ function Checkout({ onComplete }) {
 
     setLoading(false);
   }, [token, fetchCart]);
+
+  // Handle redirect callback from payment methods like Amazon Pay, etc.
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const paymentIntentId = urlParams.get('payment_intent');
+    const redirectStatus = urlParams.get('redirect_status');
+
+    if (paymentIntentId && redirectStatus) {
+      // Clear URL params
+      window.history.replaceState({}, '', window.location.pathname);
+
+      if (redirectStatus === 'succeeded') {
+        // Payment succeeded via redirect - complete the order
+        handleRedirectPaymentSuccess(paymentIntentId);
+      } else {
+        setError(`Payment ${redirectStatus}. Please try again.`);
+      }
+    }
+  }, [handleRedirectPaymentSuccess]);
 
   const handleContactChange = (e) => {
     setContactInfo({ ...contactInfo, [e.target.name]: e.target.value });

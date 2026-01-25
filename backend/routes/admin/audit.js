@@ -114,7 +114,12 @@ router.get('/audit-logs', async (req, res) => {
 });
 
 // Get audit log actions (for filter dropdown)
+// Get audit actions breakdown
+// Requires level 3+ (Admin)
 router.get('/audit-logs/actions', async (req, res) => {
+  if (req.user.role_level < ROLE_LEVELS.ADMIN && !req.user.is_admin) {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
   const pool = req.app.locals.pool;
 
   try {
@@ -133,7 +138,12 @@ router.get('/audit-logs/actions', async (req, res) => {
 });
 
 // Get audit log entity types (for filter dropdown)
+// Get audit entity types breakdown
+// Requires level 3+ (Admin)
 router.get('/audit-logs/entity-types', async (req, res) => {
+  if (req.user.role_level < ROLE_LEVELS.ADMIN && !req.user.is_admin) {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
   const pool = req.app.locals.pool;
 
   try {
@@ -153,7 +163,12 @@ router.get('/audit-logs/entity-types', async (req, res) => {
 });
 
 // Activity logs (user actions)
+// Get activity logs
+// Requires level 3+ (Admin)
 router.get('/activity', async (req, res) => {
+  if (req.user.role_level < ROLE_LEVELS.ADMIN && !req.user.is_admin) {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
   const pool = req.app.locals.pool;
   const { page = 1, limit = 100, action, user_id, entity_type, start_date, end_date } = req.query;
   const offset = (parseInt(page) - 1) * parseInt(limit);
@@ -236,7 +251,12 @@ router.get('/activity', async (req, res) => {
 });
 
 // Get activity summary for dashboard
+// Get activity summary
+// Requires level 3+ (Admin)
 router.get('/activity/summary', async (req, res) => {
+  if (req.user.role_level < ROLE_LEVELS.ADMIN && !req.user.is_admin) {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
   const pool = req.app.locals.pool;
   const days = Math.max(1, Math.min(parseInt(req.query.days) || 7, 365)); // Bounded 1-365
 

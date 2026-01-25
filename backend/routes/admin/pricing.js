@@ -20,7 +20,9 @@ function requireAdminLevel(req, res) {
 }
 
 // Get all TLD pricing (including costs)
+// Requires level 3+ (Admin) - cost fields reveal profit margins
 router.get('/pricing', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
   const pool = req.app.locals.pool;
   const { active_only } = req.query;
 
@@ -40,7 +42,9 @@ router.get('/pricing', async (req, res) => {
 });
 
 // Get single TLD pricing
+// Requires level 3+ (Admin) - cost fields reveal profit margins
 router.get('/pricing/:tld', async (req, res) => {
+  if (!requireAdminLevel(req, res)) return;
   const pool = req.app.locals.pool;
   const { tld } = req.params;
 

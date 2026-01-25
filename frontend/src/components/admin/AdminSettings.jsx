@@ -1,8 +1,12 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Save, Loader2, RefreshCw, Globe, Mail, Server, ShoppingCart, Shield, AlertTriangle, Zap, CreditCard, Send, Eye, Edit2, X, Upload, Trash2, Image, Users, Download, ArrowRight, KeyRound, Palette, Wrench, Settings, FileText } from 'lucide-react';
+import { Save, Loader2, RefreshCw, Globe, Mail, Server, ShoppingCart, Shield, AlertTriangle, Zap, CreditCard, Send, Eye, Edit2, X, Upload, Trash2, Image, Users, Download, ArrowRight, KeyRound, Palette, Wrench, Settings, FileText, Sun, Moon, RotateCcw } from 'lucide-react';
 import { useAuth } from '../../App';
 import { API_URL } from '../../config/api';
 import { toast } from 'react-hot-toast';
+import { useThemeConfig } from '../../context/ThemeConfigContext';
+import ColorPicker from './ColorPicker';
+import FontSelector from './FontSelector';
+import ThemePreview from './ThemePreview';
 
 function AdminSettings() {
   const { token } = useAuth();
@@ -59,6 +63,25 @@ function AdminSettings() {
   const [editingLegalPage, setEditingLegalPage] = useState(null);
   const [savingLegalPage, setSavingLegalPage] = useState(false);
 
+  // Theme customization state
+  const { refreshTheme, previewTheme } = useThemeConfig();
+  const [themeSettings, setThemeSettings] = useState({
+    theme_preset: 'default',
+    theme_primary_base: '#4F46E5',
+    theme_accent_base: '#10B981',
+    theme_success_base: '#22C55E',
+    theme_warning_base: '#F59E0B',
+    theme_error_base: '#EF4444',
+    theme_font_heading: 'Inter',
+    theme_font_body: 'Inter',
+    theme_font_mono: 'JetBrains Mono',
+  });
+  const [themePresets, setThemePresets] = useState([]);
+  const [themeLoading, setThemeLoading] = useState(false);
+  const [themeSaving, setThemeSaving] = useState(false);
+  const [themeModified, setThemeModified] = useState(false);
+  const [themePreviewMode, setThemePreviewMode] = useState('light');
+
   // Tab definitions
   const tabs = [
     { id: 'general', label: 'General', icon: Globe },
@@ -106,6 +129,137 @@ function AdminSettings() {
       console.error('Error fetching logo settings:', err);
     }
   }, [token]);
+
+  // Fetch theme settings and presets
+  const fetchThemeSettings = useCallback(async () => {
+    setThemeLoading(true);
+    try {
+      const [themeRes, presetsRes] = await Promise.all([
+        fetch(`${API_URL}/admin/theme`, { headers: { 'Authorization': `Bearer ${token}` } }),
+        fetch(`${API_URL}/admin/theme/presets`, { headers: { 'Authorization': `Bearer ${token}` } })
+      ]);
+
+      if (themeRes.ok) {
+        const data = await themeRes.json();
+        // Backend returns { settings: {...}, cssVariables, googleFontsUrl, presets }
+        const s = data.settings || {};
+        setThemeSettings({
+          theme_preset: s.theme_preset || 'default',
+          theme_primary_base: s.theme_primary_base || '#4F46E5',
+          theme_accent_base: s.theme_accent_base || '#10B981',
+          theme_success_base: s.theme_success_base || '#22C55E',
+          theme_warning_base: s.theme_warning_base || '#F59E0B',
+          theme_error_base: s.theme_error_base || '#EF4444',
+          theme_font_heading: s.theme_font_heading || 'Inter',
+          theme_font_body: s.theme_font_body || 'Inter',
+          theme_font_mono: s.theme_font_mono || 'JetBrains Mono',
+        });
+      }
+
+      if (presetsRes.ok) {
+        const presetsData = await presetsRes.json();
+        // Backend returns object { default: {...}, ocean: {...}, ... }
+        // Convert to array format for UI: [{ key, name, primary, accent, ... }]
+        const presetsArray = Object.entries(presetsData).map(([key, preset]) => ({
+          key,
+          name: preset.name,
+          description: preset.description,
+          primary: preset.primary,
+          accent: preset.accent,
+          success: preset.success,
+          warning: preset.warning,
+          error: preset.error,
+        }));
+        setThemePresets(presetsArray);
+      }
+    } catch (err) {
+      console.error('Error fetching theme settings:', err);
+    }
+    setThemeLoading(false);
+  }, [token]);
+
+  // Handle theme setting changes
+  const handleThemeChange = (key, value) => {
+    setThemeSettings(prev => ({ ...prev, [key]: value }));
+    setThemeModified(true);
+
+    // If changing to custom preset when a preset was selected
+    if (key !== 'theme_preset' && themeSettings.theme_preset !== 'custom') {
+      setThemeSettings(prev => ({ ...prev, theme_preset: 'custom' }));
+    }
+  };
+
+  // Apply theme preset
+  const handlePresetChange = async (presetKey) => {
+    const preset = themePresets.find(p => p.key === presetKey);
+    if (preset) {
+      setThemeSettings({
+        theme_preset: presetKey,
+        theme_primary_base: preset.primary,
+        theme_accent_base: preset.accent,
+        theme_success_base: preset.success || '#22C55E',
+        theme_warning_base: preset.warning || '#F59E0B',
+        theme_error_base: preset.error || '#EF4444',
+        theme_font_heading: themeSettings.theme_font_heading,
+        theme_font_body: themeSettings.theme_font_body,
+        theme_font_mono: themeSettings.theme_font_mono,
+      });
+      setThemeModified(true);
+    }
+  };
+
+  // Save theme settings
+  const handleSaveTheme = async () => {
+    setThemeSaving(true);
+    try {
+      const res = await fetch(`${API_URL}/admin/theme`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(themeSettings)
+      });
+
+      if (res.ok) {
+        toast.success('Theme saved successfully');
+        setThemeModified(false);
+        // Refresh the global theme
+        await refreshTheme();
+      } else {
+        const err = await res.json();
+        toast.error(err.error || 'Failed to save theme');
+      }
+    } catch (err) {
+      console.error('Error saving theme:', err);
+      toast.error('Failed to save theme');
+    }
+    setThemeSaving(false);
+  };
+
+  // Reset theme to defaults
+  const handleResetTheme = async () => {
+    if (!window.confirm('Are you sure you want to reset the theme to defaults?')) return;
+
+    try {
+      const res = await fetch(`${API_URL}/admin/theme/reset`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+
+      if (res.ok) {
+        toast.success('Theme reset to defaults');
+        await fetchThemeSettings();
+        await refreshTheme();
+        setThemeModified(false);
+      } else {
+        toast.error('Failed to reset theme');
+      }
+    } catch (err) {
+      console.error('Error resetting theme:', err);
+      toast.error('Failed to reset theme');
+    }
+  };
 
   const handleLogoUpload = async (e) => {
     const file = e.target.files?.[0];
@@ -725,7 +879,8 @@ function AdminSettings() {
     fetchLogoSettings();
     fetchEmailBranding();
     fetchLegalPages();
-  }, [fetchSettings, fetchApiModes, fetchEmailStatus, fetchEmailTemplates, fetchLogoSettings, fetchEmailBranding, fetchLegalPages]);
+    fetchThemeSettings();
+  }, [fetchSettings, fetchApiModes, fetchEmailStatus, fetchEmailTemplates, fetchLogoSettings, fetchEmailBranding, fetchLegalPages, fetchThemeSettings]);
 
   const handleChange = (key, value) => {
     setSettings(prev => ({ ...prev, [key]: value }));
@@ -1063,31 +1218,223 @@ function AdminSettings() {
           {/* Appearance Tab */}
           {activeTab === 'appearance' && (
             <div className="space-y-6">
-              {/* Default Theme */}
+              {/* Default Theme Mode */}
               <div>
-                <h3 className="font-semibold text-slate-900 dark:text-slate-100 mb-4">Default Theme</h3>
+                <h3 className="font-semibold text-slate-900 dark:text-slate-100 mb-4">Default Theme Mode</h3>
                 <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">
-                  The default theme shown to new visitors who haven't set a preference.
+                  The default light/dark mode shown to new visitors who haven't set a preference.
                 </p>
                 <div className="grid grid-cols-2 gap-4 max-w-md">
                   {[
-                    { id: 'light', label: 'Light', icon: '☀️' },
-                    { id: 'dark', label: 'Dark', icon: '🌙' }
+                    { id: 'light', label: 'Light', icon: Sun },
+                    { id: 'dark', label: 'Dark', icon: Moon }
                   ].map((option) => (
                     <button
                       key={option.id}
                       onClick={() => handleChange('default_theme', option.id)}
                       className={`flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all ${
                         (settings.default_theme || 'dark') === option.id
-                          ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20'
+                          ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
                           : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
                       }`}
                     >
-                      <span className="text-2xl">{option.icon}</span>
+                      <option.icon className="w-6 h-6 text-slate-600 dark:text-slate-300" />
                       <span className="text-sm font-medium text-slate-900 dark:text-white">{option.label}</span>
                     </button>
                   ))}
                 </div>
+              </div>
+
+              {/* Theme Customization */}
+              <div className="border-t border-slate-200 dark:border-slate-700 pt-6">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h3 className="font-semibold text-slate-900 dark:text-slate-100">Theme Colors & Fonts</h3>
+                    <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+                      Customize your site's color palette and typography.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {themeModified && (
+                      <span className="text-xs text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 px-2 py-1 rounded">
+                        Unsaved changes
+                      </span>
+                    )}
+                    <button
+                      onClick={handleResetTheme}
+                      className="btn-secondary text-sm py-1.5"
+                      title="Reset to defaults"
+                    >
+                      <RotateCcw className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={handleSaveTheme}
+                      disabled={themeSaving || !themeModified}
+                      className="btn-primary text-sm py-1.5"
+                    >
+                      {themeSaving ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <Save className="w-4 h-4 mr-1" />}
+                      Save Theme
+                    </button>
+                  </div>
+                </div>
+
+                {themeLoading ? (
+                  <div className="flex justify-center py-8">
+                    <Loader2 className="w-8 h-8 animate-spin text-primary-500" />
+                  </div>
+                ) : (
+                  <div className="grid lg:grid-cols-3 gap-6">
+                    {/* Left Column - Colors */}
+                    <div className="lg:col-span-2 space-y-6">
+                      {/* Theme Presets */}
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">
+                          Theme Preset
+                        </label>
+                        <div className="flex flex-wrap gap-2">
+                          {themePresets.map((preset) => (
+                            <button
+                              key={preset.key}
+                              onClick={() => handlePresetChange(preset.key)}
+                              className={`
+                                flex items-center gap-2 px-3 py-2 rounded-lg border-2 transition-all
+                                ${themeSettings.theme_preset === preset.key
+                                  ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
+                                  : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
+                                }
+                              `}
+                            >
+                              <div className="flex">
+                                <div className="w-4 h-4 rounded-l" style={{ backgroundColor: preset.primary }} />
+                                <div className="w-4 h-4 rounded-r" style={{ backgroundColor: preset.accent }} />
+                              </div>
+                              <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                                {preset.name}
+                              </span>
+                            </button>
+                          ))}
+                          <button
+                            onClick={() => handleThemeChange('theme_preset', 'custom')}
+                            className={`
+                              flex items-center gap-2 px-3 py-2 rounded-lg border-2 transition-all
+                              ${themeSettings.theme_preset === 'custom'
+                                ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
+                                : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
+                              }
+                            `}
+                          >
+                            <Palette className="w-4 h-4 text-slate-500" />
+                            <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                              Custom
+                            </span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Color Pickers */}
+                      <div className="grid md:grid-cols-2 gap-6">
+                        <ColorPicker
+                          label="Primary Color"
+                          value={themeSettings.theme_primary_base}
+                          onChange={(v) => handleThemeChange('theme_primary_base', v)}
+                        />
+                        <ColorPicker
+                          label="Accent Color"
+                          value={themeSettings.theme_accent_base}
+                          onChange={(v) => handleThemeChange('theme_accent_base', v)}
+                        />
+                      </div>
+
+                      {/* Status Colors */}
+                      <div className="grid md:grid-cols-3 gap-4">
+                        <ColorPicker
+                          label="Success"
+                          value={themeSettings.theme_success_base}
+                          onChange={(v) => handleThemeChange('theme_success_base', v)}
+                          showPalette={false}
+                          quickColors={[
+                            { name: 'Green', value: '#22C55E' },
+                            { name: 'Emerald', value: '#10B981' },
+                            { name: 'Teal', value: '#14B8A6' },
+                          ]}
+                        />
+                        <ColorPicker
+                          label="Warning"
+                          value={themeSettings.theme_warning_base}
+                          onChange={(v) => handleThemeChange('theme_warning_base', v)}
+                          showPalette={false}
+                          quickColors={[
+                            { name: 'Amber', value: '#F59E0B' },
+                            { name: 'Yellow', value: '#EAB308' },
+                            { name: 'Orange', value: '#F97316' },
+                          ]}
+                        />
+                        <ColorPicker
+                          label="Error"
+                          value={themeSettings.theme_error_base}
+                          onChange={(v) => handleThemeChange('theme_error_base', v)}
+                          showPalette={false}
+                          quickColors={[
+                            { name: 'Red', value: '#EF4444' },
+                            { name: 'Rose', value: '#F43F5E' },
+                            { name: 'Pink', value: '#EC4899' },
+                          ]}
+                        />
+                      </div>
+
+                      {/* Font Selectors */}
+                      <div className="border-t border-slate-200 dark:border-slate-700 pt-6">
+                        <h4 className="font-medium text-slate-900 dark:text-slate-100 mb-4">Typography</h4>
+                        <div className="space-y-6">
+                          <FontSelector
+                            label="Heading Font"
+                            value={themeSettings.theme_font_heading}
+                            onChange={(v) => handleThemeChange('theme_font_heading', v)}
+                            type="display"
+                          />
+                          <FontSelector
+                            label="Body Font"
+                            value={themeSettings.theme_font_body}
+                            onChange={(v) => handleThemeChange('theme_font_body', v)}
+                            type="body"
+                          />
+                          <FontSelector
+                            label="Monospace Font"
+                            value={themeSettings.theme_font_mono}
+                            onChange={(v) => handleThemeChange('theme_font_mono', v)}
+                            type="mono"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Right Column - Preview */}
+                    <div className="lg:col-span-1">
+                      <div className="sticky top-4">
+                        <div className="flex items-center justify-between mb-3">
+                          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
+                            Live Preview
+                          </label>
+                          <div className="flex rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden">
+                            <button
+                              onClick={() => setThemePreviewMode('light')}
+                              className={`p-1.5 ${themePreviewMode === 'light' ? 'bg-slate-100 dark:bg-slate-700' : ''}`}
+                            >
+                              <Sun className="w-4 h-4 text-slate-500" />
+                            </button>
+                            <button
+                              onClick={() => setThemePreviewMode('dark')}
+                              className={`p-1.5 ${themePreviewMode === 'dark' ? 'bg-slate-100 dark:bg-slate-700' : ''}`}
+                            >
+                              <Moon className="w-4 h-4 text-slate-500" />
+                            </button>
+                          </div>
+                        </div>
+                        <ThemePreview previewMode={themePreviewMode} />
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Logo Settings */}

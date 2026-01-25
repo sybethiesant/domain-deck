@@ -111,7 +111,10 @@ router.put('/roles/:level', async (req, res) => {
 });
 
 // Get all available permissions
+// Get all available permissions
+// Requires authentication (part of admin routes)
 router.get('/permissions', async (req, res) => {
+  // Note: This route is under /admin which requires staff auth
   // Define all available permissions
   const permissions = [
     // Customer permissions

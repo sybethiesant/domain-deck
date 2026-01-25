@@ -364,24 +364,54 @@ app.post('/api/jobs/:name/trigger', require('./middleware/auth').authMiddleware,
 // Get public site configuration (logo, site name, etc.) - no auth required
 app.get('/api/site-config', async (req, res) => {
   try {
+    // Fetch all relevant settings including theme settings
     const result = await pool.query(
       `SELECT key, value FROM app_settings WHERE key IN (
         'site_name', 'site_tagline', 'logo_url', 'logo_width', 'logo_height',
-        'default_theme', 'company_name', 'support_email', 'site_url'
+        'default_theme', 'company_name', 'support_email', 'site_url',
+        'theme_preset', 'theme_primary_base', 'theme_accent_base',
+        'theme_success_base', 'theme_warning_base', 'theme_error_base',
+        'theme_font_heading', 'theme_font_body', 'theme_font_mono'
       )`
     );
+
+    // Default config values
     const config = {
       site_name: 'Domain Store',
       site_tagline: 'Domain Names Made Simple',
       company_name: 'Your Company Name',
       support_email: 'support@example.com',
       site_url: 'https://example.com',
-      default_theme: 'dark'
+      default_theme: 'dark',
+      // Theme defaults
+      theme_preset: 'default',
+      theme_primary_base: '#4F46E5',
+      theme_accent_base: '#10B981',
+      theme_success_base: '#22C55E',
+      theme_warning_base: '#F59E0B',
+      theme_error_base: '#EF4444',
+      theme_font_heading: 'Inter',
+      theme_font_body: 'Inter',
+      theme_font_mono: 'JetBrains Mono'
     };
+
+    // Override with database values
     for (const row of result.rows) {
       config[row.key] = row.value;
     }
-    res.json(config);
+
+    // Generate theme CSS variables and Google Fonts URL
+    const colorUtils = require('./utils/colorUtils');
+    const cssVariables = colorUtils.generateThemeCssVariables(config);
+    const googleFontsUrl = colorUtils.generateGoogleFontsUrl(config);
+
+    res.json({
+      ...config,
+      theme: {
+        cssVariables,
+        googleFontsUrl
+      }
+    });
   } catch (error) {
     console.error('Error fetching site config:', error);
     res.status(500).json({ error: 'Failed to fetch site config' });
