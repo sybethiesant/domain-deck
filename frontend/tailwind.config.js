@@ -12,7 +12,7 @@ module.exports = {
         'mono': ['JetBrains Mono', 'Fira Code', 'monospace'],
       },
       colors: {
-        // WorxTech Brand Colors - Professional Tech Theme
+        // Brand Colors - Professional Tech Theme
         primary: {
           50: '#EEF2FF',
           100: '#E0E7FF',

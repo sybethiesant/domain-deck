@@ -789,7 +789,7 @@ router.post('/2fa/setup', authMiddleware, async (req, res) => {
     const siteResult = await pool.query(
       "SELECT value FROM app_settings WHERE key = 'site_name'"
     );
-    const siteName = siteResult.rows[0]?.value || 'WorxTech';
+    const siteName = siteResult.rows[0]?.value || 'Domain Store';
 
     // Get user email
     const emailResult = await pool.query('SELECT email FROM users WHERE id = $1', [req.user.id]);

@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# WorxTech Host-Level Restore Script
+# Domain Reseller Host-Level Restore Script
 # Run this from the TrueNAS host (not inside containers)
 #
 # Usage: ./restore-host.sh <backup_file> [--yes]
@@ -31,7 +31,7 @@ BACKUP_FILE="$1"
 AUTO_YES="$2"
 
 if [ -z "${BACKUP_FILE}" ]; then
-    echo "WorxTech Restore Script"
+    echo "Application Restore Script"
     echo ""
     echo "Usage: $0 <backup_file> [--yes]"
     echo ""
@@ -183,5 +183,5 @@ log "=========================================="
 log "       RESTORE COMPLETE"
 log "=========================================="
 log ""
-log "Verify the application at: https://worxtech.biz"
+log "Verify the application is running correctly"
 log ""

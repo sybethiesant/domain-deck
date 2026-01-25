@@ -211,7 +211,7 @@ class EnomAPI {
         path: url,
         method: 'GET',
         headers: {
-          'User-Agent': 'WorxTech/1.0'
+          'User-Agent': 'DomainReseller/1.0'
         }
       };
 
@@ -2705,16 +2705,8 @@ class EnomAPI {
       await this.request('SetHosts', requestParams, { mode: options.mode });
       console.log(`[eNom SetHosts] Success for ${sld}.${tld}`);
 
-      // Restore branded nameservers if they were previously set
-      if (currentNS.length >= 2 && currentNS.some(ns => ns.toLowerCase().includes('worxtech'))) {
-        try {
-          console.log(`[eNom] Restoring branded nameservers for ${sld}.${tld}`);
-          await this.updateNameservers(sld, tld, currentNS, { mode: options.mode });
-        } catch (err) {
-          console.log(`[eNom] Could not restore branded NS: ${err.message}`);
-          // Not critical - DNS hosting is enabled and forwarding is set
-        }
-      }
+      // Note: Custom branded nameservers are not used with eNom's DNS hosting
+      // DNS records are managed through eNom's default nameservers
 
       return {
         success: true,

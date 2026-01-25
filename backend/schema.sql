@@ -1,4 +1,4 @@
--- WorxTech Domain Reseller Database Schema
+-- Domain Reseller Database Schema
 -- PostgreSQL
 
 -- Users table

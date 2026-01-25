@@ -1,7 +1,7 @@
 {
-  "name": "worxtech-backend",
+  "name": "domain-reseller-backend",
   "version": "1.0.0",
-  "description": "WorxTech Domain Reseller API",
+  "description": "Domain Reseller API",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

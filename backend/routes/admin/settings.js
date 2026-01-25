@@ -47,10 +47,10 @@ const logoUpload = multer({
 // Default settings schema
 const DEFAULT_SETTINGS = {
   // Site settings
-  site_name: 'WorxTech',
+  site_name: 'Domain Store',
   site_tagline: 'Domain Names Made Simple',
   support_email: 'support@example.com',
-  company_name: 'WorxTech Internet Services LLC',
+  company_name: 'Your Company Name',
   site_url: 'https://example.com',
 
   // Logo settings

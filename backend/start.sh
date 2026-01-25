@@ -1,7 +1,7 @@
 #!/bin/sh
-# WorxTech startup script - starts both backend and frontend
+# Domain Reseller startup script - starts both backend and frontend
 
-echo "Starting WorxTech services..."
+echo "Starting application services..."
 
 # Start backend in background
 cd /app/backend

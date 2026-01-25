@@ -1,6 +1,6 @@
 #!/bin/sh
 # Ensures both backend and frontend are running
-# Run this after container restart: docker exec worxtech-app /app/backend/ensure-services.sh
+# Run this after container restart: docker exec <container-name> /app/backend/ensure-services.sh
 
 # Check if frontend is responding
 if ! curl -s http://localhost:3001 > /dev/null 2>&1; then

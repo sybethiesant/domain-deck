@@ -1,14 +1,15 @@
 #!/bin/sh
-# WorxTech Startup Script
+# Domain Reseller Startup Script
 
-echo "=== WorxTech Startup ==="
+echo "=== Application Startup ==="
 
 # Install global packages if not present
 npm list -g pm2 > /dev/null 2>&1 || npm install -g pm2
 npm list -g serve > /dev/null 2>&1 || npm install -g serve
 
-# Navigate to app directory
-cd /config/workspace/WorxTech
+# Navigate to app directory (set APP_DIR to your installation path)
+APP_DIR="${APP_DIR:-/app}"
+cd "$APP_DIR"
 
 # Install backend dependencies if needed
 if [ ! -d "backend/node_modules" ]; then
@@ -29,11 +30,11 @@ if [ ! -d "frontend/build" ]; then
 fi
 
 # Start services with PM2
-echo "Starting WorxTech services..."
-cd /config/workspace/WorxTech/backend && pm2 start server.js --name worxtech-backend
-cd /config/workspace/WorxTech/frontend && pm2 start "npx serve -s build -l 3001" --name worxtech-frontend
+echo "Starting application services..."
+cd "$APP_DIR/backend" && pm2 start server.js --name domain-api
+cd "$APP_DIR/frontend" && pm2 start "npx serve -s build -l 3001" --name domain-frontend
 
-echo "=== WorxTech Started ==="
+echo "=== Application Started ==="
 echo "Backend: http://localhost:5001"
 echo "Frontend: http://localhost:3001"
 

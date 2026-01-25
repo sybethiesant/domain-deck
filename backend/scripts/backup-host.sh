@@ -1,14 +1,14 @@
 #!/bin/bash
 #
-# WorxTech Host-Level Backup Script
+# Domain Reseller Host-Level Backup Script
 # Run this from the TrueNAS host (not inside containers)
 #
 # Usage: ./backup-host.sh [backup_dir] [keep_count]
-#   backup_dir: Where to store backups (default: same directory as WorxTech app)
+#   backup_dir: Where to store backups (default: same directory as app)
 #   keep_count: Number of backups to retain (default: 7)
 #
 # Setup as cron job on TrueNAS:
-#   0 2 * * * /mnt/.ix-apps/docker/volumes/mealplanner_project-files/_data/WorxTech/backend/scripts/backup-host.sh
+#   0 2 * * * /path/to/app/backend/scripts/backup-host.sh
 #
 # Or run manually:
 #   sudo /path/to/backup-host.sh
@@ -58,7 +58,7 @@ mkdir -p "${BACKUP_DIR}"
 mkdir -p "${TEMP_DIR}"
 mkdir -p "${TEMP_DIR}/secrets"
 
-log "Starting WorxTech backup..."
+log "Starting backup..."
 log "Backup directory: ${BACKUP_DIR}"
 log "Retention: ${KEEP_COUNT} backups"
 
@@ -97,7 +97,7 @@ fi
 # 4. Create manifest
 log "Creating manifest..."
 cat > "${TEMP_DIR}/manifest.txt" << EOF
-WorxTech Backup Manifest
+Backup Manifest
 ========================
 Created: $(date '+%Y-%m-%d %H:%M:%S %Z')
 Host: $(hostname)

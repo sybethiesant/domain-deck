@@ -16,24 +16,24 @@ CREATE TABLE IF NOT EXISTS email_templates (
 
 -- Insert default templates
 INSERT INTO email_templates (template_key, name, description, subject, html_content, variables) VALUES
-('welcome', 'Welcome Email', 'Sent when a new user registers', 'Welcome to WorxTech!',
+('welcome', 'Welcome Email', 'Sent when a new user registers', 'Welcome to {{site_name}}!',
 '<h2>Welcome, {{username}}!</h2>
-<p>Thank you for creating an account with WorxTech. We''re excited to help you find the perfect domain name for your next project.</p>
+<p>Thank you for creating an account with {{site_name}}. We''re excited to help you find the perfect domain name for your next project.</p>
 <div class="highlight">
   <strong>What you can do:</strong>
   <ul>
     <li>Search and register domains</li>
     <li>Manage your domain portfolio</li>
     <li>Configure nameservers and privacy</li>
-    <li>Transfer domains to WorxTech</li>
+    <li>Transfer your domains</li>
   </ul>
 </div>
 <p style="text-align: center;">
-  <a href="https://worxtech.biz" class="btn">Start Searching</a>
+  <a href="{{site_url}}" class="btn">Start Searching</a>
 </p>',
-ARRAY['username']),
+ARRAY['username', 'site_name', 'site_url']),
 
-('password_reset', 'Password Reset', 'Sent when user requests password reset', 'Reset Your Password - WorxTech',
+('password_reset', 'Password Reset', 'Sent when user requests password reset', 'Reset Your Password - {{site_name}}',
 '<h2>Password Reset Request</h2>
 <p>Hi {{username}},</p>
 <p>We received a request to reset your password. Click the button below to create a new password:</p>
@@ -54,7 +54,7 @@ ARRAY['username', 'resetLink', 'expiresIn']),
 {{itemsTable}}
 <p>You''ll receive another email once your domains are ready.</p>
 <p style="text-align: center;">
-  <a href="https://worxtech.biz/orders" class="btn">View Order</a>
+  <a href="{{site_url}}/orders" class="btn">View Order</a>
 </p>',
 ARRAY['username', 'orderNumber', 'itemsTable', 'total']),
 
@@ -74,7 +74,7 @@ ARRAY['username', 'orderNumber', 'itemsTable', 'total']),
   <li>Point your domain to your website</li>
 </ul>
 <p style="text-align: center;">
-  <a href="https://worxtech.biz/dashboard" class="btn btn-success">Manage Domain</a>
+  <a href="{{site_url}}/dashboard" class="btn btn-success">Manage Domain</a>
 </p>',
 ARRAY['username', 'domain', 'expirationDate']),
 
@@ -111,7 +111,7 @@ ARRAY['domain', 'daysLeft', 'expirationDate', 'renewLink']),
 <p><strong>Affected domains:</strong></p>
 {{domainsList}}
 <p>No action is required from you at this time. We''ll follow up within 24 hours.</p>
-<p>If you have questions, please contact support@worxtech.biz</p>',
+<p>If you have questions, please contact {{support_email}}</p>',
 ARRAY['username', 'orderNumber', 'error', 'domainsList']),
 
 ('renewal_confirmation', 'Renewal Confirmation', 'Sent when domain renewal succeeds', 'Domain Renewed: {{domain}}',
@@ -144,7 +144,7 @@ ARRAY['username', 'orderNumber', 'error', 'domainsList']),
   </tr>
 </table>
 <p style="text-align: center;">
-  <a href="https://worxtech.biz/dashboard" class="btn btn-success">View Domain</a>
+  <a href="{{site_url}}/dashboard" class="btn btn-success">View Domain</a>
 </p>',
 ARRAY['domain', 'years', 'newExpiration', 'cost']),
 
@@ -168,7 +168,7 @@ ARRAY['domain', 'years', 'newExpiration', 'cost']),
   <li>Contact support if you need assistance</li>
 </ul>
 <p style="text-align: center;">
-  <a href="https://worxtech.biz/dashboard" class="btn btn-warning">Renew Manually</a>
+  <a href="{{site_url}}/dashboard" class="btn btn-warning">Renew Manually</a>
 </p>',
 ARRAY['domain', 'error', 'expirationDate']),
 
@@ -187,7 +187,7 @@ ARRAY['domain', 'error', 'expirationDate']),
 </ol>
 <p><strong>Important:</strong> Make sure to check your spam folder for the authorization email.</p>
 <p style="text-align: center;">
-  <a href="https://worxtech.biz/orders" class="btn">Track Transfer</a>
+  <a href="{{site_url}}/orders" class="btn">Track Transfer</a>
 </p>',
 ARRAY['username', 'domain', 'authEmail']),
 
@@ -195,15 +195,15 @@ ARRAY['username', 'domain', 'authEmail']),
 '<h2><span class="status-badge status-success">Complete</span></h2>
 <h2>Domain Transfer Successful!</h2>
 <p>Hi {{username}},</p>
-<p>Your domain has been successfully transferred to WorxTech:</p>
+<p>Your domain has been successfully transferred:</p>
 <div class="highlight" style="text-align: center;">
   <span class="domain-name">{{domain}}</span>
 </div>
-<p>You can now manage your domain from your WorxTech dashboard.</p>
+<p>You can now manage your domain from your dashboard.</p>
 <p style="text-align: center;">
-  <a href="https://worxtech.biz/dashboard" class="btn btn-success">Manage Domain</a>
+  <a href="{{site_url}}/dashboard" class="btn btn-success">Manage Domain</a>
 </p>',
-ARRAY['username', 'domain']),
+ARRAY['username', 'domain', 'site_url']),
 
 ('admin_new_order', 'Admin: New Order', 'Sent to admin when new order received', '[Admin] New Order: {{orderNumber}}',
 '<h2>New Order Received</h2>
@@ -214,7 +214,7 @@ ARRAY['username', 'domain']),
   <strong>Total:</strong> ${{total}}
 </div>
 <p style="text-align: center;">
-  <a href="https://worxtech.biz/admin/orders" class="btn">View in Admin</a>
+  <a href="{{site_url}}/admin/orders" class="btn">View in Admin</a>
 </p>',
 ARRAY['orderNumber', 'customerEmail', 'itemCount', 'total']),
 
@@ -229,7 +229,7 @@ ARRAY['orderNumber', 'customerEmail', 'itemCount', 'total']),
 </div>
 <p>Please investigate and retry or contact the customer.</p>
 <p style="text-align: center;">
-  <a href="https://worxtech.biz/admin/orders" class="btn">View in Admin</a>
+  <a href="{{site_url}}/admin/orders" class="btn">View in Admin</a>
 </p>',
 ARRAY['orderNumber', 'customerEmail', 'itemCount', 'error'])
 
@@ -239,8 +239,8 @@ ON CONFLICT (template_key) DO NOTHING;
 INSERT INTO app_settings (key, value) VALUES
 ('smtp_host', 'smtp.gmail.com'),
 ('smtp_port', '587'),
-('smtp_user', 'support@worxtech.biz'),
-('smtp_from_name', 'WorxTech'),
+('smtp_user', 'support@example.com'),
+('smtp_from_name', 'Domain Store'),
 ('smtp_enabled', 'true')
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 

@@ -342,7 +342,7 @@ class JobScheduler {
 
         // Only send at specific intervals: 30, 14, 7, 3, 1 days
         if ([30, 14, 7, 3, 1].includes(daysLeft)) {
-          const siteUrl = process.env.FRONTEND_URL || 'https://worxtech.biz';
+          const siteUrl = process.env.FRONTEND_URL || 'https://example.com';
           await email.sendDomainExpiring(domain.email, {
             domain: domain.domain_name,
             expirationDate: new Date(domain.expiration_date).toLocaleDateString(),

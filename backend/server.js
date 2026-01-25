@@ -371,9 +371,9 @@ app.get('/api/site-config', async (req, res) => {
       )`
     );
     const config = {
-      site_name: 'WorxTech',
+      site_name: 'Domain Store',
       site_tagline: 'Domain Names Made Simple',
-      company_name: 'WorxTech Internet Services LLC',
+      company_name: 'Your Company Name',
       support_email: 'support@example.com',
       site_url: 'https://example.com',
       default_theme: 'dark'
@@ -451,7 +451,7 @@ app.use((err, req, res, next) => {
 // ============ START SERVER ============
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`DEBUG SERVER STARTING - WorxTech API running on port ${PORT}`);
+  console.log(`Server starting - Domain Reseller API running on port ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`eNom Environment: ${process.env.ENOM_ENV || 'test'}`);
 

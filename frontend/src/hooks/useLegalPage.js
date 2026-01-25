@@ -10,8 +10,8 @@ export function useLegalPage(pageKey) {
   const [loading, setLoading] = useState(true);
   const [customContent, setCustomContent] = useState(null);
   const [siteConfig, setSiteConfig] = useState({
-    site_name: 'WorxTech',
-    company_name: 'WorxTech Internet Services LLC',
+    site_name: 'Domain Store',
+    company_name: 'Your Company Name',
     support_email: 'support@example.com',
     site_url: 'https://example.com'
   });

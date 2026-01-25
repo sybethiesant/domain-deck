@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# WorxTech Restore Script
+# Domain Reseller Restore Script
 # Restores from a backup created by backup.sh
 #
 # Usage: ./restore.sh <backup_file> [--yes]
@@ -44,7 +44,7 @@ DB_NAME="${DB_NAME:-worxtech}"
 DB_USER="${DB_USER:-worxtech}"
 DB_PASSWORD="${DB_PASSWORD:-}"
 
-log "WorxTech Restore"
+log "Application Restore"
 log "================"
 log "Backup file: ${BACKUP_FILE}"
 log "Database: ${DB_NAME}@${DB_HOST}"

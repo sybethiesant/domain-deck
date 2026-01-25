@@ -847,7 +847,7 @@ function AdminSettings() {
       if (res.ok) {
         toast.success(`Imported ${data.domains.imported} domains for ${data.user.email}`);
         setSubAccounts(prev => prev.map(sa =>
-          sa.loginId === accountId ? { ...sa, imported: true, worxtechUserId: data.user.id, worxtechUsername: data.user.username } : sa
+          sa.loginId === accountId ? { ...sa, imported: true, localUserId: data.user.id, localUsername: data.user.username } : sa
         ));
       } else {
         toast.error(data.error || 'Failed to import sub-account');
@@ -959,7 +959,7 @@ function AdminSettings() {
                       value={settings.site_name || ''}
                       onChange={(e) => handleChange('site_name', e.target.value)}
                       className="input w-full"
-                      placeholder="WorxTech"
+                      placeholder="Your Site Name"
                     />
                   </div>
                   <div>
@@ -2342,7 +2342,7 @@ function AdminSettings() {
               <div>
                 <h3 className="font-semibold text-slate-900 dark:text-slate-100 mb-2">Sub-Account Migration</h3>
                 <p className="text-sm text-slate-500 mb-4">
-                  Import sub-accounts from eNom and convert them to WorxTech user accounts.
+                  Import sub-accounts from eNom and convert them to local user accounts.
                 </p>
                 <button
                   onClick={fetchSubAccounts}
@@ -2409,11 +2409,11 @@ function AdminSettings() {
                                 </button>
                               ) : (
                                 <button
-                                  onClick={() => sendPasswordResetToUser(sa.worxtechUserId)}
-                                  disabled={sendingResetEmail === sa.worxtechUserId}
+                                  onClick={() => sendPasswordResetToUser(sa.localUserId)}
+                                  disabled={sendingResetEmail === sa.localUserId}
                                   className="btn-secondary text-xs py-1"
                                 >
-                                  {sendingResetEmail === sa.worxtechUserId ? (
+                                  {sendingResetEmail === sa.localUserId ? (
                                     <Loader2 className="w-3 h-3 animate-spin" />
                                   ) : (
                                     <>

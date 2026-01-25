@@ -132,7 +132,7 @@ function Transfer() {
             Transfer Your Domain
           </h1>
           <p className="text-slate-600 dark:text-slate-400 mt-2">
-            Move your domain to WorxTech for better prices and management
+            Transfer your domain for better prices and management
           </p>
         </div>
 

@@ -10,9 +10,9 @@ INSERT INTO app_settings (key, value, description) VALUES
   ('default_nameservers', '["dns1.name-services.com","dns2.name-services.com","dns3.name-services.com","dns4.name-services.com"]', 'Default nameservers for new domain registrations (JSON array)'),
 
   -- Site branding
-  ('company_name', 'WorxTech Internet Services LLC', 'Company legal name for footer and emails'),
-  ('support_email', 'support@worxtech.biz', 'Support email address'),
-  ('site_url', 'https://worxtech.biz', 'Site base URL'),
+  ('company_name', 'Your Company Name', 'Company legal name for footer and emails'),
+  ('support_email', 'support@example.com', 'Support email address'),
+  ('site_url', 'https://example.com', 'Site base URL'),
 
   -- Email branding
   ('email_logo_url', '', 'Logo URL for emails (leave empty to use site logo)'),

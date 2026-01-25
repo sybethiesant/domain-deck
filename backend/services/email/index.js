@@ -17,7 +17,7 @@ class EmailService {
     this.transporter = null;
     this.pool = null;
     this.from = process.env.SMTP_FROM || 'support@example.com';
-    this.fromName = process.env.SMTP_FROM_NAME || 'WorxTech';
+    this.fromName = process.env.SMTP_FROM_NAME || 'Domain Store';
     this.templateCache = new Map();
     this.cacheExpiry = 5 * 60 * 1000; // 5 minutes cache
 
@@ -78,8 +78,8 @@ class EmailService {
 
     // Default branding
     const defaults = {
-      site_name: 'WorxTech',
-      company_name: 'WorxTech Internet Services LLC',
+      site_name: 'Domain Store',
+      company_name: 'Your Company Name',
       support_email: 'support@example.com',
       site_url: process.env.FRONTEND_URL || 'https://example.com',
       email_logo_url: null,
@@ -249,8 +249,8 @@ class EmailService {
    */
   getBaseWrapperSync(content, customCss = '') {
     const branding = brandingCache || {
-      site_name: 'WorxTech',
-      company_name: 'WorxTech Internet Services LLC',
+      site_name: 'Domain Store',
+      company_name: 'Your Company Name',
       support_email: 'support@example.com',
       email_header_color: '#4f46e5',
       email_header_gradient_end: '#6366f1',

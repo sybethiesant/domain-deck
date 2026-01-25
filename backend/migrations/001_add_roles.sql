@@ -1,5 +1,4 @@
 -- Migration: Add multi-tier role system
--- WorxTech Internet Services LLC
 
 -- Add role columns to users table
 ALTER TABLE users ADD COLUMN IF NOT EXISTS role_level INTEGER DEFAULT 0;

@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# WorxTech Backup Script
+# Domain Reseller Backup Script
 # Creates rolling backups of database and critical files
 #
 # Usage: ./backup.sh [backup_dir] [keep_count]
@@ -48,7 +48,7 @@ error() {
 mkdir -p "${BACKUP_DIR}"
 mkdir -p "${TEMP_DIR}"
 
-log "Starting WorxTech backup..."
+log "Starting Application backup..."
 log "Backup directory: ${BACKUP_DIR}"
 log "Retention count: ${KEEP_COUNT}"
 
@@ -79,7 +79,7 @@ else
             # psql works, create a SQL dump using psql commands
             log "  (creating logical dump via psql)"
             {
-                echo "-- WorxTech Database Backup"
+                echo "-- Application Database Backup"
                 echo "-- Created: $(date)"
                 echo ""
                 # Get list of tables and dump each
@@ -134,7 +134,7 @@ fi
 # 4. Create manifest
 log "Creating backup manifest..."
 cat > "${TEMP_DIR}/manifest.txt" << EOF
-WorxTech Backup Manifest
+Backup Manifest
 ========================
 Created: $(date '+%Y-%m-%d %H:%M:%S %Z')
 Hostname: $(hostname)
