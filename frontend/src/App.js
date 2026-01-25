@@ -149,6 +149,10 @@ function AppContent() {
         if (res.ok) {
           const config = await res.json();
           setSiteConfig(config);
+          // Update document title with site name
+          if (config.site_name) {
+            document.title = config.site_name;
+          }
           // Apply default theme if user hasn't set a preference
           const savedTheme = localStorage.getItem('theme');
           if (!savedTheme && config.default_theme) {
