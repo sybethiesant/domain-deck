@@ -91,10 +91,13 @@ function rateLimit(type = 'general') {
 // ============ CORE MIDDLEWARE ============
 
 // CORS configuration - restrict to allowed origins
+const allowedOrigins = process.env.CORS_ORIGINS
+  ? process.env.CORS_ORIGINS.split(',').map(o => o.trim())
+  : process.env.NODE_ENV === 'production'
+    ? [process.env.FRONTEND_URL || 'https://worxtech.biz', `https://www.${(process.env.FRONTEND_URL || 'https://worxtech.biz').replace(/^https?:\/\//, '')}`]
+    : ['http://localhost:3000', 'http://localhost:3001'];
 const corsOptions = {
-  origin: process.env.NODE_ENV === 'production'
-    ? ['https://example.com', 'https://www.example.com']
-    : ['http://localhost:3000', 'http://localhost:3001'],
+  origin: allowedOrigins,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
@@ -454,12 +457,6 @@ app.get('/api/legal/:pageKey', async (req, res) => {
 });
 
 // ============ ERROR HANDLING ============
-
-// DEBUG: Log unmatched routes
-app.use((req, res, next) => {
-  require("fs").appendFileSync("/tmp/debug.log", new Date().toISOString() + " " + req.method + " " + req.path + "\n");
-  next();
-});
 
 // 404 handler
 app.use((req, res) => {

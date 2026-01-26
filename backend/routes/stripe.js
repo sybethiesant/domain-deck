@@ -192,7 +192,7 @@ router.post('/privacy-purchase', authMiddleware, async (req, res) => {
     });
   } catch (error) {
     console.error('Privacy purchase error:', error);
-    res.status(500).json({ error: 'Failed to initialize payment: ' + error.message });
+    res.status(500).json({ error: 'Failed to initialize payment. Please try again.' });
   }
 });
 
@@ -265,7 +265,7 @@ async function savePaymentMethodIfNew(pool, paymentIntent, userId) {
 
     // Get payment method details from Stripe
     const pm = await stripeService.retrievePaymentMethod(pmId);
-    if (pm.type !== 'card') return;
+    if (!pm || pm.type !== 'card' || !pm.card) return;
 
     // Check if user has any saved methods
     const methodCount = await pool.query(

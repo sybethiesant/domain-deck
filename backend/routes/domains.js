@@ -804,7 +804,7 @@ router.put('/:id/privacy', authMiddleware, async (req, res) => {
       const privacyStatus = await enom.getPrivacyStatus(sld, tld, { mode: domain.enomMode });
 
       // If privacy will incur a charge and force is not set, return warning
-      if (privacyStatus.willCharge && !force) {
+      if (privacyStatus && privacyStatus.willCharge && !force) {
         return res.status(402).json({
           error: 'Privacy service requires payment',
           code: 'PAYMENT_REQUIRED',

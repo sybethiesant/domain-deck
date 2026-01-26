@@ -7,7 +7,7 @@
 const SITE_NAME = process.env.SITE_NAME || 'Domain Store';
 const COMPANY_NAME = process.env.COMPANY_NAME || 'Your Company';
 const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || 'support@example.com';
-const SITE_URL = process.env.SITE_URL || 'https://example.com';
+const SITE_URL = process.env.SITE_URL || process.env.FRONTEND_URL || 'https://worxtech.biz';
 
 // Base wrapper for all emails
 const baseWrapper = (content) => `
