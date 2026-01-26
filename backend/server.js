@@ -490,7 +490,7 @@ app.listen(PORT, '0.0.0.0', async () => {
       );
       if (modeResult.rows.length > 0) {
         const dbTestMode = modeResult.rows[0].value === 'true';
-        const newMode = enom.setMode(dbTestMode ? 'test' : 'production');
+        const newMode = enomService.setMode(dbTestMode ? 'test' : 'production');
         console.log(`eNom mode updated from database: ${newMode.mode}`);
       }
     } catch (err) {
