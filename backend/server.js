@@ -482,20 +482,30 @@ app.listen(PORT, '0.0.0.0', async () => {
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
 
   // Read eNom mode from database setting (overrides .env default)
-  try {
-    const modeResult = await pool.query(
-      "SELECT value FROM app_settings WHERE key = 'enom_test_mode'"
-    );
-    if (modeResult.rows.length > 0) {
-      const dbTestMode = modeResult.rows[0].value === 'true';
-      const newMode = enom.setMode(dbTestMode ? 'test' : 'production');
-      console.log(`eNom Environment: ${newMode.mode} (from database setting)`);
-    } else {
-      console.log(`eNom Environment: ${process.env.ENOM_ENV || 'test'} (from env default)`);
+  // Retry up to 3 times if database not ready
+  const loadEnomModeFromDb = async (retries = 3) => {
+    for (let i = 0; i < retries; i++) {
+      try {
+        const modeResult = await pool.query(
+          "SELECT value FROM app_settings WHERE key = 'enom_test_mode'"
+        );
+        if (modeResult.rows.length > 0) {
+          const dbTestMode = modeResult.rows[0].value === 'true';
+          const newMode = enom.setMode(dbTestMode ? 'test' : 'production');
+          console.log(`eNom Environment: ${newMode.mode} (from database setting)`);
+          return;
+        }
+        break; // Query succeeded but no setting found
+      } catch (err) {
+        if (i < retries - 1) {
+          await new Promise(r => setTimeout(r, 500)); // Wait 500ms before retry
+          continue;
+        }
+      }
     }
-  } catch (err) {
-    console.log(`eNom Environment: ${process.env.ENOM_ENV || 'test'} (database read failed)`);
-  }
+    console.log(`eNom Environment: ${process.env.ENOM_ENV || 'test'} (from env default)`);
+  };
+  await loadEnomModeFromDb();
 
   // Initialize job scheduler with database pool
   jobScheduler.init(pool);
