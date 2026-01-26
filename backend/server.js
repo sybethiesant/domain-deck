@@ -477,10 +477,25 @@ app.use((err, req, res, next) => {
 
 // ============ START SERVER ============
 
-app.listen(PORT, '0.0.0.0', () => {
+app.listen(PORT, '0.0.0.0', async () => {
   console.log(`Server starting - Domain Reseller API running on port ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`eNom Environment: ${process.env.ENOM_ENV || 'test'}`);
+
+  // Read eNom mode from database setting (overrides .env default)
+  try {
+    const modeResult = await pool.query(
+      "SELECT value FROM app_settings WHERE key = 'enom_test_mode'"
+    );
+    if (modeResult.rows.length > 0) {
+      const dbTestMode = modeResult.rows[0].value === 'true';
+      const newMode = enom.setMode(dbTestMode ? 'test' : 'production');
+      console.log(`eNom Environment: ${newMode.mode} (from database setting)`);
+    } else {
+      console.log(`eNom Environment: ${process.env.ENOM_ENV || 'test'} (from env default)`);
+    }
+  } catch (err) {
+    console.log(`eNom Environment: ${process.env.ENOM_ENV || 'test'} (database read failed)`);
+  }
 
   // Initialize job scheduler with database pool
   jobScheduler.init(pool);
