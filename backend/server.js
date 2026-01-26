@@ -326,7 +326,7 @@ app.get('/api/health', async (req, res) => {
     uptime: process.uptime(),
     memory: process.memoryUsage(),
     database: 'unknown',
-    enomEnv: process.env.ENOM_ENV || 'test',
+    enomEnv: enomService.getMode().mode,
     jobScheduler: jobScheduler.running ? 'running' : 'stopped'
   };
 
