@@ -1,0 +1,17 @@
+# Normalize line endings: text files commit as LF regardless of platform.
+# Without this, core.autocrlf differences made ~70 files show as modified
+# with no real change, hiding actual diffs.
+* text=auto
+
+# Shell scripts must stay LF — CRLF breaks them on the Alpine container.
+*.sh text eol=lf
+
+# Binary assets
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.tar.gz binary
