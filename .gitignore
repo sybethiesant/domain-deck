@@ -58,3 +58,12 @@ backend/scripts/store-card.js
 # Uploaded files (user content)
 backend/uploads/
 backups/
+
+# Local tooling
+.claude/
+
+# Windows reserved-name artifact (created by mis-redirected commands)
+nul
+
+# Accidental nested clone — must never be committed (held live secrets)
+/WorxTech/

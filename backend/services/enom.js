@@ -550,6 +550,17 @@ class EnomAPI {
     try {
       const response = await this.request('Purchase', requestParams);
 
+      // ErrCount only catches transport/validation errors. A real registration
+      // is confirmed by RRPCode 200 — a non-200 RRPCode (or no RRPCode and no
+      // OrderID) means the registry did NOT register the domain, and treating
+      // it as success charges the customer for nothing. Throwing here falls
+      // into the catch below, which double-checks against GetDomainInfo before
+      // giving up.
+      const rrpCode = response.RRPCode !== undefined && response.RRPCode !== '' ? String(response.RRPCode) : null;
+      if ((rrpCode && rrpCode !== '200') || (!rrpCode && !response.OrderID)) {
+        throw new Error(`eNom did not confirm registration (RRPCode ${rrpCode || 'missing'}: ${response.RRPText || 'no detail'})`);
+      }
+
       return {
         success: true,
         orderId: response.OrderID,

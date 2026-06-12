@@ -43,6 +43,13 @@ async function getLockoutDuration(pool) {
 function generateVerificationToken() {
   return crypto.randomBytes(32).toString('hex');
 }
+
+// Tokens are stored as SHA-256 digests so a database leak (or a leaked
+// backup) doesn't hand out live password-reset/verification links. The raw
+// token only ever exists in the email sent to the user.
+function hashToken(token) {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
 // Password strength validation - security fix
 function validatePassword(password) {
   if (!password || password.length < 12) {
@@ -162,7 +169,7 @@ router.post('/register', async (req, res) => {
         company_name || null, address_line1 || null, address_line2 || null,
         city || null, state || null, postal_code || null, country || 'US',
         !verificationRequired, // email_verified: true if verification not required
-        verificationToken,
+        verificationToken ? hashToken(verificationToken) : null,
         verificationExpires
       ]
     );
@@ -370,11 +377,11 @@ router.post('/verify-email', async (req, res) => {
   }
 
   try {
-    // Find user with this token
+    // Find user with this token (tokens are stored hashed)
     const result = await pool.query(
       `SELECT id, username, email, verification_token_expires, email_verified
        FROM users WHERE verification_token = $1`,
-      [token]
+      [hashToken(token)]
     );
 
     if (result.rows.length === 0) {
@@ -465,7 +472,7 @@ router.post('/resend-verification', async (req, res) => {
         verification_token = $1,
         verification_token_expires = $2
        WHERE id = $3`,
-      [verificationToken, verificationExpires, user.id]
+      [hashToken(verificationToken), verificationExpires, user.id]
     );
 
     // Send verification email
@@ -635,13 +642,13 @@ router.post('/forgot-password', async (req, res) => {
     const resetToken = crypto.randomBytes(32).toString('hex');
     const resetExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
 
-    // Store token in database
+    // Store token in database (hashed — see hashToken)
     await pool.query(
       `UPDATE users SET
         password_reset_token = $1,
         password_reset_expires = $2
        WHERE id = $3`,
-      [resetToken, resetExpires, user.id]
+      [hashToken(resetToken), resetExpires, user.id]
     );
 
     // Send password reset email
@@ -679,11 +686,11 @@ router.post('/reset-password', async (req, res) => {
   }
 
   try {
-    // Find user with this reset token
+    // Find user with this reset token (tokens are stored hashed)
     const result = await pool.query(
       `SELECT id, username, email, password_reset_expires, password_needs_reset
        FROM users WHERE password_reset_token = $1`,
-      [token]
+      [hashToken(token)]
     );
 
     if (result.rows.length === 0) {
@@ -745,7 +752,7 @@ router.get('/verify-reset-token', async (req, res) => {
     const result = await pool.query(
       `SELECT id, email, password_reset_expires
        FROM users WHERE password_reset_token = $1`,
-      [token]
+      [hashToken(token)]
     );
 
     if (result.rows.length === 0) {
@@ -967,6 +974,17 @@ router.post('/2fa/authenticate', async (req, res) => {
 
     const user = userResult.rows[0];
 
+    // Enforce account lockout here too — without this check, an attacker who
+    // has the password could brute-force the 6-digit TOTP space unthrottled
+    // while the password endpoint sits locked.
+    if (user.lockout_until && new Date(user.lockout_until) > new Date()) {
+      const remainingMinutes = Math.ceil((new Date(user.lockout_until) - new Date()) / 60000);
+      return res.status(429).json({
+        error: 'Account temporarily locked due to too many failed attempts',
+        minutes_remaining: remainingMinutes
+      });
+    }
+
     // First try TOTP code
     let isValid = authenticator.verify({ token: code, secret: user.totp_secret });
 
@@ -989,6 +1007,24 @@ router.post('/2fa/authenticate', async (req, res) => {
     }
 
     if (!isValid) {
+      // Failed 2FA attempts count toward the same lockout as failed passwords.
+      const attempts = (user.failed_login_attempts || 0) + 1;
+      let lockoutUntil = null;
+      let lockoutMinutes = null;
+      if (attempts >= AUTH.LOCKOUT_ATTEMPTS) {
+        lockoutMinutes = await getLockoutDuration(pool);
+        lockoutUntil = new Date(Date.now() + lockoutMinutes * 60 * 1000);
+      }
+      await pool.query(
+        'UPDATE users SET failed_login_attempts = $1, lockout_until = $2 WHERE id = $3',
+        [attempts, lockoutUntil, user.id]
+      );
+      if (lockoutUntil) {
+        return res.status(429).json({
+          error: 'Account temporarily locked due to too many failed attempts',
+          minutes_remaining: lockoutMinutes
+        });
+      }
       return res.status(401).json({ error: 'Invalid verification code' });
     }
 

@@ -223,6 +223,30 @@ router.post('/webhook', async (req, res) => {
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
+  // Idempotency: Stripe delivers events at-least-once and redelivers on any
+  // non-2xx response. Claim the event id before processing so a redelivered
+  // event is acknowledged without re-running provisioning (which double-
+  // registers domains and double-charges the reseller balance). The claim is
+  // released on error so a genuinely failed event can be retried by Stripe;
+  // per-item status checks in handlePaymentSuccess keep that retry safe.
+  let eventClaimed = false;
+  try {
+    const claim = await pool.query(
+      `INSERT INTO processed_webhook_events (event_id, event_type)
+       VALUES ($1, $2) ON CONFLICT (event_id) DO NOTHING RETURNING event_id`,
+      [event.id, event.type]
+    );
+    eventClaimed = claim.rows.length > 0;
+    if (!eventClaimed) {
+      console.log(`Duplicate webhook delivery acknowledged without reprocessing: ${event.id} (${event.type})`);
+      return res.json({ received: true, duplicate: true });
+    }
+  } catch (claimError) {
+    // If the claim itself fails (e.g. migration not yet applied), continue —
+    // the per-order/per-item guards below still prevent double-provisioning.
+    console.error('Webhook idempotency claim failed:', claimError.message);
+  }
+
   try {
     switch (event.type) {
       case 'payment_intent.succeeded':
@@ -244,6 +268,11 @@ router.post('/webhook', async (req, res) => {
     res.json({ received: true });
   } catch (error) {
     console.error('Webhook processing error:', error);
+    if (eventClaimed) {
+      await pool
+        .query('DELETE FROM processed_webhook_events WHERE event_id = $1', [event.id])
+        .catch((e) => console.error('Failed to release webhook claim:', e.message));
+    }
     res.status(500).json({ error: 'Webhook processing failed' });
   }
 });
@@ -314,16 +343,9 @@ async function handlePaymentSuccess(pool, paymentIntent) {
     return;
   }
 
-  // Update order payment status
   const orderResult = await pool.query(
-    `UPDATE orders
-     SET payment_status = 'paid',
-         stripe_charge_id = $1,
-         status = 'processing',
-         updated_at = CURRENT_TIMESTAMP
-     WHERE stripe_payment_intent_id = $2
-     RETURNING *`,
-    [paymentIntent.latest_charge, paymentIntentId]
+    'SELECT * FROM orders WHERE stripe_payment_intent_id = $1',
+    [paymentIntentId]
   );
 
   if (orderResult.rows.length === 0) {
@@ -332,7 +354,42 @@ async function handlePaymentSuccess(pool, paymentIntent) {
   }
 
   const order = orderResult.rows[0];
+
+  // Already fully provisioned (e.g. redelivered event) — nothing to do.
+  if (order.status === 'completed') {
+    console.log(`Order ${order.order_number} already completed — skipping reprocessing`);
+    return;
+  }
+
   console.log('Processing order:', order.order_number);
+
+  // Verify the amount actually paid matches the order total before provisioning.
+  // Checkout stores a client-supplied payment_intent_id and this webhook matches
+  // only on that id — so without this check a large order could be paired with a
+  // smaller payment intent (e.g. a privacy-purchase PI) and still be fully
+  // provisioned (pay-less-than-owed). On underpayment, do not provision; flag
+  // the order for staff review.
+  const expectedCents = Math.round(parseFloat(order.total) * 100);
+  if (typeof paymentIntent.amount === 'number' && paymentIntent.amount < expectedCents) {
+    console.error(`[stripe] Amount mismatch for order ${order.order_number}: paid ${paymentIntent.amount}c < expected ${expectedCents}c — refusing to provision`);
+    await pool.query(
+      `INSERT INTO activity_logs (user_id, action, entity_type, entity_id, details)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [order.user_id, 'order_amount_mismatch', 'order', order.id,
+       JSON.stringify({ paidCents: paymentIntent.amount, expectedCents, paymentIntentId, requiresManualResolution: true })]
+    );
+    return;
+  }
+
+  await pool.query(
+    `UPDATE orders
+     SET payment_status = 'paid',
+         stripe_charge_id = $1,
+         status = 'processing',
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = $2`,
+    [paymentIntent.latest_charge, order.id]
+  );
 
   // Get order items
   const itemsResult = await pool.query(
@@ -346,10 +403,19 @@ async function handlePaymentSuccess(pool, paymentIntent) {
   // Get extended attributes for ccTLDs (e.g., .in requires Aadhaar/PAN)
   const storedExtendedAttributes = order.extended_attributes || {};
 
-  // Validate that registrant contact was provided during checkout
+  // Validate that registrant contact was provided during checkout. Do NOT
+  // throw: the customer has already been charged, and a thrown error here
+  // makes Stripe redeliver the event in a 500-retry loop. Flag for staff and
+  // let the admin process-order endpoint re-run fulfillment once fixed.
   if (!storedContact || !storedContact.first_name || !storedContact.email || !storedContact.phone) {
     console.error('Order missing valid registrant contact:', order.order_number);
-    throw new Error('Order is missing required registrant contact information');
+    await pool.query(
+      `INSERT INTO activity_logs (user_id, action, entity_type, entity_id, details)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [order.user_id, 'order_fulfillment_blocked', 'order', order.id,
+       JSON.stringify({ reason: 'Missing registrant contact', paymentIntentId, requiresManualResolution: true })]
+    );
+    return;
   }
 
   // Format contact for eNom API
@@ -372,6 +438,14 @@ async function handlePaymentSuccess(pool, paymentIntent) {
   const results = [];
 
   for (const item of itemsResult.rows) {
+    // Idempotency: never re-provision an item that already completed (a
+    // retried webhook or manual re-process would otherwise re-register and
+    // re-charge the reseller balance for it).
+    if (item.status === 'completed') {
+      results.push({ itemId: item.id, success: true, skipped: true });
+      continue;
+    }
+
     try {
       let result;
 
@@ -426,6 +500,22 @@ async function handlePaymentSuccess(pool, paymentIntent) {
           const autoRenew = order.auto_renew !== false; // Default to true if not set
           const paymentMethodId = autoRenew ? paymentIntent.payment_method : null;
 
+          // Prefer the registry's real expiration date over a locally computed
+          // estimate; the estimate is only a placeholder until domainSync
+          // corrects it.
+          let expirationDate = result.expirationDate;
+          if (!expirationDate) {
+            try {
+              const domainInfo = await enom.getDomainInfo(item.domain_name, item.tld);
+              expirationDate = domainInfo?.expirationDate;
+            } catch (e) {
+              console.error(`Could not fetch expiration for ${item.domain_name}.${item.tld}:`, e.message);
+            }
+          }
+          if (!expirationDate) {
+            expirationDate = new Date(Date.now() + (item.years || 1) * 365 * 24 * 60 * 60 * 1000);
+          }
+
           await pool.query(
             `INSERT INTO domains (
               user_id, domain_name, tld, status, expiration_date,
@@ -445,7 +535,7 @@ async function handlePaymentSuccess(pool, paymentIntent) {
               item.domain_name,
               item.tld,
               'active',
-              result.expirationDate || new Date(Date.now() + (item.years || 1) * 365 * 24 * 60 * 60 * 1000),
+              expirationDate,
               autoRenew,
               paymentMethodId,
               result.orderId,
@@ -577,22 +667,29 @@ async function handlePaymentSuccess(pool, paymentIntent) {
         }
       }
 
-      // Update order item status
+      // An item is only 'completed' when eNom actually confirmed the
+      // operation. Previously every non-thrown response was marked completed,
+      // so a customer could be charged with nothing delivered and no staff
+      // visibility.
+      const succeeded = !!(result && result.success);
+      if (!succeeded) allSucceeded = false;
+
       await pool.query(
         `UPDATE order_items SET
           status = $1,
           enom_order_id = $2,
           processed_at = CURRENT_TIMESTAMP,
-          error_message = NULL
-         WHERE id = $3`,
+          error_message = $3
+         WHERE id = $4`,
         [
-          'completed',
+          succeeded ? 'completed' : 'failed',
           result?.orderId || result?.transferOrderId || null,
+          succeeded ? null : (result?.error || result?.message || 'Provider did not confirm success'),
           item.id
         ]
       );
 
-      results.push({ itemId: item.id, success: true, result });
+      results.push({ itemId: item.id, success: succeeded, result });
 
     } catch (error) {
       console.error(`Error processing item ${item.id}:`, error.message);
@@ -660,7 +757,9 @@ async function handlePaymentSuccess(pool, paymentIntent) {
       console.log(`Order confirmation email sent to ${customerEmail}`);
 
       // Send domain registered emails for each successfully registered domain
+      const succeededItemIds = new Set(results.filter(r => r.success).map(r => r.itemId));
       for (const item of itemsResult.rows) {
+        if (!succeededItemIds.has(item.id)) continue;
         if (item.item_type === 'register') {
           const domainName = `${item.domain_name}.${item.tld}`;
           const expDate = new Date(Date.now() + (item.years || 1) * 365 * 24 * 60 * 60 * 1000);
@@ -791,10 +890,40 @@ async function handleRefund(pool, charge) {
  */
 async function handlePrivacyPurchaseSuccess(pool, paymentIntent) {
   const { id: paymentIntentId, metadata, amount } = paymentIntent;
+  const { domainId, domainName, sld, tld, userId } = metadata || {};
 
-  console.log('Processing privacy purchase:', paymentIntentId, 'for domain:', metadata.domainName);
+  // Guard the metadata before dereferencing it — a malformed or manually
+  // created intent would otherwise crash the webhook into a 500-retry storm.
+  if (!domainId || !sld || !tld) {
+    console.error(`Privacy purchase ${paymentIntentId} missing required metadata — flagging for manual resolution`);
+    await pool.query(
+      `INSERT INTO activity_logs (user_id, action, entity_type, entity_id, details)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [userId || null, 'privacy_purchase_failed', 'domain', domainId || null,
+       JSON.stringify({ error: 'Missing payment intent metadata', paymentIntentId, requiresManualResolution: true })]
+    );
+    return;
+  }
 
-  const { domainId, domainName, sld, tld, userId } = metadata;
+  console.log('Processing privacy purchase:', paymentIntentId, 'for domain:', domainName);
+
+  // Idempotency: skip if this payment intent was already fulfilled, or the
+  // domain already has privacy — a redelivered event must not buy ID Protect
+  // from eNom a second time.
+  const alreadyFulfilled = await pool.query(
+    `SELECT 1 FROM balance_transactions
+     WHERE stripe_payment_intent_id = $1 AND transaction_type = 'privacy_purchase'`,
+    [paymentIntentId]
+  );
+  if (alreadyFulfilled.rows.length > 0) {
+    console.log(`Privacy purchase ${paymentIntentId} already fulfilled — skipping`);
+    return;
+  }
+  const domainCheck = await pool.query('SELECT privacy_enabled FROM domains WHERE id = $1', [domainId]);
+  if (domainCheck.rows[0]?.privacy_enabled) {
+    console.log(`Domain ${domainName} already has privacy enabled — skipping repurchase`);
+    return;
+  }
 
   try {
     // Purchase privacy via eNom (this buys AND enables ID Protect)
@@ -862,7 +991,10 @@ async function handlePrivacyPurchaseSuccess(pool, paymentIntent) {
         })
       ]
     );
-    throw error;
+    // Deliberately do NOT re-throw. The customer's payment succeeded; a
+    // re-thrown error made the webhook return 500, Stripe redelivered, and
+    // privacy was purchased from eNom a second time. The activity log above
+    // is the staff signal to resolve manually (refund or enable privacy).
   }
 }
 
@@ -1096,18 +1228,27 @@ async function chargeForAutoRenewal(pool, userId, amount, domainName, paymentMet
   }
 }
 
-// Manual trigger for testing (admin only)
+// Re-run fulfillment for an order whose payment already succeeded (admin only).
+// This is a retry tool, not a way to provision unpaid orders: it requires a
+// real, succeeded Stripe payment intent and passes the REAL intent through so
+// amount validation and payment-method capture behave exactly like the
+// webhook path. The previous implementation fabricated a mock intent, which
+// provisioned domains with no charge and broke auto-renew card capture.
 router.post('/process-order/:orderId', authMiddleware, async (req, res) => {
   const pool = req.app.locals.pool;
 
-  // Check if admin
+  // Gate on role level only — the is_admin boolean must not bypass role checks.
   const userResult = await pool.query(
-    'SELECT is_admin, role_level FROM users WHERE id = $1',
+    'SELECT role_level FROM users WHERE id = $1',
     [req.user.id]
   );
 
-  if (!userResult.rows[0]?.is_admin && userResult.rows[0]?.role_level < ROLE_LEVELS.ADMIN) {
+  if ((userResult.rows[0]?.role_level || 0) < ROLE_LEVELS.ADMIN) {
     return res.status(403).json({ error: 'Admin access required' });
+  }
+
+  if (!stripeService.isConfigured()) {
+    return res.status(503).json({ error: 'Stripe not configured' });
   }
 
   try {
@@ -1122,15 +1263,18 @@ router.post('/process-order/:orderId', authMiddleware, async (req, res) => {
 
     const order = orderResult.rows[0];
 
-    // Create mock payment intent object
-    const mockPaymentIntent = {
-      id: order.stripe_payment_intent_id || 'manual_' + Date.now(),
-      latest_charge: 'manual',
-      amount: Math.round(order.total * 100),
-      metadata: { userId: order.user_id.toString() }
-    };
+    if (!order.stripe_payment_intent_id || order.stripe_payment_intent_id.startsWith('manual_')) {
+      return res.status(400).json({ error: 'Order has no Stripe payment to process' });
+    }
 
-    await handlePaymentSuccess(pool, mockPaymentIntent);
+    const stripe = stripeService.getInstance();
+    const paymentIntent = await stripe.paymentIntents.retrieve(order.stripe_payment_intent_id);
+
+    if (paymentIntent.status !== 'succeeded') {
+      return res.status(400).json({ error: `Payment has not succeeded (status: ${paymentIntent.status})` });
+    }
+
+    await handlePaymentSuccess(pool, paymentIntent);
 
     res.json({ success: true, message: 'Order processed' });
   } catch (error) {

@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const router = express.Router();
 const { authMiddleware, parseIntParam } = require('../middleware/auth');
 const enomService = require('../services/enom');
+const stripeService = require('../services/stripe');
 
 // Generate order number
 function generateOrderNumber() {
@@ -106,6 +107,38 @@ router.post('/checkout', authMiddleware, async (req, res) => {
       });
     }
 
+    // The payment intent id comes from the client, so it must be verified
+    // against Stripe before it is trusted: it has to be this user's intent,
+    // created for a domain purchase, not already consumed, and not already
+    // attached to another order — otherwise a small or reused intent could be
+    // paired with a large order (pay-less-than-owed).
+    if (!payment_intent_id || typeof payment_intent_id !== 'string' || !payment_intent_id.startsWith('pi_')) {
+      return res.status(400).json({ error: 'A valid payment intent is required' });
+    }
+    if (!stripeService.isConfigured()) {
+      return res.status(503).json({ error: 'Payment processing not configured' });
+    }
+    const stripe = stripeService.getInstance();
+    let paymentIntent;
+    try {
+      paymentIntent = await stripe.paymentIntents.retrieve(payment_intent_id);
+    } catch (piError) {
+      return res.status(400).json({ error: 'Payment intent not found' });
+    }
+    if (paymentIntent.metadata?.userId !== String(req.user.id) || paymentIntent.metadata?.type !== 'domain_purchase') {
+      return res.status(403).json({ error: 'Payment intent does not belong to this checkout' });
+    }
+    if (paymentIntent.status === 'succeeded' || paymentIntent.status === 'canceled') {
+      return res.status(400).json({ error: `Payment intent cannot be used (status: ${paymentIntent.status})` });
+    }
+    const existingOrder = await pool.query(
+      'SELECT id FROM orders WHERE stripe_payment_intent_id = $1',
+      [payment_intent_id]
+    );
+    if (existingOrder.rows.length > 0) {
+      return res.status(409).json({ error: 'Payment intent is already associated with another order' });
+    }
+
     // Get cart items
     const cartResult = await pool.query(
       `SELECT * FROM cart_items
@@ -118,10 +151,13 @@ router.post('/checkout', authMiddleware, async (req, res) => {
     }
 
     const items = cartResult.rows;
-    const subtotal = items.reduce((sum, item) => sum + parseFloat(item.price), 0);
+
+    // All money math in integer cents — float accumulation drifts off the
+    // amount Stripe actually charges.
+    const subtotalCents = items.reduce((sum, item) => sum + Math.round(parseFloat(item.price) * 100), 0);
 
     // Calculate tax from settings
-    let tax = 0;
+    let taxCents = 0;
     try {
       const taxSettingsResult = await pool.query(
         "SELECT key, value FROM app_settings WHERE key IN ('tax_enabled', 'tax_rate', 'tax_inclusive')"
@@ -135,71 +171,95 @@ router.post('/checkout', authMiddleware, async (req, res) => {
         const taxRate = parseFloat(taxSettings.tax_rate || 0) / 100;
         if (taxSettings.tax_inclusive === 'true') {
           // Tax is included in price, calculate it out for display
-          tax = subtotal - (subtotal / (1 + taxRate));
+          taxCents = Math.round(subtotalCents - subtotalCents / (1 + taxRate));
         } else {
           // Tax is added on top
-          tax = subtotal * taxRate;
+          taxCents = Math.round(subtotalCents * taxRate);
         }
-        tax = Math.round(tax * 100) / 100; // Round to 2 decimal places
       }
     } catch (taxError) {
       console.error('Error calculating tax:', taxError.message);
     }
 
-    const total = subtotal + (tax > 0 ? tax : 0);
+    const totalCents = subtotalCents + Math.max(0, taxCents);
+    const subtotal = subtotalCents / 100;
+    const tax = taxCents / 100;
+    const total = totalCents / 100;
 
-    // Create order with registrant_contact, auto_renew preference, and extended attributes for ccTLDs
-    const orderResult = await pool.query(
-      `INSERT INTO orders (
-        user_id, order_number, status, subtotal, tax, total,
-        stripe_payment_intent_id, payment_status, billing_address, registrant_contact, auto_renew, extended_attributes
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-      RETURNING *`,
-      [
-        req.user.id,
-        generateOrderNumber(),
-        'pending',
-        subtotal,
-        tax,
-        total,
-        payment_intent_id,
-        'pending',
-        JSON.stringify(billing_address || {}),
-        JSON.stringify(registrant_contact),
-        auto_renew,
-        JSON.stringify(extended_attributes || {})
-      ]
-    );
-
-    const order = orderResult.rows[0];
-
-    // Create order items
-    for (const item of items) {
-      // Calculate unit price correctly: for multi-year purchases, divide by years; otherwise use total
-      const itemYears = parseInt(item.years) || 1;
-      const unitPrice = itemYears > 1 ? parseFloat(item.price) / itemYears : parseFloat(item.price);
-
-      await pool.query(
-        `INSERT INTO order_items (
-          order_id, item_type, domain_name, tld, years,
-          unit_price, quantity, total_price, status
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-        [
-          order.id,
-          item.item_type,
-          item.domain_name,
-          item.tld,
-          itemYears,
-          unitPrice,
-          itemYears,
-          parseFloat(item.price),
-          'pending'
-        ]
-      );
+    // The intent was created from the raw cart total before tax — bring the
+    // Stripe charge into lockstep with the order total so the webhook's
+    // amount validation always agrees with what the customer pays.
+    if (paymentIntent.amount !== totalCents) {
+      await stripe.paymentIntents.update(payment_intent_id, { amount: totalCents });
     }
 
-    // Clear cart
-    await pool.query('DELETE FROM cart_items WHERE user_id = $1', [req.user.id]);
+    // Create the order, its items, and clear the cart atomically — a partial
+    // failure must not leave a paid-for order with missing items or a cart
+    // that re-bills the customer.
+    const client = await pool.connect();
+    let order;
+    try {
+      await client.query('BEGIN');
+
+      const orderResult = await client.query(
+        `INSERT INTO orders (
+          user_id, order_number, status, subtotal, tax, total,
+          stripe_payment_intent_id, payment_status, billing_address, registrant_contact, auto_renew, extended_attributes
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        RETURNING *`,
+        [
+          req.user.id,
+          generateOrderNumber(),
+          'pending',
+          subtotal,
+          tax,
+          total,
+          payment_intent_id,
+          'pending',
+          JSON.stringify(billing_address || {}),
+          JSON.stringify(registrant_contact),
+          auto_renew,
+          JSON.stringify(extended_attributes || {})
+        ]
+      );
+
+      order = orderResult.rows[0];
+
+      // Create order items
+      for (const item of items) {
+        // Calculate unit price correctly: for multi-year purchases, divide by years; otherwise use total
+        const itemYears = parseInt(item.years) || 1;
+        const unitPrice = itemYears > 1 ? parseFloat(item.price) / itemYears : parseFloat(item.price);
+
+        await client.query(
+          `INSERT INTO order_items (
+            order_id, item_type, domain_name, tld, years,
+            unit_price, quantity, total_price, status
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          [
+            order.id,
+            item.item_type,
+            item.domain_name,
+            item.tld,
+            itemYears,
+            unitPrice,
+            itemYears,
+            parseFloat(item.price),
+            'pending'
+          ]
+        );
+      }
+
+      // Clear cart
+      await client.query('DELETE FROM cart_items WHERE user_id = $1', [req.user.id]);
+
+      await client.query('COMMIT');
+    } catch (txError) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw txError;
+    } finally {
+      client.release();
+    }
 
     // Log activity
     await pool.query(
@@ -301,7 +361,7 @@ router.post('/:orderId/items/:itemId/retry', authMiddleware, async (req, res) =>
           }
           if (!transferOptions?.auth_code) {
             await pool.query(
-              `UPDATE order_items SET status = 'failed', error = 'Authorization code required for transfer retry', updated_at = CURRENT_TIMESTAMP
+              `UPDATE order_items SET status = 'failed', error_message ='Authorization code required for transfer retry', updated_at = CURRENT_TIMESTAMP
                WHERE id = $1`,
               [parseInt(itemId)]
             );
@@ -324,7 +384,7 @@ router.post('/:orderId/items/:itemId/retry', authMiddleware, async (req, res) =>
 
         default:
           await pool.query(
-            `UPDATE order_items SET status = 'failed', error = 'Unknown item type', updated_at = CURRENT_TIMESTAMP
+            `UPDATE order_items SET status = 'failed', error_message ='Unknown item type', updated_at = CURRENT_TIMESTAMP
              WHERE id = $1`,
             [parseInt(itemId)]
           );
@@ -352,7 +412,7 @@ router.post('/:orderId/items/:itemId/retry', authMiddleware, async (req, res) =>
       await pool.query(
         `UPDATE order_items SET
           status = 'failed',
-          error = $1,
+          error_message = $1,
           updated_at = CURRENT_TIMESTAMP
          WHERE id = $2`,
         [enomError.message || 'eNom API error', parseInt(itemId)]

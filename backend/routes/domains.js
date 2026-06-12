@@ -786,7 +786,6 @@ router.put('/:id/privacy', authMiddleware, async (req, res) => {
   const pool = req.app.locals.pool;
   const domainId = parseInt(req.params.id);
   const privacy_enabled = req.body.privacy_enabled ?? req.body.privacy;
-  const force = req.body.force === true; // Allow forcing even if it will charge
 
   try {
     // Verify ownership and check if suspended
@@ -803,12 +802,16 @@ router.put('/:id/privacy', authMiddleware, async (req, res) => {
     if (privacy_enabled) {
       const privacyStatus = await enom.getPrivacyStatus(sld, tld, { mode: domain.enomMode });
 
-      // If privacy will incur a charge and force is not set, return warning
-      if (privacyStatus && privacyStatus.willCharge && !force) {
+      // If privacy will incur a charge, require payment through the checkout
+      // flow. There is deliberately no client-supplied bypass: a `force` flag
+      // let any customer enable paid WHOIS privacy for free (charged against the
+      // company eNom balance). Admins use the separate /api/admin/domains/:id/
+      // privacy endpoint for the no-charge bypass.
+      if (privacyStatus && privacyStatus.willCharge) {
         return res.status(402).json({
           error: 'Privacy service requires payment',
           code: 'PAYMENT_REQUIRED',
-          message: 'Enabling WHOIS privacy will incur a charge. Set force=true to proceed or purchase through checkout.',
+          message: 'Enabling WHOIS privacy will incur a charge. Please purchase it through checkout.',
           privacyStatus
         });
       }

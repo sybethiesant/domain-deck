@@ -12,9 +12,9 @@
 
 set -e
 
-# Container names
-APP_CONTAINER="worxtech-app"
-DB_CONTAINER="worxtech-db"
+# Container names (Unraid deployment)
+APP_CONTAINER="worxtech"
+DB_CONTAINER="worxtech-postgres"
 
 # Colors
 RED='\033[0;31m'

@@ -461,8 +461,9 @@ router.put('/api-modes', async (req, res) => {
   const pool = req.app.locals.pool;
   const { enom_test_mode, stripe_test_mode } = req.body;
 
-  // Require super admin for API mode changes
-  if (req.user.role_level < ROLE_LEVELS.SUPERADMIN && !req.user.is_admin) {
+  // Require a genuine super admin for API mode changes — switching Stripe to
+  // test mode in production would accept test cards (4242…) as real payment.
+  if (req.user.role_level < ROLE_LEVELS.SUPERADMIN) {
     return res.status(403).json({ error: 'Super admin access required' });
   }
 

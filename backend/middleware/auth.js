@@ -9,26 +9,57 @@ const ROLE_LEVELS = {
   SUPERADMIN: 4
 };
 
-// Basic auth middleware - validates JWT token
-const authMiddleware = (req, res, next) => {
+// The legacy is_admin boolean grants at most ADMIN (level 3). It must never
+// satisfy a SUPERADMIN gate — letting it do so meant any account with
+// is_admin=true (settable by a level-3 admin) bypassed every level-4 check
+// in the codebase: a straight privilege-escalation path.
+const effectiveRoleLevel = (user) => {
+  const level = parseInt(user.role_level, 10) || 0;
+  return user.is_admin ? Math.max(level, ROLE_LEVELS.ADMIN) : level;
+};
+
+// Basic auth middleware - validates JWT token and loads the current user.
+// Loading from the database on every request means disabling an account or
+// demoting a role takes effect immediately instead of waiting out a 7-day JWT.
+const authMiddleware = async (req, res, next) => {
   const token = req.header('Authorization')?.replace('Bearer ', '');
 
   if (!token) {
     return res.status(401).json({ error: 'Access denied. No token provided.' });
   }
 
+  let decoded;
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    decoded = jwt.verify(token, process.env.JWT_SECRET);
+  } catch (error) {
+    return res.status(401).json({ error: 'Invalid token' });
+  }
 
-    // Validate that the token contains required user ID
-    if (!decoded || !decoded.id) {
-      return res.status(401).json({ error: 'Invalid token: missing user ID' });
+  // Validate that the token contains required user ID
+  if (!decoded || !decoded.id) {
+    return res.status(401).json({ error: 'Invalid token: missing user ID' });
+  }
+
+  try {
+    const pool = req.app.locals.pool;
+    const result = await pool.query(
+      'SELECT id, username, email, is_admin, role_level, role_name, is_active FROM users WHERE id = $1',
+      [decoded.id]
+    );
+
+    const user = result.rows[0];
+    if (!user) {
+      return res.status(401).json({ error: 'User not found' });
+    }
+    if (user.is_active === false) {
+      return res.status(401).json({ error: 'Account is disabled' });
     }
 
-    req.user = decoded;
+    req.user = { ...decoded, ...user, role_level: effectiveRoleLevel(user) };
     next();
   } catch (error) {
-    res.status(401).json({ error: 'Invalid token' });
+    console.error('Auth middleware error:', error);
+    res.status(500).json({ error: 'Failed to authenticate' });
   }
 };
 
@@ -54,62 +85,33 @@ const loadUserRole = async (req, res, next) => {
   }
 };
 
-// Admin middleware - requires user to be admin (level 3+) or is_admin flag
+// Admin middleware - requires effective admin (level 3+)
 const adminMiddleware = async (req, res, next) => {
-  const pool = req.app.locals.pool;
-
-  try {
-    const result = await pool.query(
-      'SELECT is_admin, role_level FROM users WHERE id = $1',
-      [req.user.id]
-    );
-
-    const user = result.rows[0];
-    if (!user || (!user.is_admin && user.role_level < ROLE_LEVELS.ADMIN)) {
-      return res.status(403).json({ error: 'Admin access required' });
-    }
-
-    req.user.role_level = user.role_level;
-    req.user.is_admin = user.is_admin;
-    next();
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to verify admin status' });
+  if (!req.user || effectiveRoleLevel(req.user) < ROLE_LEVELS.ADMIN) {
+    return res.status(403).json({ error: 'Admin access required' });
   }
+  next();
 };
 
-// Role level middleware factory - requires minimum role level
+// Role level middleware factory - requires minimum effective role level.
+// authMiddleware has already loaded the fresh user row, so the effective
+// level on req.user is authoritative; is_admin no longer short-circuits
+// arbitrary levels (it is folded into effectiveRoleLevel, capped at ADMIN).
 const requireRole = (minLevel) => {
   return async (req, res, next) => {
-    const pool = req.app.locals.pool;
-
-    try {
-      const result = await pool.query(
-        'SELECT role_level, role_name, is_admin FROM users WHERE id = $1',
-        [req.user.id]
-      );
-
-      const user = result.rows[0];
-      if (!user) {
-        return res.status(401).json({ error: 'User not found' });
-      }
-
-      // Super admin (level 4) or is_admin flag always has access
-      if (user.is_admin || user.role_level >= minLevel) {
-        req.user.role_level = user.role_level;
-        req.user.role_name = user.role_name;
-        req.user.is_admin = user.is_admin;
-        return next();
-      }
-
-      return res.status(403).json({
-        error: 'Insufficient permissions',
-        required_level: minLevel,
-        your_level: user.role_level
-      });
-    } catch (error) {
-      console.error('Role check error:', error);
-      res.status(500).json({ error: 'Failed to verify permissions' });
+    if (!req.user) {
+      return res.status(401).json({ error: 'User not found' });
     }
+
+    if (effectiveRoleLevel(req.user) >= minLevel) {
+      return next();
+    }
+
+    return res.status(403).json({
+      error: 'Insufficient permissions',
+      required_level: minLevel,
+      your_level: req.user.role_level
+    });
   };
 };
 
@@ -131,15 +133,14 @@ const requirePermission = (permission) => {
         return res.status(401).json({ error: 'User not found' });
       }
 
-      // Super admin has all permissions
-      if (user.is_admin || user.role_level >= ROLE_LEVELS.SUPERADMIN) {
-        req.user.role_level = user.role_level;
+      // Only genuine super admins (level 4) hold every permission — the
+      // is_admin flag maps to the admin role's permission set instead of '*'.
+      if (effectiveRoleLevel(user) >= ROLE_LEVELS.SUPERADMIN) {
         return next();
       }
 
       const permissions = user.permissions || [];
       if (permissions.includes('*') || permissions.includes(permission)) {
-        req.user.role_level = user.role_level;
         return next();
       }
 

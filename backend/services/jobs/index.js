@@ -488,6 +488,23 @@ class JobScheduler {
       const domainMode = domain.enom_mode || 'test';
 
       try {
+        // Idempotency guard: this job runs daily, and if a renewal succeeded
+        // but the expiration date never advanced in our DB (eNom omitted the
+        // new date, sync hasn't run), the domain would match the expiring
+        // query again tomorrow and the customer's card would be charged every
+        // day. Never charge the same domain twice within a renewal window.
+        const recentRenewal = await this.pool.query(`
+          SELECT 1 FROM balance_transactions
+          WHERE transaction_type = 'renewal'
+            AND domain_name = $1
+            AND created_at > CURRENT_TIMESTAMP - INTERVAL '14 days'
+          LIMIT 1
+        `, [fullDomain]);
+        if (recentRenewal.rows.length > 0) {
+          console.log(`[autoRenew] ${fullDomain} already renewed within 14 days — skipping`);
+          continue;
+        }
+
         // Get renewal price from TLD pricing (customer sale price)
         const pricingResult = await this.pool.query(
           'SELECT price_renew, cost_renew FROM tld_pricing WHERE tld = $1',
@@ -558,12 +575,30 @@ class JobScheduler {
             })
           ]);
 
+          // The customer has been charged but the renewal didn't happen.
+          // Disable auto-renew so tomorrow's run doesn't charge them again;
+          // staff re-enable it after resolving the eNom failure.
+          await this.pool.query(`
+            UPDATE domains SET auto_renew = false, updated_at = CURRENT_TIMESTAMP
+            WHERE id = $1
+          `, [domain.id]);
+
           failed++;
           continue;
         }
 
-        // STEP 3: Update database
-        const newExpDate = renewResult.renewResult?.newExpiration;
+        // STEP 3: Update database. The expiration date MUST advance after a
+        // successful renewal — if it doesn't, this domain matches tomorrow's
+        // expiring query and the customer is charged daily.
+        let newExpDate = renewResult.renewResult?.newExpiration;
+        if (!newExpDate) {
+          try {
+            const domainInfo = await enom.getDomainInfo(sld, tld, { mode: domainMode });
+            newExpDate = domainInfo?.expirationDate;
+          } catch (e) {
+            console.error(`[autoRenew] Could not fetch expiration for ${fullDomain}:`, e.message);
+          }
+        }
         if (newExpDate) {
           await this.pool.query(`
             UPDATE domains SET
@@ -571,6 +606,16 @@ class JobScheduler {
               updated_at = CURRENT_TIMESTAMP
             WHERE id = $2
           `, [newExpDate, domain.id]);
+        } else {
+          // Conservative estimate: eNom extends from the current expiry, so
+          // advance one year; the 6-hourly domainSync corrects it from the
+          // registry.
+          await this.pool.query(`
+            UPDATE domains SET
+              expiration_date = expiration_date + INTERVAL '1 year',
+              updated_at = CURRENT_TIMESTAMP
+            WHERE id = $1
+          `, [domain.id]);
         }
 
         // Log the transaction

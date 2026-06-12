@@ -18,15 +18,18 @@ set -e
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")"
-BACKUP_DIR="${1:-${APP_DIR}/backups}"
+# Default backup destination is OUTSIDE the app source tree. Backups bundle
+# .env + the encrypted card store + a full DB dump; writing them into the
+# source tree left them one .gitignore edit away from the public repo.
+BACKUP_DIR="${1:-$(dirname "${APP_DIR}")/backups}"
 KEEP_COUNT="${2:-7}"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 BACKUP_NAME="worxtech_backup_${TIMESTAMP}"
 TEMP_DIR="/tmp/${BACKUP_NAME}"
 
-# Container names
-APP_CONTAINER="worxtech-app"
-DB_CONTAINER="worxtech-db"
+# Container names (Unraid deployment)
+APP_CONTAINER="worxtech"
+DB_CONTAINER="worxtech-postgres"
 
 # Colors
 RED='\033[0;31m'
@@ -128,10 +131,11 @@ Restore Instructions:
   5. Restart: docker exec ${APP_CONTAINER} pm2 restart all
 EOF
 
-# 5. Create compressed archive
+# 5. Create compressed archive (owner-only — it contains live secrets)
 log "Creating backup archive..."
 cd /tmp
 tar -czf "${BACKUP_DIR}/${BACKUP_NAME}.tar.gz" "${BACKUP_NAME}"
+chmod 600 "${BACKUP_DIR}/${BACKUP_NAME}.tar.gz"
 rm -rf "${TEMP_DIR}"
 
 BACKUP_SIZE=$(du -h "${BACKUP_DIR}/${BACKUP_NAME}.tar.gz" | cut -f1)

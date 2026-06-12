@@ -10,6 +10,7 @@ import { API_URL } from '../../config/api';
 import toast from 'react-hot-toast';
 import DomainContactsPanel from '../dashboard/DomainContactsPanel';
 import DnsManagementPanel from '../dashboard/DnsManagementPanel';
+import AdminPurchaseModal from './AdminPurchaseModal';
 
 // Status badge component
 const StatusBadge = ({ status }) => {
@@ -969,6 +970,7 @@ export default function AdminDomains() {
   const [syncing, setSyncing] = useState(false);
   const [selectedDomain, setSelectedDomain] = useState(null);
   const [availableTlds, setAvailableTlds] = useState([]);
+  const [showAdminPurchase, setShowAdminPurchase] = useState(false);
 
   const fetchDomains = useCallback(async () => {
     setLoading(true);
@@ -1051,10 +1053,16 @@ export default function AdminDomains() {
         </div>
         <div className="flex gap-3">
           {isAdmin && (
-            <button onClick={handleSyncAll} disabled={syncing} className="btn-primary">
-              {syncing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
-              Sync All from eNom
-            </button>
+            <>
+              <button onClick={() => setShowAdminPurchase(true)} className="btn-primary">
+                <Plus className="w-4 h-4 mr-2" />
+                Admin Purchase
+              </button>
+              <button onClick={handleSyncAll} disabled={syncing} className="btn-secondary">
+                {syncing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
+                Sync All from eNom
+              </button>
+            </>
           )}
           <button onClick={fetchDomains} disabled={loading} className="btn-secondary">
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
@@ -1265,6 +1273,14 @@ export default function AdminDomains() {
           onRefresh={fetchDomains}
           token={token}
           isAdmin={isAdmin}
+        />
+      )}
+
+      {/* Admin Purchase Modal */}
+      {showAdminPurchase && (
+        <AdminPurchaseModal
+          onClose={() => setShowAdminPurchase(false)}
+          onSuccess={fetchDomains}
         />
       )}
     </div>

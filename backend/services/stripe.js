@@ -5,7 +5,10 @@
 
 class StripeService {
   constructor() {
-    // Store all keys for dynamic switching
+    // Store all keys for dynamic switching. Test mode must NOT fall back to
+    // the live keys: "test mode" silently running on sk_live_ keys means test
+    // flows place real charges. If test keys aren't configured, test mode is
+    // simply unconfigured.
     this.keys = {
       production: {
         secret: process.env.STRIPE_SECRET_KEY,
@@ -13,9 +16,9 @@ class StripeService {
         webhook: process.env.STRIPE_WEBHOOK_SECRET
       },
       test: {
-        secret: process.env.STRIPE_TEST_SECRET_KEY || process.env.STRIPE_SECRET_KEY,
-        publishable: process.env.STRIPE_TEST_PUBLISHABLE_KEY || process.env.STRIPE_PUBLISHABLE_KEY,
-        webhook: process.env.STRIPE_TEST_WEBHOOK_SECRET || process.env.STRIPE_WEBHOOK_SECRET
+        secret: process.env.STRIPE_TEST_SECRET_KEY,
+        publishable: process.env.STRIPE_TEST_PUBLISHABLE_KEY,
+        webhook: process.env.STRIPE_TEST_WEBHOOK_SECRET
       }
     };
 

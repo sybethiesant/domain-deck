@@ -1,9 +1,25 @@
 /**
- * Reset admin password for testing
+ * Reset a user's password.
+ *
+ * Usage: node reset-admin-password.js <new-password> [user-id]
+ *
+ * The password MUST be supplied on the command line — there is NO hardcoded
+ * default. A committed default ("REDACTED") reset the primary admin
+ * account (id 1) to a publicly-known value, which is an account-takeover risk in
+ * a public repo.
  */
 require('dotenv').config();
 const bcrypt = require('bcryptjs');
 const { Pool } = require('pg');
+
+const password = process.argv[2];
+const userId = parseInt(process.argv[3] || '1', 10);
+
+if (!password || password.length < 12) {
+  console.error('Usage: node reset-admin-password.js <new-password> [user-id]');
+  console.error('A password of at least 12 characters is required (no default).');
+  process.exit(1);
+}
 
 const pool = new Pool({
   host: process.env.DB_HOST || 'worxtech-db',
@@ -13,19 +29,18 @@ const pool = new Pool({
 });
 
 async function resetPassword() {
-  const password = 'REDACTED';
   const hash = bcrypt.hashSync(password, 10);
-  console.log('Generated hash:', hash);
-
-  await pool.query('UPDATE users SET password_hash = $1 WHERE id = 1', [hash]);
-  console.log('Password updated to:', password);
-
-  // Verify
-  const result = await pool.query('SELECT email, password_hash FROM users WHERE id = 1');
-  console.log('User:', result.rows[0].email);
-  console.log('Hash stored:', result.rows[0].password_hash.substring(0, 30) + '...');
-
+  const result = await pool.query(
+    'UPDATE users SET password_hash = $1 WHERE id = $2 RETURNING email',
+    [hash, userId]
+  );
+  if (result.rows.length === 0) {
+    console.error(`No user with id ${userId}.`);
+  } else {
+    // Deliberately do not print the password.
+    console.log(`Password updated for ${result.rows[0].email} (id ${userId}).`);
+  }
   await pool.end();
 }
 
-resetPassword().catch(console.error);
+resetPassword().catch((e) => { console.error(e.message); process.exit(1); });

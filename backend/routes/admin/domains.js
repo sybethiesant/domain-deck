@@ -1134,4 +1134,476 @@ router.post('/push-requests/:id/expire', async (req, res) => {
   }
 });
 
+/**
+ * Admin Purchase - Register, Transfer, or Renew a domain on behalf of a user.
+ * Charged to the eNom reseller balance (auto-refilled if needed). No Stripe charge.
+ * Creates a synthetic order with payment_status='admin_credit' for traceability.
+ * Requires level 3+ (Admin).
+ *
+ * Body:
+ *   action: 'register' | 'transfer' | 'renew'   (required)
+ *   reason: string                              (optional, included in staff/audit notes)
+ *
+ *   register/transfer:
+ *     user_id: integer                          (required - target user the domain credits to)
+ *     sld: string                               (required)
+ *     tld: string                               (required)
+ *     years: integer                            (default 1)
+ *     registrant_contact_id: integer            (optional - id from domain_contacts owned by user_id)
+ *     registrant_contact: object                (optional - inline contact object)
+ *                                                  Falls back to user's default contact if neither provided.
+ *     nameservers: string[]                     (optional - defaults to eNom DNS)
+ *     extended_attributes: object               (optional - ccTLD attrs, e.g. .us nexus)
+ *
+ *   register only:
+ *     privacy: boolean                          (default false)
+ *
+ *   transfer only:
+ *     auth_code: string                         (required - registry EPP code)
+ *
+ *   renew only:
+ *     domain_id: integer                        (required - existing domain row to renew)
+ *     years: integer                            (default 1)
+ */
+router.post('/domains/admin-purchase', async (req, res) => {
+  if (req.user.role_level < ROLE_LEVELS.ADMIN && !req.user.is_admin) {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+
+  const pool = req.app.locals.pool;
+  const crypto = require('crypto');
+  const { action, reason } = req.body;
+
+  if (!['register', 'transfer', 'renew'].includes(action)) {
+    return res.status(400).json({ error: 'action must be register, transfer, or renew' });
+  }
+
+  const generateOrderNumber = () => {
+    const ts = Date.now().toString(36).toUpperCase();
+    const rnd = crypto.randomBytes(3).toString('hex').toUpperCase();
+    return `ADM-${ts}-${rnd}`;
+  };
+
+  const resolveRegistrantContact = async (userId) => {
+    const { registrant_contact_id, registrant_contact } = req.body;
+
+    let c;
+    if (registrant_contact_id) {
+      const r = await pool.query(
+        'SELECT * FROM domain_contacts WHERE id = $1 AND user_id = $2',
+        [registrant_contact_id, userId]
+      );
+      if (r.rows.length === 0) {
+        throw new Error('Saved contact not found for this user');
+      }
+      c = r.rows[0];
+    } else if (registrant_contact && registrant_contact.first_name && registrant_contact.email) {
+      c = registrant_contact;
+    } else {
+      const r = await pool.query(
+        `SELECT * FROM domain_contacts
+         WHERE user_id = $1 AND is_default = true
+         ORDER BY created_at LIMIT 1`,
+        [userId]
+      );
+      if (r.rows.length === 0) {
+        throw new Error('No registrant contact provided and user has no default saved contact');
+      }
+      c = r.rows[0];
+    }
+
+    return {
+      firstName: c.first_name,
+      lastName: c.last_name,
+      organization: c.organization || '',
+      email: c.email,
+      phone: c.phone,
+      address1: c.address_line1,
+      address2: c.address_line2 || '',
+      city: c.city,
+      state: c.state,
+      postalCode: c.postal_code,
+      country: c.country || 'US'
+    };
+  };
+
+  const adminLabel = req.user.username || req.user.email || `admin#${req.user.id}`;
+  let order;
+
+  try {
+    // ---------- REGISTER / TRANSFER ----------
+    if (action === 'register' || action === 'transfer') {
+      const {
+        user_id,
+        sld,
+        tld,
+        years = 1,
+        nameservers,
+        extended_attributes = {},
+        privacy = false,
+        auth_code
+      } = req.body;
+
+      if (!user_id || !sld || !tld) {
+        return res.status(400).json({ error: 'user_id, sld, and tld are required' });
+      }
+      if (action === 'transfer' && !auth_code) {
+        return res.status(400).json({ error: 'auth_code is required for transfers (registry requirement)' });
+      }
+
+      const userCheck = await pool.query(
+        'SELECT id, email, username FROM users WHERE id = $1',
+        [user_id]
+      );
+      if (userCheck.rows.length === 0) {
+        return res.status(404).json({ error: 'Target user not found' });
+      }
+      const targetUser = userCheck.rows[0];
+      const tldLower = tld.toLowerCase();
+
+      const costColumn = action === 'register' ? 'cost_register' : 'cost_transfer';
+      const pricingResult = await pool.query(
+        `SELECT ${costColumn} AS cost FROM tld_pricing WHERE tld = $1 AND is_active = true`,
+        [tldLower]
+      );
+      if (pricingResult.rows.length === 0) {
+        return res.status(400).json({ error: `TLD .${tldLower} is not configured or not active` });
+      }
+      const cost = parseFloat(pricingResult.rows[0].cost);
+
+      // Pre-check availability (register only)
+      if (action === 'register') {
+        const availability = await enom.checkDomain(sld, tldLower);
+        if (!availability.available) {
+          return res.status(400).json({
+            error: `Domain ${sld}.${tldLower} is not available for registration`,
+            availability
+          });
+        }
+      }
+
+      const registrantContact = await resolveRegistrantContact(user_id);
+
+      // Synthetic order
+      const orderResult = await pool.query(
+        `INSERT INTO orders (user_id, order_number, status, subtotal, total, payment_status, notes, created_at)
+         VALUES ($1, $2, 'processing', $3, $3, 'admin_credit', $4, CURRENT_TIMESTAMP)
+         RETURNING *`,
+        [
+          user_id,
+          generateOrderNumber(),
+          cost,
+          `Admin-credited ${action} by ${adminLabel}${reason ? ': ' + reason : ''}`
+        ]
+      );
+      order = orderResult.rows[0];
+
+      const itemResult = await pool.query(
+        `INSERT INTO order_items (order_id, item_type, domain_name, tld, years, unit_price, total_price, status, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $6, 'pending', CURRENT_TIMESTAMP)
+         RETURNING *`,
+        [order.id, action, sld, tldLower, years, cost]
+      );
+      const item = itemResult.rows[0];
+
+      const defaultNameservers = [
+        'dns1.name-services.com',
+        'dns2.name-services.com',
+        'dns3.name-services.com',
+        'dns4.name-services.com'
+      ];
+
+      let smartResult, result;
+      if (action === 'register') {
+        smartResult = await enom.smartPurchase({
+          sld,
+          tld: tldLower,
+          years,
+          nameservers: Array.isArray(nameservers) && nameservers.length ? nameservers : defaultNameservers,
+          registrant: registrantContact,
+          privacy,
+          cost,
+          extendedAttributes: extended_attributes
+        });
+        result = smartResult.purchaseResult || smartResult;
+      } else {
+        smartResult = await enom.smartTransfer({
+          sld,
+          tld: tldLower,
+          authCode: auth_code,
+          registrant: registrantContact,
+          years,
+          cost
+        });
+        result = smartResult.transferResult || smartResult;
+      }
+
+      if (smartResult.refillResult) {
+        await pool.query(
+          `INSERT INTO balance_transactions
+           (transaction_type, amount, fee_amount, net_amount, domain_name, order_id, auto_refill, notes)
+           VALUES ('refill', $1, $2, $3, $4, $5, true, $6)`,
+          [
+            smartResult.refillResult.requestedAmount,
+            smartResult.refillResult.feeAmount,
+            smartResult.refillResult.netAmount,
+            `${sld}.${tldLower}`,
+            order.id,
+            `Auto-refill for admin-credited ${action}`
+          ]
+        );
+      }
+
+      if (result?.success) {
+        if (action === 'register') {
+          await pool.query(
+            `INSERT INTO domains (
+               user_id, domain_name, tld, status, expiration_date,
+               auto_renew, enom_order_id, enom_mode, created_at
+             ) VALUES ($1, $2, $3, 'active', $4, false, $5, $6, CURRENT_TIMESTAMP)
+             ON CONFLICT (domain_name, tld) DO UPDATE SET
+               user_id = $1,
+               status = 'active',
+               expiration_date = $4,
+               enom_order_id = $5,
+               enom_mode = $6,
+               updated_at = CURRENT_TIMESTAMP`,
+            [
+              user_id,
+              sld,
+              tldLower,
+              result.expirationDate || new Date(Date.now() + years * 365 * 24 * 60 * 60 * 1000),
+              result.orderId,
+              enom.getMode().mode
+            ]
+          );
+        } else {
+          await pool.query(
+            `INSERT INTO domains (
+               user_id, domain_name, tld, status,
+               auto_renew, enom_order_id, enom_mode, created_at
+             ) VALUES ($1, $2, $3, 'transfer_pending', false, $4, $5, CURRENT_TIMESTAMP)
+             ON CONFLICT (domain_name, tld) DO UPDATE SET
+               user_id = $1,
+               status = 'transfer_pending',
+               enom_order_id = $4,
+               enom_mode = $5,
+               updated_at = CURRENT_TIMESTAMP`,
+            [
+              user_id,
+              sld,
+              tldLower,
+              result.transferOrderId,
+              enom.getMode().mode
+            ]
+          );
+        }
+
+        await pool.query(
+          `UPDATE order_items SET status = 'completed', enom_order_id = $1, processed_at = CURRENT_TIMESTAMP WHERE id = $2`,
+          [result.orderId || result.transferOrderId || null, item.id]
+        );
+        await pool.query(
+          `UPDATE orders SET status = 'completed', processed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+          [order.id]
+        );
+
+        await pool.query(
+          `INSERT INTO activity_logs (user_id, action, entity_type, entity_id, details)
+           VALUES ($1, $2, 'order', $3, $4)`,
+          [
+            req.user.id,
+            `admin_${action}`,
+            order.id,
+            JSON.stringify({
+              target_user_id: user_id,
+              target_user_email: targetUser.email,
+              domain: `${sld}.${tldLower}`,
+              cost,
+              years,
+              reason
+            })
+          ]
+        );
+        await logAudit(
+          pool, req.user.id, `admin_${action}`, 'domain', null,
+          null,
+          { user_id, domain: `${sld}.${tldLower}`, years, cost, reason },
+          req
+        );
+
+        return res.json({
+          success: true,
+          message: action === 'register'
+            ? `Registered ${sld}.${tldLower} for ${targetUser.email}`
+            : `Transfer initiated for ${sld}.${tldLower} to ${targetUser.email}`,
+          order,
+          domain: `${sld}.${tldLower}`,
+          cost,
+          refill: smartResult.refillResult || null,
+          enomResult: result
+        });
+      }
+
+      // Failure path
+      const errMsg = result?.error || 'eNom call returned no success';
+      await pool.query(
+        `UPDATE order_items SET status = 'failed', error_message = $1, processed_at = CURRENT_TIMESTAMP WHERE id = $2`,
+        [errMsg, item.id]
+      );
+      await pool.query(
+        `UPDATE orders SET status = 'failed', updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+        [order.id]
+      );
+      return res.status(502).json({ error: `eNom ${action} failed: ${errMsg}`, enomResult: result });
+    }
+
+    // ---------- RENEW ----------
+    if (action === 'renew') {
+      const { domain_id, years = 1 } = req.body;
+      if (!domain_id) {
+        return res.status(400).json({ error: 'domain_id is required for renew' });
+      }
+
+      const domainResult = await pool.query(
+        'SELECT * FROM domains WHERE id = $1',
+        [domain_id]
+      );
+      if (domainResult.rows.length === 0) {
+        return res.status(404).json({ error: 'Domain not found' });
+      }
+      const domain = domainResult.rows[0];
+
+      const pricingResult = await pool.query(
+        'SELECT cost_renew FROM tld_pricing WHERE tld = $1 AND is_active = true',
+        [domain.tld]
+      );
+      if (pricingResult.rows.length === 0) {
+        return res.status(400).json({ error: `TLD .${domain.tld} is not configured or not active` });
+      }
+      const cost = parseFloat(pricingResult.rows[0].cost_renew);
+
+      const orderResult = await pool.query(
+        `INSERT INTO orders (user_id, order_number, status, subtotal, total, payment_status, notes, created_at)
+         VALUES ($1, $2, 'processing', $3, $3, 'admin_credit', $4, CURRENT_TIMESTAMP)
+         RETURNING *`,
+        [
+          domain.user_id,
+          generateOrderNumber(),
+          cost,
+          `Admin-credited renew by ${adminLabel}${reason ? ': ' + reason : ''}`
+        ]
+      );
+      order = orderResult.rows[0];
+
+      const itemResult = await pool.query(
+        `INSERT INTO order_items (order_id, domain_id, item_type, domain_name, tld, years, unit_price, total_price, status, created_at)
+         VALUES ($1, $2, 'renew', $3, $4, $5, $6, $6, 'pending', CURRENT_TIMESTAMP)
+         RETURNING *`,
+        [order.id, domain_id, domain.domain_name, domain.tld, years, cost]
+      );
+      const item = itemResult.rows[0];
+
+      const smartResult = await enom.smartRenewal(domain.domain_name, domain.tld, years, cost);
+      const result = smartResult.renewResult || smartResult;
+
+      if (smartResult.refillResult) {
+        await pool.query(
+          `INSERT INTO balance_transactions
+           (transaction_type, amount, fee_amount, net_amount, domain_name, order_id, auto_refill, notes)
+           VALUES ('refill', $1, $2, $3, $4, $5, true, $6)`,
+          [
+            smartResult.refillResult.requestedAmount,
+            smartResult.refillResult.feeAmount,
+            smartResult.refillResult.netAmount,
+            `${domain.domain_name}.${domain.tld}`,
+            order.id,
+            'Auto-refill for admin-credited renewal'
+          ]
+        );
+      }
+
+      if (result?.success) {
+        let newExpiration = result.newExpiration;
+        if (!newExpiration) {
+          try {
+            const info = await enom.getDomainInfo(domain.domain_name, domain.tld);
+            newExpiration = info.expirationDate;
+          } catch (e) {
+            console.error('Failed to fetch expiration after admin renewal:', e.message);
+          }
+        }
+        if (newExpiration) {
+          await pool.query(
+            `UPDATE domains SET expiration_date = $1, status = 'active', updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+            [newExpiration, domain_id]
+          );
+        }
+
+        await pool.query(
+          `UPDATE order_items SET status = 'completed', processed_at = CURRENT_TIMESTAMP WHERE id = $1`,
+          [item.id]
+        );
+        await pool.query(
+          `UPDATE orders SET status = 'completed', processed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+          [order.id]
+        );
+
+        await pool.query(
+          `INSERT INTO activity_logs (user_id, action, entity_type, entity_id, details)
+           VALUES ($1, 'admin_renew', 'order', $2, $3)`,
+          [
+            req.user.id,
+            order.id,
+            JSON.stringify({
+              target_user_id: domain.user_id,
+              domain: `${domain.domain_name}.${domain.tld}`,
+              cost,
+              years,
+              reason
+            })
+          ]
+        );
+        await logAudit(
+          pool, req.user.id, 'admin_renew', 'domain', domain_id,
+          null,
+          { user_id: domain.user_id, years, cost, new_expiration: newExpiration, reason },
+          req
+        );
+
+        return res.json({
+          success: true,
+          message: `Renewed ${domain.domain_name}.${domain.tld} for ${years} year(s)`,
+          order,
+          domain: `${domain.domain_name}.${domain.tld}`,
+          cost,
+          newExpiration,
+          refill: smartResult.refillResult || null,
+          enomResult: result
+        });
+      }
+
+      const errMsg = result?.error || 'eNom call returned no success';
+      await pool.query(
+        `UPDATE order_items SET status = 'failed', error_message = $1, processed_at = CURRENT_TIMESTAMP WHERE id = $2`,
+        [errMsg, item.id]
+      );
+      await pool.query(
+        `UPDATE orders SET status = 'failed', updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+        [order.id]
+      );
+      return res.status(502).json({ error: `eNom renew failed: ${errMsg}`, enomResult: result });
+    }
+  } catch (error) {
+    console.error(`Admin ${action} error:`, error);
+    if (order) {
+      await pool.query(
+        `UPDATE orders SET status = 'failed', updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+        [order.id]
+      ).catch(() => {});
+    }
+    res.status(500).json({ error: error.message || `Failed to ${action} domain` });
+  }
+});
+
 module.exports = router;

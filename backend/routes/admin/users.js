@@ -97,6 +97,12 @@ router.get('/users/:id', async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
+    // Stripe customer ids are billing data — don't expose them to
+    // support-tier staff.
+    if (req.user.role_level < ROLE_LEVELS.ADMIN) {
+      delete userResult.rows[0].stripe_customer_id;
+    }
+
     // Get user's domains
     const domainsResult = await pool.query(
       `SELECT id, domain_name, tld, status, expiration_date, auto_renew, privacy_enabled
@@ -154,7 +160,7 @@ router.get('/users/:id', async (req, res) => {
 // Requires level 3+ (Admin)
 router.put('/users/:id', async (req, res) => {
   // Check admin level
-  if (req.user.role_level < ROLE_LEVELS.ADMIN && !req.user.is_admin) {
+  if (req.user.role_level < ROLE_LEVELS.ADMIN) {
     return res.status(403).json({ error: 'Admin access required to edit users' });
   }
 
@@ -179,13 +185,28 @@ router.put('/users/:id', async (req, res) => {
     const oldValues = currentUser.rows[0];
 
     // Check if trying to set a role higher than or equal to own role
-    if (role_level !== undefined && role_level >= req.user.role_level && !req.user.is_admin) {
+    if (role_level !== undefined && role_level >= req.user.role_level) {
       return res.status(403).json({ error: 'Cannot assign role equal to or higher than your own' });
     }
 
     // Cannot demote yourself
     if (userId === req.user.id && role_level !== undefined && role_level < req.user.role_level) {
       return res.status(403).json({ error: 'Cannot demote yourself' });
+    }
+
+    // Only a genuine super-admin may grant or revoke the is_admin flag. The
+    // flag maps to admin-level access, so letting a level-3 admin set it on
+    // their own account was a self-service privilege escalation.
+    if (is_admin !== undefined && req.user.role_level < ROLE_LEVELS.SUPERADMIN) {
+      return res.status(403).json({ error: 'Only a super-admin can change admin status' });
+    }
+
+    // Cannot edit a user at or above your own level (except yourself). The
+    // target's is_admin flag counts toward their level so a level-3 admin
+    // can't strip or hijack another admin account.
+    const targetLevel = Math.max(oldValues.role_level || 0, oldValues.is_admin ? ROLE_LEVELS.ADMIN : 0);
+    if (userId !== req.user.id && targetLevel >= req.user.role_level) {
+      return res.status(403).json({ error: 'Cannot modify a user with an equal or higher role' });
     }
 
     // Validate email format if provided
@@ -249,7 +270,7 @@ router.put('/users/:id', async (req, res) => {
 // Requires level 3+ (Admin)
 router.post('/users/:id/toggle-status', async (req, res) => {
   // Check admin level
-  if (req.user.role_level < ROLE_LEVELS.ADMIN && !req.user.is_admin) {
+  if (req.user.role_level < ROLE_LEVELS.ADMIN) {
     return res.status(403).json({ error: 'Admin access required' });
   }
 
@@ -296,7 +317,7 @@ router.post('/users/:id/toggle-status', async (req, res) => {
 // Requires level 3+ (Admin)
 router.post('/users/:id/send-reset', async (req, res) => {
   // Check admin level
-  if (req.user.role_level < ROLE_LEVELS.ADMIN && !req.user.is_admin) {
+  if (req.user.role_level < ROLE_LEVELS.ADMIN) {
     return res.status(403).json({ error: 'Admin access required' });
   }
 
@@ -374,7 +395,7 @@ router.get('/users/:id/contacts', async (req, res) => {
 // Set temporary password for user
 // Requires level 3+ (Admin)
 router.post('/users/:id/set-temp-password', async (req, res) => {
-  if (req.user.role_level < ROLE_LEVELS.ADMIN && !req.user.is_admin) {
+  if (req.user.role_level < ROLE_LEVELS.ADMIN) {
     return res.status(403).json({ error: 'Admin access required' });
   }
 
@@ -391,21 +412,21 @@ router.post('/users/:id/set-temp-password', async (req, res) => {
     const targetUser = userResult.rows[0];
 
     // Cannot set password on users with equal or higher role level
-    if (targetUser.role_level >= req.user.role_level && !req.user.is_admin) {
+    if (Math.max(targetUser.role_level || 0, targetUser.is_admin ? ROLE_LEVELS.ADMIN : 0) >= req.user.role_level) {
       return res.status(403).json({ error: 'Cannot modify users with equal or higher role level' });
     }
 
     // Generate random password if not provided
     const crypto = require('crypto');
-    const tempPassword = password || crypto.randomBytes(8).toString('base64').replace(/[+/=]/g, '').substring(0, 12);
+    const tempPassword = password || crypto.randomBytes(16).toString('base64').replace(/[+/=]/g, '').substring(0, 16);
 
-    // Validate password length
-    if (tempPassword.length < 8) {
-      return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    // Validate password length (same floor as the user-facing password policy)
+    if (tempPassword.length < 12) {
+      return res.status(400).json({ error: 'Password must be at least 12 characters' });
     }
 
     // Hash the password
-    const bcrypt = require('bcrypt');
+    const bcrypt = require('bcryptjs');
     const hashedPassword = await bcrypt.hash(tempPassword, 10);
 
     // Update password and force change on next login
@@ -460,7 +481,7 @@ router.post('/users/:id/set-temp-password', async (req, res) => {
 // Force password change for user
 // Requires level 3+ (Admin)
 router.post('/users/:id/force-password-change', async (req, res) => {
-  if (req.user.role_level < ROLE_LEVELS.ADMIN && !req.user.is_admin) {
+  if (req.user.role_level < ROLE_LEVELS.ADMIN) {
     return res.status(403).json({ error: 'Admin access required' });
   }
 
@@ -477,7 +498,7 @@ router.post('/users/:id/force-password-change', async (req, res) => {
     const targetUser = userResult.rows[0];
 
     // Cannot force password change on users with equal or higher role level
-    if (targetUser.role_level >= req.user.role_level && !req.user.is_admin) {
+    if (Math.max(targetUser.role_level || 0, targetUser.is_admin ? ROLE_LEVELS.ADMIN : 0) >= req.user.role_level) {
       return res.status(403).json({ error: 'Cannot modify users with equal or higher role level' });
     }
 
@@ -512,7 +533,7 @@ router.post('/users/:id/force-password-change', async (req, res) => {
 // Require 2FA setup for user
 // Requires level 3+ (Admin)
 router.post('/users/:id/require-2fa', async (req, res) => {
-  if (req.user.role_level < ROLE_LEVELS.ADMIN && !req.user.is_admin) {
+  if (req.user.role_level < ROLE_LEVELS.ADMIN) {
     return res.status(403).json({ error: 'Admin access required' });
   }
 
@@ -529,7 +550,7 @@ router.post('/users/:id/require-2fa', async (req, res) => {
     const targetUser = userResult.rows[0];
 
     // Cannot require 2FA on users with equal or higher role level
-    if (targetUser.role_level >= req.user.role_level && !req.user.is_admin) {
+    if (Math.max(targetUser.role_level || 0, targetUser.is_admin ? ROLE_LEVELS.ADMIN : 0) >= req.user.role_level) {
       return res.status(403).json({ error: 'Cannot modify users with equal or higher role level' });
     }
 
@@ -569,7 +590,7 @@ router.post('/users/:id/require-2fa', async (req, res) => {
 // Reset/disable 2FA for user (help locked out users)
 // Requires level 3+ (Admin)
 router.post('/users/:id/reset-2fa', async (req, res) => {
-  if (req.user.role_level < ROLE_LEVELS.ADMIN && !req.user.is_admin) {
+  if (req.user.role_level < ROLE_LEVELS.ADMIN) {
     return res.status(403).json({ error: 'Admin access required' });
   }
 
@@ -586,7 +607,7 @@ router.post('/users/:id/reset-2fa', async (req, res) => {
     const targetUser = userResult.rows[0];
 
     // Cannot reset 2FA on users with equal or higher role level
-    if (targetUser.role_level >= req.user.role_level && !req.user.is_admin) {
+    if (Math.max(targetUser.role_level || 0, targetUser.is_admin ? ROLE_LEVELS.ADMIN : 0) >= req.user.role_level) {
       return res.status(403).json({ error: 'Cannot modify users with equal or higher role level' });
     }
 
@@ -633,7 +654,7 @@ router.post('/users/:id/impersonate', async (req, res) => {
   const userId = parseInt(req.params.id);
 
   // Require super admin
-  if (req.user.role_level < ROLE_LEVELS.SUPERADMIN && !req.user.is_admin) {
+  if (req.user.role_level < ROLE_LEVELS.SUPERADMIN) {
     return res.status(403).json({ error: 'Super admin access required' });
   }
 
@@ -677,7 +698,7 @@ router.delete('/users/:id', async (req, res) => {
   const userId = parseInt(req.params.id);
 
   // Require super admin (role_level >= 4)
-  if (req.user.role_level < ROLE_LEVELS.SUPERADMIN && !req.user.is_admin) {
+  if (req.user.role_level < ROLE_LEVELS.SUPERADMIN) {
     return res.status(403).json({ error: 'Super admin access required' });
   }
 
@@ -700,7 +721,7 @@ router.delete('/users/:id', async (req, res) => {
     const targetUser = userResult.rows[0];
 
     // Cannot delete users with equal or higher role level
-    if (targetUser.role_level >= req.user.role_level) {
+    if (Math.max(targetUser.role_level || 0, targetUser.is_admin ? ROLE_LEVELS.ADMIN : 0) >= req.user.role_level) {
       return res.status(403).json({ error: 'Cannot delete users with equal or higher role level' });
     }
 
