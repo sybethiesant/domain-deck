@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Users, Globe, ShoppingCart, DollarSign, TrendingUp, AlertTriangle, RefreshCw, Loader2, Search, ChevronLeft, ChevronRight, Edit2, Save, X, Eye, Check, Download, Wallet, CreditCard, Settings, History, ArrowUpRight, ArrowDownRight } from 'lucide-react';
+import { Users, Globe, ShoppingCart, DollarSign, TrendingUp, AlertTriangle, RefreshCw, Loader2, Search, ChevronLeft, ChevronRight, Edit2, Save, X, Eye, Check, Download, Wallet, CreditCard, Settings, History, ArrowUpRight, ArrowDownRight, Lock } from 'lucide-react';
 import { useAuth } from '../../App';
 import { API_URL } from '../../config/api';
 import { toast } from 'react-hot-toast';
@@ -300,7 +300,7 @@ function AdminDashboard() {
 
       {activeTab === 'overview' && (<div className="space-y-8"><div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">{statCards.map((stat, i) => (<div key={i} className="card p-4"><div className={'w-10 h-10 rounded-lg ' + getColorClasses(stat.color) + ' flex items-center justify-center mb-3'}><stat.icon className="w-5 h-5" /></div><p className="text-2xl font-bold text-slate-900 dark:text-slate-100">{stat.value}</p><p className="text-sm text-slate-500 dark:text-slate-400">{stat.label}</p></div>))}</div><div className="grid md:grid-cols-2 gap-6"><div className="card p-6"><h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100 mb-4">Today's Performance</h3><div className="space-y-4"><div className="flex justify-between"><span className="text-slate-600 dark:text-slate-400">Orders</span><span className="font-semibold">{stats?.ordersToday || 0}</span></div><div className="flex justify-between"><span className="text-slate-600 dark:text-slate-400">Revenue</span><span className="font-semibold text-accent-600">${stats?.revenueToday?.toFixed(2) || '0.00'}</span></div><div className="flex justify-between"><span className="text-slate-600 dark:text-slate-400">Pending</span><span className="font-semibold text-yellow-600">{stats?.pendingOrders || 0}</span></div></div></div><div className="card p-6"><h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100 mb-4">Attention Required</h3><div className="space-y-4">{stats?.expiringSoon > 0 && <div className="flex items-center gap-3 text-yellow-600"><AlertTriangle className="w-5 h-5" /><span>{stats.expiringSoon} domains expiring soon</span></div>}{stats?.pendingOrders > 0 && <div className="flex items-center gap-3 text-primary-600"><ShoppingCart className="w-5 h-5" /><span>{stats.pendingOrders} orders pending</span></div>}{!stats?.expiringSoon && !stats?.pendingOrders && <p className="text-slate-500">All good!</p>}</div></div></div></div>)}
 
-      {activeTab === 'users' && (<div className="space-y-6"><div className="flex gap-4"><div className="relative flex-1"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" /><input type="text" placeholder="Search users..." value={usersSearch} onChange={(e) => { setUsersSearch(e.target.value); setUsersPage(1); }} className="input pl-10 w-full" /></div><button onClick={fetchUsers} className="btn-secondary"><RefreshCw className={'w-4 h-4 ' + (usersLoading ? 'animate-spin' : '')} /></button></div><div className="card overflow-hidden"><div className="overflow-x-auto"><table className="w-full"><thead className="bg-slate-50 dark:bg-slate-800/50"><tr><th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">User</th><th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Role</th><th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Domains</th><th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Orders</th><th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Joined</th><th className="px-4 py-3 text-right text-xs font-medium text-slate-500 uppercase">Actions</th></tr></thead><tbody className="divide-y divide-slate-200 dark:divide-slate-700">{usersLoading ? <tr><td colSpan="6" className="px-4 py-8 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto" /></td></tr> : users.length === 0 ? <tr><td colSpan="6" className="px-4 py-8 text-center text-slate-500">No users</td></tr> : users.map((user) => (<tr key={user.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50"><td className="px-4 py-3"><p className="font-medium text-slate-900 dark:text-slate-100">{user.username}</p><p className="text-sm text-slate-500">{user.email}</p></td><td className="px-4 py-3"><span className={'px-2 py-1 rounded-full text-xs font-medium ' + (user.role_level >= 3 ? 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400' : user.role_level >= 1 ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400' : 'bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-300')}>{user.role_name || 'customer'}</span></td><td className="px-4 py-3 text-slate-600 dark:text-slate-400">{user.domain_count || 0}</td><td className="px-4 py-3 text-slate-600 dark:text-slate-400">{user.order_count || 0}</td><td className="px-4 py-3 text-sm text-slate-500">{new Date(user.created_at).toLocaleDateString()}</td><td className="px-4 py-3 text-right"><button onClick={() => setSelectedUserId(user.id)} className="p-1 text-slate-400 hover:text-primary-600"><Eye className="w-4 h-4" /></button></td></tr>))}</tbody></table></div></div><Pagination page={usersPage} totalPages={usersTotalPages} setPage={setUsersPage} />{selectedUserId && <AdminUserDetail userId={selectedUserId} onClose={() => { setSelectedUserId(null); fetchUsers(); }} />}</div>)}
+      {activeTab === 'users' && (<div className="space-y-6"><div className="flex gap-4"><div className="relative flex-1"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" /><input type="text" placeholder="Search users..." value={usersSearch} onChange={(e) => { setUsersSearch(e.target.value); setUsersPage(1); }} className="input pl-10 w-full" /></div><button onClick={fetchUsers} className="btn-secondary"><RefreshCw className={'w-4 h-4 ' + (usersLoading ? 'animate-spin' : '')} /></button></div><div className="card overflow-hidden"><div className="overflow-x-auto"><table className="w-full"><thead className="bg-slate-50 dark:bg-slate-800/50"><tr><th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">User</th><th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Role</th><th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Domains</th><th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Orders</th><th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Joined</th><th className="px-4 py-3 text-right text-xs font-medium text-slate-500 uppercase">Actions</th></tr></thead><tbody className="divide-y divide-slate-200 dark:divide-slate-700">{usersLoading ? <tr><td colSpan="6" className="px-4 py-8 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto" /></td></tr> : users.length === 0 ? <tr><td colSpan="6" className="px-4 py-8 text-center text-slate-500">No users</td></tr> : users.map((user) => (<tr key={user.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50"><td className="px-4 py-3"><p className="font-medium text-slate-900 dark:text-slate-100 flex items-center gap-2">{user.username}{user.lockout_until && new Date(user.lockout_until) > new Date() && (<span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400" title={'Locked after ' + (user.failed_login_attempts || 0) + ' failed login attempts. Unlocks at ' + new Date(user.lockout_until).toLocaleString()}><Lock className="w-3 h-3" />Locked · {Math.ceil((new Date(user.lockout_until) - Date.now()) / 60000)}m</span>)}</p><p className="text-sm text-slate-500">{user.email}</p></td><td className="px-4 py-3"><span className={'px-2 py-1 rounded-full text-xs font-medium ' + (user.role_level >= 3 ? 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400' : user.role_level >= 1 ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400' : 'bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-300')}>{user.role_name || 'customer'}</span></td><td className="px-4 py-3 text-slate-600 dark:text-slate-400">{user.domain_count || 0}</td><td className="px-4 py-3 text-slate-600 dark:text-slate-400">{user.order_count || 0}</td><td className="px-4 py-3 text-sm text-slate-500">{new Date(user.created_at).toLocaleDateString()}</td><td className="px-4 py-3 text-right"><button onClick={() => setSelectedUserId(user.id)} className="p-1 text-slate-400 hover:text-primary-600"><Eye className="w-4 h-4" /></button></td></tr>))}</tbody></table></div></div><Pagination page={usersPage} totalPages={usersTotalPages} setPage={setUsersPage} />{selectedUserId && <AdminUserDetail userId={selectedUserId} onClose={() => { setSelectedUserId(null); fetchUsers(); }} />}</div>)}
 
       {activeTab === 'orders' && (<div className="space-y-6"><div className="flex gap-4"><select value={ordersFilter} onChange={(e) => { setOrdersFilter(e.target.value); setOrdersPage(1); }} className="input"><option value="all">All Orders</option><option value="pending">Pending</option><option value="processing">Processing</option><option value="completed">Completed</option><option value="failed">Failed</option><option value="refunded">Refunded</option></select><button onClick={fetchOrders} className="btn-secondary"><RefreshCw className={'w-4 h-4 ' + (ordersLoading ? 'animate-spin' : '')} /></button></div><div className="card overflow-hidden"><div className="overflow-x-auto"><table className="w-full"><thead className="bg-slate-50 dark:bg-slate-800/50"><tr><th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">ID</th><th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Customer</th><th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Total</th><th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Status</th><th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Payment</th><th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Date</th><th className="px-4 py-3 text-right text-xs font-medium text-slate-500 uppercase">Actions</th></tr></thead><tbody className="divide-y divide-slate-200 dark:divide-slate-700">{ordersLoading ? <tr><td colSpan="7" className="px-4 py-8 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto" /></td></tr> : orders.length === 0 ? <tr><td colSpan="7" className="px-4 py-8 text-center text-slate-500">No orders</td></tr> : orders.map((order) => (<tr key={order.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50"><td className="px-4 py-3 font-mono text-sm">#{order.id}</td><td className="px-4 py-3"><p className="font-medium">{order.username || 'Unknown'}</p><p className="text-sm text-slate-500">{order.email}</p></td><td className="px-4 py-3 font-semibold">${parseFloat(order.total || 0).toFixed(2)}</td><td className="px-4 py-3"><StatusBadge status={order.status} /></td><td className="px-4 py-3"><StatusBadge status={order.payment_status} /></td><td className="px-4 py-3 text-sm text-slate-500">{new Date(order.created_at).toLocaleDateString()}</td><td className="px-4 py-3 text-right"><button onClick={() => fetchOrderDetails(order.id)} className="p-1 text-slate-400 hover:text-primary-600"><Eye className="w-4 h-4" /></button></td></tr>))}</tbody></table></div></div><Pagination page={ordersPage} totalPages={ordersTotalPages} setPage={setOrdersPage} />{selectedOrder && (<div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"><div className="bg-white dark:bg-slate-800 rounded-xl max-w-2xl w-full p-6"><div className="flex justify-between items-start mb-6"><div><h3 className="text-xl font-bold">Order #{selectedOrder.id}</h3><p className="text-slate-500">{new Date(selectedOrder.created_at).toLocaleString()}</p></div><button onClick={() => setSelectedOrder(null)} className="text-slate-400 hover:text-slate-600"><X className="w-6 h-6" /></button></div><div className="grid grid-cols-2 gap-4 mb-6"><div><p className="text-sm text-slate-500">Status</p><StatusBadge status={selectedOrder.status} /></div><div><p className="text-sm text-slate-500">Payment</p><StatusBadge status={selectedOrder.payment_status} /></div><div><p className="text-sm text-slate-500">Customer</p><p className="font-medium">{selectedOrder.username}</p></div><div><p className="text-sm text-slate-500">Total</p><p className="font-bold text-lg">${parseFloat(selectedOrder.total || 0).toFixed(2)}</p></div></div>{selectedOrder.items?.length > 0 && (<div className="mb-6"><p className="text-sm text-slate-500 mb-2">Items</p><div className="bg-slate-50 dark:bg-slate-700/50 rounded-lg p-4 space-y-2">{selectedOrder.items.map((item, i) => <div key={i} className="flex justify-between"><span>{item.domain_name}.{item.tld}</span><span className="text-slate-600">${parseFloat(item.total_price || item.price || 0).toFixed(2)}</span></div>)}</div></div>)}<div className="flex gap-4 pt-4 border-t dark:border-slate-700">{isAdmin && selectedOrder.payment_status === 'paid' && selectedOrder.status !== 'refunded' && <button onClick={() => processRefund(selectedOrder.id)} className="btn-secondary text-red-600">Refund</button>}<button onClick={() => setSelectedOrder(null)} className="btn-secondary ml-auto">Close</button></div></div></div>)}</div>)}
 
@@ -401,16 +401,18 @@ function AdminDashboard() {
                     </span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-slate-600 dark:text-slate-400">Threshold</span>
-                    <span>${parseFloat(balanceSettings.min_balance_threshold || 0).toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between">
                     <span className="text-slate-600 dark:text-slate-400">Refill Amount</span>
-                    <span>${parseFloat(balanceSettings.refill_amount || 0).toFixed(2)}</span>
+                    <span className="text-right">exact shortfall<br />
+                      <span className="text-xs text-slate-500">min ${parseFloat(balanceSettings.min_refill || 25).toFixed(2)}</span>
+                    </span>
+                  </div>
+                  <div className="flex justify-between pt-2 border-t border-slate-200 dark:border-slate-700">
+                    <span className="text-slate-600 dark:text-slate-400">Max Order Auto-Funded</span>
+                    <span>${parseFloat(balanceSettings.auto_refill_max_order_cost || 0).toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-slate-600 dark:text-slate-400">Low Alert</span>
-                    <span>${parseFloat(balanceSettings.low_balance_alert || 0).toFixed(2)}</span>
+                    <span className="text-slate-600 dark:text-slate-400">Max Single Refill</span>
+                    <span>${parseFloat(balanceSettings.auto_refill_max_amount || 0).toFixed(2)}</span>
                   </div>
                 </div>
               ) : (
@@ -436,28 +438,50 @@ function AdminDashboard() {
                     auto_refill_enabled: form.auto_refill.checked,
                     min_balance_threshold: parseFloat(form.threshold.value),
                     refill_amount: parseFloat(form.refill_amount.value),
-                    low_balance_alert: parseFloat(form.alert.value),
                     email_alerts_enabled: form.email_alerts.checked,
-                    alert_email: form.alert_email.value
+                    alert_email: form.alert_email.value,
+                    auto_refill_max_order_cost: parseFloat(form.max_order_cost.value),
+                    auto_refill_max_amount: parseFloat(form.max_refill_amount.value)
                   });
                 }} className="space-y-4">
                   <div className="flex items-center gap-3">
                     <input type="checkbox" name="auto_refill" id="auto_refill" defaultChecked={balanceSettings.auto_refill_enabled} className="rounded" />
                     <label htmlFor="auto_refill" className="text-sm font-medium">Enable Auto-Refill</label>
                   </div>
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Min Balance Threshold ($)</label>
-                    <input type="number" name="threshold" step="0.01" min="0" defaultValue={balanceSettings.min_balance_threshold} className="input w-full" />
-                    <p className="text-xs text-slate-500 mt-1">Auto-refill triggers when balance falls below this</p>
+                  <div className="p-3 bg-slate-50 dark:bg-slate-900/40 rounded-lg text-xs text-slate-600 dark:text-slate-400">
+                    Refills are sized automatically: the exact shortfall between your eNom balance and
+                    your wholesale cost for the order, grossed up to cover eNom's card fee. It only
+                    overshoots when that comes to less than eNom's $
+                    {parseFloat(balanceSettings.min_refill || 25).toFixed(2)} minimum. There is no fixed
+                    refill amount to configure — only the ceilings below.
                   </div>
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Refill Amount ($)</label>
-                    <input type="number" name="refill_amount" step="0.01" min="25" defaultValue={balanceSettings.refill_amount} className="input w-full" />
-                    <p className="text-xs text-slate-500 mt-1">Amount to refill (min $25)</p>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Low Balance Alert ($)</label>
-                    <input type="number" name="alert" step="0.01" min="0" defaultValue={balanceSettings.low_balance_alert} className="input w-full" />
+
+                  <div className="pt-4 border-t border-slate-200 dark:border-slate-700">
+                    <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-1">Auto-Funding Limits</h4>
+                    <p className="text-xs text-slate-500 mb-3">
+                      Bounds on topping up the eNom balance to cover a customer order.
+                    </p>
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-sm font-medium mb-1">Max Order Value to Auto-Fund ($)</label>
+                        <input type="number" name="max_order_cost" step="0.01" min="0"
+                          defaultValue={balanceSettings.auto_refill_max_order_cost} className="input w-full" />
+                        <p className="text-xs text-slate-500 mt-1">
+                          Orders worth more than this are never auto-funded — they stop for manual review so a
+                          reversible payment can't draw on your card. Set to 0 to auto-fund nothing.
+                        </p>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium mb-1">Max Single Refill ($)</label>
+                        <input type="number" name="max_refill_amount" step="0.01"
+                          min={balanceSettings.min_refill || 25}
+                          defaultValue={balanceSettings.auto_refill_max_amount} className="input w-full" />
+                        <p className="text-xs text-slate-500 mt-1">
+                          Ceiling on any one charge to the reseller card. Must be at least $
+                          {parseFloat(balanceSettings.min_refill || 25).toFixed(2)} (eNom's minimum refill).
+                        </p>
+                      </div>
+                    </div>
                   </div>
                   <div className="flex items-center gap-3">
                     <input type="checkbox" name="email_alerts" id="email_alerts" defaultChecked={balanceSettings.email_alerts_enabled} className="rounded" />

@@ -1619,6 +1619,15 @@ class EnomAPI {
       throw new Error('Invalid card details stored. Re-run store-card.js');
     }
 
+    // Read the balance before charging so the credited amount — and therefore
+    // the real fee — can be measured from the delta.
+    let balanceBefore = null;
+    try {
+      balanceBefore = (await this.getDetailedBalance()).availableBalance;
+    } catch (balanceError) {
+      console.error('Pre-refill balance read failed, fee will be estimated:', balanceError.message);
+    }
+
     try {
       // Call eNom with full card details (HTTPS required - already using HTTPS)
       const response = await this.request('RefillAccount', {
@@ -1644,18 +1653,45 @@ class EnomAPI {
         throw new Error(errMsg);
       }
 
-      const feeAmount = amount * CC_FEE_PERCENT;
-      const netAmount = amount - feeAmount;
+      // Report the fee eNom actually took, not an assumed percentage. eNom
+      // returns no fee field, and the one charge observed so far ($0.75 on a
+      // $25 refill) fits both a flat fee and 3%, so the balance delta is the
+      // only trustworthy figure. Recording the real number also lets the fee
+      // structure become visible in balance_transactions over time.
+      let feeAmount;
+      let netAmount;
+      let feeMeasured = false;
+
+      let balanceAfter = null;
+      try {
+        balanceAfter = (await this.getDetailedBalance()).availableBalance;
+      } catch (balanceError) {
+        console.error('Post-refill balance read failed, falling back to estimated fee:', balanceError.message);
+      }
+
+      if (balanceBefore !== null && balanceAfter !== null) {
+        netAmount = parseFloat((balanceAfter - balanceBefore).toFixed(2));
+        feeAmount = parseFloat((amount - netAmount).toFixed(2));
+        feeMeasured = true;
+      } else {
+        feeAmount = parseFloat((amount * CC_FEE_PERCENT).toFixed(2));
+        netAmount = parseFloat((amount - feeAmount).toFixed(2));
+      }
 
       // Log success (never log card details)
-      console.log(`eNom refill: Charged $${amount} (CC fee $${feeAmount.toFixed(2)})`);
+      console.log(
+        `eNom refill: Charged $${amount.toFixed(2)}, credited $${netAmount.toFixed(2)} ` +
+        `(fee $${feeAmount.toFixed(2)}${feeMeasured ? ' measured' : ' estimated'})`
+      );
 
       return {
         success: true,
         requestedAmount: amount,
-        feePercent: CC_FEE_PERCENT * 100,
-        feeAmount: parseFloat(feeAmount.toFixed(2)),
-        netAmount: parseFloat(netAmount.toFixed(2)),
+        feeAmount,
+        netAmount,
+        feeMeasured,
+        balanceBefore,
+        balanceAfter,
         transactionId: response.TransactionID || response.OrderID,
         message: 'Account refilled successfully'
       };
@@ -1715,13 +1751,62 @@ class EnomAPI {
   }
 
   /**
+   * Decide whether an automatic refill is permitted for this order.
+   *
+   * Throws with an operator-readable reason when it is not. The caller's
+   * per-item error handling turns that into a failed order item flagged for
+   * manual review, which is the intended outcome: we would rather leave a
+   * high-value order unfulfilled than fund it on our own card and eat a
+   * chargeback.
+   *
+   * Judged on the RETAIL value of the order, not our wholesale cost: the
+   * exposure being limited is the customer payment that could be reversed.
+   * Refill sizing uses the wholesale cost separately, since that is what eNom
+   * actually deducts.
+   *
+   * @param {number} orderCost - Retail value of the order line being fulfilled
+   * @param {object} refillCalc - Result of calculateRefillNeeded()
+   * @param {object} options - { autoRefill, maxOrderCost, maxRefillAmount }
+   */
+  assertRefillAllowed(orderCost, refillCalc, options = {}) {
+    const {
+      autoRefill = true,
+      maxOrderCost = BALANCE.DEFAULT_MAX_ORDER_COST,
+      maxRefillAmount = BALANCE.DEFAULT_MAX_REFILL_AMOUNT
+    } = options;
+
+    if (!autoRefill) {
+      throw new Error(
+        `Insufficient eNom balance ($${refillCalc.shortfall.toFixed(2)} short) and ` +
+        `auto-refill is disabled. Add funds in Admin -> Balance, then retry this order.`
+      );
+    }
+
+    if (orderCost > maxOrderCost) {
+      throw new Error(
+        `Order value $${orderCost.toFixed(2)} exceeds the $${maxOrderCost.toFixed(2)} ` +
+        `auto-refill limit. Fund the reseller balance manually and retry — high-value ` +
+        `orders are held deliberately so a reversible payment cannot draw on the card.`
+      );
+    }
+
+    if (refillCalc.refillAmount > maxRefillAmount) {
+      throw new Error(
+        `Refill of $${refillCalc.refillAmount.toFixed(2)} needed, which exceeds the ` +
+        `$${maxRefillAmount.toFixed(2)} per-refill cap. Add funds manually and retry.`
+      );
+    }
+  }
+
+  /**
    * Smart domain purchase with automatic balance management
    * @param {object} params - Purchase parameters (same as registerDomain)
-   * @param {object} options - Additional options (autoRefill, dryRun)
+   * @param {object} options - Additional options (autoRefill, maxOrderCost,
+   *                           maxRefillAmount, dryRun)
    * @returns {Promise<object>} - Purchase result with balance details
    */
   async smartPurchase(params, options = {}) {
-    const { autoRefill = true, dryRun = false } = options;
+    const { dryRun = false } = options;
     
     const result = { steps: [], success: false };
 
@@ -1739,15 +1824,17 @@ class EnomAPI {
       }
       result.domainCost = domainCost;
 
-      // Step 3: Calculate refill needed
+      // Step 3: Calculate refill needed. params.cost is our wholesale cost —
+      // the amount eNom actually deducts — so the top-up is sized to the real
+      // shortfall rather than the customer's retail price. options.orderValue
+      // carries the retail figure for the spend gate.
+      const orderValue = options.orderValue != null ? options.orderValue : domainCost;
       const refillCalc = this.calculateRefillNeeded(domainCost, balanceInfo.availableBalance);
       result.refillCalculation = refillCalc;
 
       // Step 4: Refill if needed
       if (refillCalc.needsRefill) {
-        if (!autoRefill) {
-          throw new Error(`Insufficient balance. Need $${domainCost}, have $${balanceInfo.availableBalance}`);
-        }
+        this.assertRefillAllowed(orderValue, refillCalc, options);
 
         if (!dryRun) {
           result.steps.push({ step: 'refill', status: 'started' });
@@ -1797,20 +1884,21 @@ class EnomAPI {
    * Smart domain renewal with automatic balance management
    */
   async smartRenewal(sld, tld, years, cost, options = {}) {
-    const { autoRefill = true, dryRun = false, mode } = options;
+    const { dryRun = false, mode } = options;
     const result = { steps: [], success: false };
 
     try {
       const balanceInfo = await this.getDetailedBalance();
       result.currentBalance = balanceInfo.availableBalance;
 
+      // `cost` is our wholesale renewal cost; options.orderValue is what the
+      // customer paid, used only for the spend gate.
+      const orderValue = options.orderValue != null ? options.orderValue : cost;
       const refillCalc = this.calculateRefillNeeded(cost, balanceInfo.availableBalance);
       result.refillCalculation = refillCalc;
 
       if (refillCalc.needsRefill && !dryRun) {
-        if (!autoRefill) {
-          throw new Error(`Insufficient balance for renewal. Need $${cost}, have $${balanceInfo.availableBalance}`);
-        }
+        this.assertRefillAllowed(orderValue, refillCalc, options);
         const refillResult = await this.refillAccount(refillCalc.refillAmount);
         result.refillResult = refillResult;
 
@@ -1844,7 +1932,7 @@ class EnomAPI {
    * Smart domain transfer with automatic balance management
    */
   async smartTransfer(params, options = {}) {
-    const { autoRefill = true, dryRun = false } = options;
+    const { dryRun = false } = options;
     const result = { steps: [], success: false };
 
     try {
@@ -1859,15 +1947,15 @@ class EnomAPI {
       }
       result.transferCost = transferCost;
 
-      // Step 3: Calculate refill needed
+      // Step 3: Calculate refill needed. transferCost is wholesale;
+      // options.orderValue is the retail figure for the spend gate.
+      const orderValue = options.orderValue != null ? options.orderValue : transferCost;
       const refillCalc = this.calculateRefillNeeded(transferCost, balanceInfo.availableBalance);
       result.refillCalculation = refillCalc;
 
       // Step 4: Refill if needed
       if (refillCalc.needsRefill) {
-        if (!autoRefill) {
-          throw new Error(`Insufficient balance for transfer. Need $${transferCost}, have $${balanceInfo.availableBalance}`);
-        }
+        this.assertRefillAllowed(orderValue, refillCalc, options);
 
         if (!dryRun) {
           result.steps.push({ step: 'refill', status: 'started' });

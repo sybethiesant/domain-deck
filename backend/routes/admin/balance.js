@@ -9,6 +9,7 @@ const express = require('express');
 const router = express.Router();
 const enom = require('../../services/enom');
 const { ROLE_LEVELS } = require('../../middleware/auth');
+const { BALANCE } = require('../../config/constants');
 
 // Apply admin level check to all balance routes
 router.use((req, res, next) => {
@@ -46,11 +47,15 @@ router.get('/settings', async (req, res) => {
         refill_amount: 100.00,
         low_balance_alert: 25.00,
         email_alerts_enabled: true,
-        alert_email: null
+        alert_email: null,
+        auto_refill_max_order_cost: BALANCE.DEFAULT_MAX_ORDER_COST,
+        auto_refill_max_amount: BALANCE.DEFAULT_MAX_REFILL_AMOUNT,
+        min_refill: BALANCE.MIN_REFILL
       });
     }
     
-    res.json(result.rows[0]);
+    // eNom's floor is fixed, but the UI needs it to validate the caps.
+    res.json({ ...result.rows[0], min_refill: BALANCE.MIN_REFILL });
   } catch (error) {
     console.error('Error fetching balance settings:', error);
     res.status(500).json({ error: 'Failed to fetch balance settings' });
@@ -66,8 +71,29 @@ router.put('/settings', async (req, res) => {
     refill_amount,
     low_balance_alert,
     email_alerts_enabled,
-    alert_email
+    alert_email,
+    auto_refill_max_order_cost,
+    auto_refill_max_amount
   } = req.body;
+
+  // A per-refill cap below eNom's own $25 minimum can never be satisfied, so
+  // auto-refill would silently never fire. Reject it rather than accept a
+  // setting that disables the feature without saying so.
+  if (auto_refill_max_amount !== undefined && auto_refill_max_amount !== null) {
+    const cap = parseFloat(auto_refill_max_amount);
+    if (!Number.isFinite(cap) || cap < BALANCE.MIN_REFILL) {
+      return res.status(400).json({
+        error: `Maximum refill must be at least $${BALANCE.MIN_REFILL.toFixed(2)} (eNom's minimum refill).`
+      });
+    }
+  }
+
+  if (auto_refill_max_order_cost !== undefined && auto_refill_max_order_cost !== null) {
+    const cap = parseFloat(auto_refill_max_order_cost);
+    if (!Number.isFinite(cap) || cap < 0) {
+      return res.status(400).json({ error: 'Maximum order value must be zero or greater.' });
+    }
+  }
 
   try {
     const existing = await pool.query('SELECT id FROM balance_settings LIMIT 1');
@@ -75,10 +101,13 @@ router.put('/settings', async (req, res) => {
     if (existing.rows.length === 0) {
       const result = await pool.query(
         `INSERT INTO balance_settings 
-         (auto_refill_enabled, min_balance_threshold, refill_amount, low_balance_alert, email_alerts_enabled, alert_email)
-         VALUES ($1, $2, $3, $4, $5, $6)
+         (auto_refill_enabled, min_balance_threshold, refill_amount, low_balance_alert, email_alerts_enabled, alert_email,
+          auto_refill_max_order_cost, auto_refill_max_amount)
+         VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, $9), COALESCE($8, $10))
          RETURNING *`,
-        [auto_refill_enabled, min_balance_threshold, refill_amount, low_balance_alert, email_alerts_enabled, alert_email]
+        [auto_refill_enabled, min_balance_threshold, refill_amount, low_balance_alert, email_alerts_enabled, alert_email,
+         auto_refill_max_order_cost, auto_refill_max_amount,
+         BALANCE.DEFAULT_MAX_ORDER_COST, BALANCE.DEFAULT_MAX_REFILL_AMOUNT]
       );
       return res.json(result.rows[0]);
     } else {
@@ -90,10 +119,13 @@ router.put('/settings', async (req, res) => {
          low_balance_alert = COALESCE($4, low_balance_alert),
          email_alerts_enabled = COALESCE($5, email_alerts_enabled),
          alert_email = COALESCE($6, alert_email),
+         auto_refill_max_order_cost = COALESCE($7, auto_refill_max_order_cost),
+         auto_refill_max_amount = COALESCE($8, auto_refill_max_amount),
          updated_at = CURRENT_TIMESTAMP
-         WHERE id = $7
+         WHERE id = $9
          RETURNING *`,
-        [auto_refill_enabled, min_balance_threshold, refill_amount, low_balance_alert, email_alerts_enabled, alert_email, existing.rows[0].id]
+        [auto_refill_enabled, min_balance_threshold, refill_amount, low_balance_alert, email_alerts_enabled, alert_email,
+         auto_refill_max_order_cost, auto_refill_max_amount, existing.rows[0].id]
       );
       return res.json(result.rows[0]);
     }

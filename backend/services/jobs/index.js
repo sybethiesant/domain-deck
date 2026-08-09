@@ -6,6 +6,7 @@
 const cron = require('node-cron');
 const email = require('../email');
 const enom = require('../enom');
+const { getAutoRefillPolicy } = require('../balancePolicy');
 
 class JobScheduler {
   constructor() {
@@ -477,6 +478,10 @@ class JobScheduler {
 
     console.log(`[autoRenew] Found ${result.rows.length} domains to auto-renew`);
 
+    // Read the auto-refill bounds once per run so every domain in this batch
+    // is judged against the same policy.
+    const refillPolicy = await getAutoRefillPolicy(this.pool);
+
     let renewed = 0;
     let failed = 0;
     let noPaymentMethod = 0;
@@ -551,7 +556,11 @@ class JobScheduler {
         console.log(`[autoRenew] Payment succeeded for ${fullDomain}, proceeding with eNom renewal`);
 
         // STEP 2: Renew at eNom using reseller balance (with auto-refill)
-        const renewResult = await enom.smartRenewal(sld, tld, 1, enomCost, { mode: domainMode });
+        const renewResult = await enom.smartRenewal(sld, tld, 1, enomCost, {
+          ...refillPolicy,
+          orderValue: customerPrice,
+          mode: domainMode
+        });
 
         if (!renewResult.success) {
           // Payment succeeded but eNom failed - this needs manual resolution

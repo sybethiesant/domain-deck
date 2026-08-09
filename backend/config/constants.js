@@ -27,7 +27,13 @@ module.exports = {
     DEFAULT_REFILL_AMOUNT: 100.00,
     LOW_BALANCE_ALERT: 25.00,
     MIN_REFILL: 25.00,
-    CC_FEE_PERCENT: 0.05  // eNom charges 5% for CC refills
+    CC_FEE_PERCENT: 0.05, // eNom charges 5% for CC refills
+    // Fallback ceilings for automatic refills, used when a caller does not
+    // pass the admin-configured policy. Deliberately conservative: an
+    // unbounded auto-refill would fund an arbitrarily large order on the
+    // reseller card, so a forgotten parameter must fail closed, not open.
+    DEFAULT_MAX_ORDER_COST: 100.00,
+    DEFAULT_MAX_REFILL_AMOUNT: 100.00
   },
 
   // Cache TTLs (milliseconds)

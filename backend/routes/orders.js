@@ -128,7 +128,14 @@ router.post('/checkout', authMiddleware, async (req, res) => {
     if (paymentIntent.metadata?.userId !== String(req.user.id) || paymentIntent.metadata?.type !== 'domain_purchase') {
       return res.status(403).json({ error: 'Payment intent does not belong to this checkout' });
     }
-    if (paymentIntent.status === 'succeeded' || paymentIntent.status === 'canceled') {
+    // The client confirms the payment BEFORE calling checkout, so an intent
+    // that has already succeeded is the normal case here, not an attack.
+    // Rejecting it (as this guard first did) took the customer's money and
+    // then refused to create their order, leaving a charge with no order and
+    // the pay button spinning forever. Reuse is still blocked by the
+    // already-attached-to-an-order check below, ownership by the metadata
+    // check above, and underpayment by the amount check further down.
+    if (paymentIntent.status === 'canceled') {
       return res.status(400).json({ error: `Payment intent cannot be used (status: ${paymentIntent.status})` });
     }
     const existingOrder = await pool.query(
@@ -186,10 +193,19 @@ router.post('/checkout', authMiddleware, async (req, res) => {
     const tax = taxCents / 100;
     const total = totalCents / 100;
 
-    // The intent was created from the raw cart total before tax — bring the
-    // Stripe charge into lockstep with the order total so the webhook's
-    // amount validation always agrees with what the customer pays.
-    if (paymentIntent.amount !== totalCents) {
+    // The intent was created from the raw cart total before tax. While it is
+    // still open, bring the Stripe charge into lockstep with the order total
+    // so the webhook's amount validation always agrees with what the customer
+    // pays. Once the intent has succeeded its amount is fixed and Stripe
+    // rejects updates, so instead verify the captured amount actually covers
+    // the order and refuse to create an underpaid one.
+    if (paymentIntent.status === 'succeeded') {
+      if (paymentIntent.amount < totalCents) {
+        return res.status(400).json({
+          error: 'The amount paid is less than the order total. Your payment was received but this order could not be completed — please contact support.'
+        });
+      }
+    } else if (paymentIntent.amount !== totalCents) {
       await stripe.paymentIntents.update(payment_intent_id, { amount: totalCents });
     }
 
@@ -267,6 +283,22 @@ router.post('/checkout', authMiddleware, async (req, res) => {
        VALUES ($1, $2, $3, $4, $5)`,
       [req.user.id, 'order_created', 'order', order.id, JSON.stringify({ total, itemCount: items.length })]
     );
+
+    // If the payment already succeeded, the webhook for it may have arrived
+    // while this order did not yet exist — in which case it logged "Order not
+    // found" and gave up for good. Run fulfillment here so the order cannot
+    // strand as paid-but-unprovisioned. handlePaymentSuccess claims the order
+    // atomically, so this and a late webhook cannot both provision it.
+    // Failure is deliberately non-fatal: the order exists and is recoverable
+    // through POST /api/stripe/process-order/:id.
+    if (paymentIntent.status === 'succeeded') {
+      try {
+        const stripeRoutes = require('./stripe');
+        await stripeRoutes.handlePaymentSuccess(pool, paymentIntent);
+      } catch (fulfillError) {
+        console.error(`Inline fulfillment failed for order ${order.order_number}:`, fulfillError.message);
+      }
+    }
 
     res.status(201).json({
       message: 'Order created successfully',

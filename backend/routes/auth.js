@@ -39,6 +39,25 @@ async function getLockoutDuration(pool) {
   return AUTH.LOCKOUT_DURATION_MINUTES;
 }
 
+// Helper to get the failed-attempt threshold from settings. The admin
+// Settings page exposes this value, so read it here rather than relying on
+// the compiled-in default — otherwise the configured number is ignored and
+// the count the admin panel reports doesn't match reality.
+async function getLockoutAttempts(pool) {
+  try {
+    const result = await pool.query(
+      "SELECT value FROM app_settings WHERE key = 'lockout_attempts'"
+    );
+    if (result.rows.length > 0) {
+      const attempts = parseInt(result.rows[0].value);
+      if (!isNaN(attempts) && attempts > 0) return attempts;
+    }
+  } catch (err) {
+    // Fall back to default
+  }
+  return AUTH.LOCKOUT_ATTEMPTS;
+}
+
 // Generate verification token
 function generateVerificationToken() {
   return crypto.randomBytes(32).toString('hex');
@@ -263,7 +282,7 @@ router.post('/login', async (req, res) => {
         let lockoutMinutes = null;
 
         // Lock account after configured failed attempts
-        if (attempts >= AUTH.LOCKOUT_ATTEMPTS) {
+        if (attempts >= await getLockoutAttempts(pool)) {
           lockoutMinutes = await getLockoutDuration(pool);
           lockoutUntil = new Date(Date.now() + lockoutMinutes * 60 * 1000);
         }
@@ -1011,7 +1030,7 @@ router.post('/2fa/authenticate', async (req, res) => {
       const attempts = (user.failed_login_attempts || 0) + 1;
       let lockoutUntil = null;
       let lockoutMinutes = null;
-      if (attempts >= AUTH.LOCKOUT_ATTEMPTS) {
+      if (attempts >= await getLockoutAttempts(pool)) {
         lockoutMinutes = await getLockoutDuration(pool);
         lockoutUntil = new Date(Date.now() + lockoutMinutes * 60 * 1000);
       }

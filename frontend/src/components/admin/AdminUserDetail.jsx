@@ -24,6 +24,18 @@ const COUNTRY_OPTIONS = [
   { code: 'IN', name: 'India' }
 ];
 
+// Render a remaining-time span as a short "1h 04m 09s" style countdown
+function formatCountdown(ms) {
+  const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const pad = (n) => String(n).padStart(2, '0');
+  return hours > 0
+    ? `${hours}h ${pad(minutes)}m ${pad(seconds)}s`
+    : `${minutes}m ${pad(seconds)}s`;
+}
+
 // Role level constants (mirror backend)
 const ROLE_LEVELS = {
   CUSTOMER: 0,
@@ -82,6 +94,20 @@ function AdminUserDetail({ userId, onClose }) {
   useEffect(() => {
     fetchUser();
   }, [fetchUser]);
+
+  // Lockout state. `now` ticks once a second while the account is locked so
+  // the countdown stays honest without the admin refreshing the page.
+  const [now, setNow] = useState(() => Date.now());
+  const lockoutUntil = user?.lockout_until ? new Date(user.lockout_until).getTime() : null;
+  const failedAttempts = user?.failed_login_attempts || 0;
+  const lockoutThreshold = user?.lockout_policy?.attempts || 5;
+  const isLocked = lockoutUntil !== null && lockoutUntil > now;
+
+  useEffect(() => {
+    if (!isLocked) return undefined;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [isLocked]);
 
   const handleFieldChange = (field, value) => {
     setEditedFields(prev => ({ ...prev, [field]: value }));
@@ -253,6 +279,30 @@ function AdminUserDetail({ userId, onClose }) {
     setSecurityLoading(null);
   };
 
+  const handleUnlockAccount = async () => {
+    setSecurityLoading('unlock');
+    try {
+      const res = await fetch(`${API_URL}/admin/users/${userId}/unlock`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ reason: 'Admin unlock' })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        toast.success(data.message);
+        fetchUser();
+      } else {
+        toast.error(data.error || 'Failed to unlock account');
+      }
+    } catch (err) {
+      toast.error('Failed to unlock account');
+    }
+    setSecurityLoading(null);
+  };
+
   const handleSetTempPassword = async (sendEmail) => {
     setSecurityLoading('temp-password');
     try {
@@ -348,6 +398,14 @@ function AdminUserDetail({ userId, onClose }) {
                 <p className="text-sm text-slate-500">{user.email}</p>
               </div>
               <StatusBadge status={user.role_name || 'customer'} />
+              {isLocked && (
+                <span
+                  className="flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400"
+                  title={`Locked after ${failedAttempts} failed login attempts. Unlocks at ${new Date(user.lockout_until).toLocaleString()}`}
+                >
+                  <Lock className="w-3 h-3" /> Locked · {formatCountdown(lockoutUntil - now)}
+                </span>
+              )}
               {user.email_verified && (
                 <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
                   <Check className="w-3 h-3" /> Verified
@@ -669,6 +727,54 @@ function AdminUserDetail({ userId, onClose }) {
                 </h3>
 
                 <div className="space-y-4">
+                  {/* Failed-login lockout */}
+                  <div className={`flex items-center justify-between p-4 rounded-lg ${
+                    isLocked
+                      ? 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800'
+                      : 'bg-slate-50 dark:bg-slate-800'
+                  }`}>
+                    <div className="flex items-center gap-3">
+                      {isLocked ? (
+                        <Lock className="w-5 h-5 text-red-500" />
+                      ) : (
+                        <Unlock className="w-5 h-5 text-slate-400" />
+                      )}
+                      <div>
+                        <p className="font-medium text-slate-900 dark:text-slate-100">Account Lockout</p>
+                        {isLocked ? (
+                          <p className="text-sm text-red-600 dark:text-red-400">
+                            Locked after {failedAttempts} failed login attempt{failedAttempts === 1 ? '' : 's'} ·
+                            {' '}unlocks in <span className="font-medium tabular-nums">{formatCountdown(lockoutUntil - now)}</span>
+                            {' '}({new Date(user.lockout_until).toLocaleTimeString()})
+                          </p>
+                        ) : (
+                          <p className="text-sm text-slate-500">
+                            {failedAttempts > 0
+                              ? `Not locked · ${failedAttempts} of ${lockoutThreshold} failed attempts`
+                              : 'Not locked · no failed login attempts'}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    {(isLocked || failedAttempts > 0) && (
+                      <button
+                        onClick={handleUnlockAccount}
+                        disabled={securityLoading === 'unlock'}
+                        className={`flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg disabled:opacity-50 ${
+                          isLocked
+                            ? 'bg-red-600 hover:bg-red-700 text-white'
+                            : 'border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
+                        }`}
+                        title={isLocked ? 'Clear the lockout so the user can sign in now' : 'Reset the failed attempt counter'}
+                      >
+                        {securityLoading === 'unlock'
+                          ? <Loader2 className="w-4 h-4 animate-spin" />
+                          : <Unlock className="w-4 h-4" />}
+                        {isLocked ? 'Unlock' : 'Reset Attempts'}
+                      </button>
+                    )}
+                  </div>
+
                   {/* 2FA Status */}
                   <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
                     <div className="flex items-center gap-3">

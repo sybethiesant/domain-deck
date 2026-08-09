@@ -5,6 +5,7 @@ const enom = require('../services/enom');
 const stripeService = require('../services/stripe');
 const emailService = require('../services/email');
 const { PRICING } = require('../config/constants');
+const { getAutoRefillPolicy } = require('../services/balancePolicy');
 
 // Get Stripe config
 router.get('/config', (req, res) => {
@@ -327,9 +328,44 @@ async function savePaymentMethodIfNew(pool, paymentIntent, userId) {
 }
 
 /**
+ * Our wholesale cost at eNom for one order line, across all its years.
+ *
+ * This is what eNom actually deducts from the reseller balance, so it — not
+ * the customer's retail price — is what a balance top-up must cover. Sizing
+ * refills off retail made the balance look short when it wasn't and triggered
+ * top-ups (and their fees) that were not needed.
+ *
+ * Falls back to the retail total if pricing is missing, which over-refills
+ * rather than under-refills.
+ */
+async function getWholesaleCost(pool, item) {
+  // Fixed column names chosen by item type — never interpolated from input.
+  const column = item.item_type === 'register' ? 'cost_register'
+    : item.item_type === 'renew' ? 'cost_renew'
+    : 'cost_transfer';
+
+  try {
+    const result = await pool.query(
+      `SELECT ${column} AS unit_cost FROM tld_pricing WHERE tld = $1`,
+      [item.tld]
+    );
+    const unitCost = parseFloat(result.rows[0]?.unit_cost);
+    if (!Number.isFinite(unitCost) || unitCost <= 0) {
+      return parseFloat(item.total_price);
+    }
+    // Transfers are a single fee; registrations and renewals scale with years.
+    const years = item.item_type === 'transfer' ? 1 : (parseInt(item.years) || 1);
+    return parseFloat((unitCost * years).toFixed(2));
+  } catch (error) {
+    console.error(`Wholesale cost lookup failed for .${item.tld}, using retail:`, error.message);
+    return parseFloat(item.total_price);
+  }
+}
+
+/**
  * Handle successful payment - process domain registrations/transfers/renewals
  */
-async function handlePaymentSuccess(pool, paymentIntent) {
+async function handlePaymentSuccess(pool, paymentIntent, options = {}) {
   const { id: paymentIntentId, metadata } = paymentIntent;
 
   // Save payment method for future use (auto-renewal)
@@ -381,6 +417,25 @@ async function handlePaymentSuccess(pool, paymentIntent) {
     return;
   }
 
+  // Claim the order before provisioning anything. Checkout now fulfills an
+  // already-succeeded intent inline, so a webhook for the same payment can
+  // arrive concurrently; without this claim both could renew or register the
+  // same domain at eNom and bill the reseller balance twice. Whoever flips
+  // 'pending' first wins and the loser returns. Admin retries pass force to
+  // deliberately re-run an order that is already past 'pending'.
+  if (!options.force) {
+    const claim = await pool.query(
+      `UPDATE orders SET status = 'processing', updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1 AND status = 'pending'
+       RETURNING id`,
+      [order.id]
+    );
+    if (claim.rowCount === 0) {
+      console.log(`Order ${order.order_number} already claimed by another fulfillment run — skipping`);
+      return;
+    }
+  }
+
   await pool.query(
     `UPDATE orders
      SET payment_status = 'paid',
@@ -396,6 +451,9 @@ async function handlePaymentSuccess(pool, paymentIntent) {
     `SELECT * FROM order_items WHERE order_id = $1`,
     [order.id]
   );
+
+  // Bounds for any automatic reseller-balance top-up these items trigger.
+  const refillPolicy = await getAutoRefillPolicy(pool);
 
   // Get registrant contact from order (stored during checkout)
   const storedContact = order.registrant_contact;
@@ -476,9 +534,9 @@ async function handlePaymentSuccess(pool, paymentIntent) {
           nameservers: ['dns1.name-services.com', 'dns2.name-services.com', 'dns3.name-services.com', 'dns4.name-services.com'],
           registrant: registrantContact,
           privacy: false,
-          cost: parseFloat(item.total_price),
+          cost: await getWholesaleCost(pool, item),
           extendedAttributes: domainExtendedAttrs
-        });
+        }, { ...refillPolicy, orderValue: parseFloat(item.total_price) });
         result = smartResult.purchaseResult || smartResult;
 
         // Log refill if it happened
@@ -553,8 +611,8 @@ async function handlePaymentSuccess(pool, paymentIntent) {
           authCode: item.auth_code || '',
           registrant: registrantContact,
           years: 1,
-          cost: parseFloat(item.total_price)
-        });
+          cost: await getWholesaleCost(pool, item)
+        }, { ...refillPolicy, orderValue: parseFloat(item.total_price) });
         result = smartResult.transferResult || smartResult;
 
         // Log refill if it happened
@@ -608,7 +666,8 @@ async function handlePaymentSuccess(pool, paymentIntent) {
           item.domain_name,
           item.tld,
           item.years || 1,
-          parseFloat(item.total_price)
+          await getWholesaleCost(pool, item),
+          { ...refillPolicy, orderValue: parseFloat(item.total_price) }
         );
         result = smartResult.renewResult || smartResult;
 
@@ -1274,7 +1333,10 @@ router.post('/process-order/:orderId', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: `Payment has not succeeded (status: ${paymentIntent.status})` });
     }
 
-    await handlePaymentSuccess(pool, paymentIntent);
+    // force: this is the deliberate admin retry path, so it must be able to
+    // re-run an order that is already past 'pending' (e.g. stuck in
+    // 'processing' after a failed run).
+    await handlePaymentSuccess(pool, paymentIntent, { force: true });
 
     res.json({ success: true, message: 'Order processed' });
   } catch (error) {
@@ -1285,4 +1347,7 @@ router.post('/process-order/:orderId', authMiddleware, async (req, res) => {
 
 // Export router and utility functions
 router.chargeForAutoRenewal = chargeForAutoRenewal;
+// Checkout calls this directly when the payment already succeeded, so an
+// order is never left waiting on a webhook that has already given up.
+router.handlePaymentSuccess = handlePaymentSuccess;
 module.exports = router;

@@ -118,7 +118,14 @@ function PaymentForm({ clientSecret, onSuccess, billingAddress }) {
       setError(confirmError.message);
       setProcessing(false);
     } else if (paymentIntent && paymentIntent.status === 'succeeded') {
-      onSuccess(paymentIntent);
+      // Always clear the spinner once order creation settles. Leaving it set
+      // on the success path meant that if the order call failed the customer
+      // sat on a button spinning forever with no idea their card was charged.
+      try {
+        await onSuccess(paymentIntent);
+      } finally {
+        setProcessing(false);
+      }
     }
   };
 

@@ -10,6 +10,7 @@ const express = require('express');
 const router = express.Router();
 const { logAudit, ROLE_LEVELS } = require('../../middleware/auth');
 const enom = require('../../services/enom');
+const { getAutoRefillPolicy } = require('../../services/balancePolicy');
 
 /**
  * Get the eNom mode for a domain
@@ -1324,7 +1325,7 @@ router.post('/domains/admin-purchase', async (req, res) => {
           privacy,
           cost,
           extendedAttributes: extended_attributes
-        });
+        }, await getAutoRefillPolicy(pool));
         result = smartResult.purchaseResult || smartResult;
       } else {
         smartResult = await enom.smartTransfer({
@@ -1334,7 +1335,7 @@ router.post('/domains/admin-purchase', async (req, res) => {
           registrant: registrantContact,
           years,
           cost
-        });
+        }, await getAutoRefillPolicy(pool));
         result = smartResult.transferResult || smartResult;
       }
 

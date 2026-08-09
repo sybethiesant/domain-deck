@@ -10,6 +10,7 @@
 const express = require('express');
 const router = express.Router();
 const { logAudit, ROLE_LEVELS } = require('../../middleware/auth');
+const { AUTH } = require('../../config/constants');
 
 // List all users with pagination and search
 router.get('/users', async (req, res) => {
@@ -26,6 +27,7 @@ router.get('/users', async (req, res) => {
       SELECT u.id, u.username, u.email, u.full_name, u.is_admin,
              u.role_level, u.role_name, u.created_at, u.last_login_at,
              u.email_verified, u.phone, u.company_name,
+             u.failed_login_attempts, u.lockout_until,
              COUNT(DISTINCT d.id) as domain_count,
              COUNT(DISTINCT o.id) as order_count,
              COALESCE(SUM(o.total), 0) as total_spent
@@ -88,7 +90,8 @@ router.get('/users/:id', async (req, res) => {
               is_admin, role_level, role_name, email_verified, email_verified_at,
               stripe_customer_id, theme_preference,
               totp_enabled, totp_verified_at, force_password_change, require_2fa,
-              password_changed_at, created_at, last_login_at, updated_at
+              password_changed_at, failed_login_attempts, lockout_until,
+              created_at, last_login_at, updated_at
        FROM users WHERE id = $1`,
       [userId]
     );
@@ -142,8 +145,19 @@ router.get('/users/:id', async (req, res) => {
       [userId]
     );
 
+    // Current lockout policy, so the UI can show "N of M failed attempts"
+    // using the values actually enforced at login.
+    const policyResult = await pool.query(
+      "SELECT key, value FROM app_settings WHERE key IN ('lockout_attempts', 'lockout_duration_minutes')"
+    );
+    const policy = Object.fromEntries(policyResult.rows.map(r => [r.key, r.value]));
+
     res.json({
       ...userResult.rows[0],
+      lockout_policy: {
+        attempts: parseInt(policy.lockout_attempts) || AUTH.LOCKOUT_ATTEMPTS,
+        duration_minutes: parseInt(policy.lockout_duration_minutes) || AUTH.LOCKOUT_DURATION_MINUTES
+      },
       domains: domainsResult.rows,
       recentOrders: ordersResult.rows,
       contacts: contactsResult.rows,
@@ -645,6 +659,66 @@ router.post('/users/:id/reset-2fa', async (req, res) => {
   } catch (error) {
     console.error('Error resetting 2FA:', error);
     res.status(500).json({ error: 'Failed to reset 2FA' });
+  }
+});
+
+// Clear a failed-login lockout (help users locked out by bad password/2FA attempts)
+// Requires level 3+ (Admin)
+router.post('/users/:id/unlock', async (req, res) => {
+  if (req.user.role_level < ROLE_LEVELS.ADMIN) {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+
+  const pool = req.app.locals.pool;
+  const userId = parseInt(req.params.id);
+  const { reason } = req.body;
+
+  try {
+    const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const targetUser = userResult.rows[0];
+
+    // Cannot unlock users with equal or higher role level
+    if (Math.max(targetUser.role_level || 0, targetUser.is_admin ? ROLE_LEVELS.ADMIN : 0) >= req.user.role_level) {
+      return res.status(403).json({ error: 'Cannot modify users with equal or higher role level' });
+    }
+
+    const wasLocked = targetUser.lockout_until && new Date(targetUser.lockout_until) > new Date();
+
+    // Clear the counter as well as the timer — leaving the counter at the
+    // threshold would re-lock the account on the very next failed attempt.
+    await pool.query(
+      `UPDATE users SET
+        failed_login_attempts = 0,
+        lockout_until = NULL,
+        updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1`,
+      [userId]
+    );
+
+    await pool.query(
+      `INSERT INTO staff_notes (entity_type, entity_id, staff_user_id, note, is_pinned)
+       VALUES ('user', $1, $2, $3, false)`,
+      [userId, req.user.id, `Account unlocked by admin${reason ? ': ' + reason : ''} (was ${wasLocked ? 'locked' : 'not locked'}, ${targetUser.failed_login_attempts || 0} failed attempts cleared)`]
+    );
+
+    await logAudit(pool, req.user.id, 'unlock_user', 'user', userId,
+      { lockout_until: targetUser.lockout_until, failed_login_attempts: targetUser.failed_login_attempts },
+      { lockout_until: null, failed_login_attempts: 0, reason }, req);
+
+    res.json({
+      success: true,
+      wasLocked,
+      message: wasLocked
+        ? 'Account unlocked. The user can sign in immediately.'
+        : 'Account was not locked. Failed login attempts have been reset.'
+    });
+  } catch (error) {
+    console.error('Error unlocking user:', error);
+    res.status(500).json({ error: 'Failed to unlock account' });
   }
 });
 
