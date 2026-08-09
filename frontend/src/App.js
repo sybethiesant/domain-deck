@@ -491,6 +491,36 @@ function AppContent() {
     }
   };
 
+  // Change the registration/renewal term on a cart line. The backend
+  // recalculates the price from tld_pricing, so the returned cart is the
+  // authority — never adjust the total client-side.
+  const updateCartItem = async (itemId, updates) => {
+    try {
+      const res = await fetch(`${API_URL}/cart/${itemId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(updates)
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (res.ok) {
+        await fetchCart();
+        return true;
+      }
+
+      toast.error(data.error || 'Failed to update cart item');
+      return false;
+    } catch (error) {
+      console.error('Error updating cart item:', error.name || 'Error');
+      toast.error('Failed to update cart item');
+      return false;
+    }
+  };
+
   const updateTheme = (newTheme) => {
     setTheme(newTheme);
     localStorage.setItem('theme', newTheme);
@@ -514,7 +544,7 @@ function AppContent() {
   return (
     <ThemeContext.Provider value={{ theme, setTheme: updateTheme }}>
       <AuthContext.Provider value={{ user, token, login, logout, openAuth, fetchUser, isImpersonating, originalAdminUser, impersonate, stopImpersonation }}>
-        <CartContext.Provider value={{ cart, addToCart, removeFromCart, fetchCart, showCart, setShowCart }}>
+        <CartContext.Provider value={{ cart, addToCart, removeFromCart, updateCartItem, fetchCart, showCart, setShowCart }}>
           <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-900">
             {/* Impersonation Banner */}
             {isImpersonating && (

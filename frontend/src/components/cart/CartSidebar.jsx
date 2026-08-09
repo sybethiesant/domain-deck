@@ -1,9 +1,18 @@
-import React from 'react';
-import { X, ShoppingCart, Trash2, ArrowRight } from 'lucide-react';
+import React, { useState } from 'react';
+import { X, ShoppingCart, Trash2, ArrowRight, Loader2 } from 'lucide-react';
 import { useCart } from '../../App';
 
+const YEAR_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
 function CartSidebar({ onClose, onCheckout }) {
-  const { cart, removeFromCart } = useCart();
+  const { cart, removeFromCart, updateCartItem } = useCart();
+  const [updatingId, setUpdatingId] = useState(null);
+
+  const handleYearsChange = async (itemId, years) => {
+    setUpdatingId(itemId);
+    await updateCartItem(itemId, { years: parseInt(years, 10) });
+    setUpdatingId(null);
+  };
 
   const getItemTypeLabel = (type) => {
     switch (type) {
@@ -66,9 +75,36 @@ function CartSidebar({ onClose, onCheckout }) {
                     <p className="font-mono font-medium text-slate-900 dark:text-slate-100 truncate">
                       {item.domain_name}.{item.tld}
                     </p>
-                    <p className="text-sm text-slate-500 dark:text-slate-400">
-                      {getItemTypeLabel(item.item_type)} • {item.years} year{item.years > 1 ? 's' : ''}
-                    </p>
+                    <div className="flex items-center gap-2 mt-1">
+                      <span className="text-sm text-slate-500 dark:text-slate-400">
+                        {getItemTypeLabel(item.item_type)}
+                      </span>
+                      {/* Transfers are a fixed one-year fee at the registry, so
+                          the term is not selectable for them. */}
+                      {item.item_type === 'transfer' ? (
+                        <span className="text-sm text-slate-500 dark:text-slate-400">
+                          • {item.years} year{item.years > 1 ? 's' : ''}
+                        </span>
+                      ) : (
+                        <>
+                          <span className="text-sm text-slate-400">•</span>
+                          <select
+                            value={item.years}
+                            onChange={(e) => handleYearsChange(item.id, e.target.value)}
+                            disabled={updatingId === item.id}
+                            aria-label={`Term in years for ${item.domain_name}.${item.tld}`}
+                            className="text-sm bg-transparent border border-slate-300 dark:border-slate-600 rounded px-1.5 py-0.5 text-slate-700 dark:text-slate-300 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                          >
+                            {YEAR_OPTIONS.map((y) => (
+                              <option key={y} value={y}>{y} year{y > 1 ? 's' : ''}</option>
+                            ))}
+                          </select>
+                          {updatingId === item.id && (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-400" />
+                          )}
+                        </>
+                      )}
+                    </div>
                   </div>
                   <div className="flex items-center gap-3">
                     <p className="font-semibold text-slate-900 dark:text-slate-100">

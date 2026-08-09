@@ -69,7 +69,7 @@ const FRIENDLY_LABELS = {
 };
 
 // Payment form component (must be inside Elements provider)
-function PaymentForm({ clientSecret, onSuccess, billingAddress }) {
+function PaymentForm({ clientSecret, onSuccess, billingAddress, onBeforePay }) {
   const stripe = useStripe();
   const elements = useElements();
   const [processing, setProcessing] = useState(false);
@@ -84,6 +84,18 @@ function PaymentForm({ clientSecret, onSuccess, billingAddress }) {
 
     setProcessing(true);
     setError(null);
+
+    // Last check before any money moves: the cart must still match what this
+    // payment intent was created for.
+    if (onBeforePay) {
+      const problem = await onBeforePay();
+      if (problem) {
+        setError(problem);
+        toast.error(problem);
+        setProcessing(false);
+        return;
+      }
+    }
 
     const { error: submitError } = await elements.submit();
     if (submitError) {
@@ -171,6 +183,7 @@ function Checkout({ onComplete }) {
   const [orderNumber, setOrderNumber] = useState(null);
   const [clientSecret, setClientSecret] = useState(null);
   const [paymentIntentId, setPaymentIntentId] = useState(null);
+  const [intentAmount, setIntentAmount] = useState(null);
   const [stripeConfigured, setStripeConfigured] = useState(false);
 
   // Contact selection state
@@ -476,6 +489,9 @@ function Checkout({ onComplete }) {
 
       setClientSecret(data.clientSecret);
       setPaymentIntentId(data.paymentIntentId);
+      // Remember what the intent was created for, so a cart edit made in
+      // another tab between here and paying can be caught before the charge.
+      setIntentAmount(Number(data.amount));
       setStep('payment');
     } catch (err) {
       setError(err.message);
@@ -484,6 +500,35 @@ function Checkout({ onComplete }) {
 
     setLoading(false);
   };
+
+  // A Stripe intent's amount is fixed once created, but the cart can still be
+  // edited in another tab or on another device before the customer pays. If
+  // that happens the charge no longer matches the order and checkout would
+  // refuse it — after the money was taken. Re-check the live cart first and
+  // send the customer back to review instead of charging the wrong amount.
+  const validateCartUnchanged = useCallback(async () => {
+    if (intentAmount == null) return null;
+
+    let freshTotal;
+    try {
+      const res = await fetch(`${API_URL}/cart`, {
+        headers: { 'Authorization': `Bearer ${token}`, 'Cache-Control': 'no-cache' }
+      });
+      if (!res.ok) return null; // don't block a sale on a transient read failure
+      const fresh = await res.json();
+      freshTotal = Number(fresh.subtotal || 0);
+    } catch (err) {
+      return null;
+    }
+
+    if (Math.abs(freshTotal - intentAmount) < 0.005) return null;
+
+    await fetchCart();
+    setStep('review');
+    setClientSecret(null);
+    setIntentAmount(null);
+    return `Your cart changed to $${freshTotal.toFixed(2)} while checkout was open, so nothing was charged. Review your cart and continue to pay the correct total.`;
+  }, [intentAmount, token, fetchCart]);
 
   // Handle payment success
   const handlePaymentSuccess = async (paymentIntent) => {
@@ -634,6 +679,7 @@ function Checkout({ onComplete }) {
               clientSecret={clientSecret}
               onSuccess={handlePaymentSuccess}
               billingAddress={getRegistrantContact()}
+              onBeforePay={validateCartUnchanged}
             />
           </Elements>
         </div>
