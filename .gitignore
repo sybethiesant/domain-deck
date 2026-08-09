@@ -51,7 +51,10 @@ ROLES.md
 # Encrypted sensitive data - NEVER commit
 backend/.credentials
 backend/.credentials.enc
-backend/scripts/store-card.js
+# store-card.js is the tool that WRITES .credentials.enc — it holds no secrets
+# itself. Ignoring it meant it was never committed, so it did not survive the
+# move to Unraid and refillAccount() spent months pointing at a script that
+# had never existed on the server. Keep it tracked.
 *.enc
 *.key
 
